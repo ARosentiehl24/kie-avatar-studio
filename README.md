@@ -7,13 +7,12 @@ usando las APIs de Kie.ai:
 - Kie ElevenLabs Text-to-Speech
 - Kie Kling AI Avatar Pro
 
-Basada en `~/Documents/notas/kie-avatar-tui-plans-from-openclaw-workspace.md`.
-
 ## Estado
 
-Fase 1.5 cerrada: arquitectura por capas + ports, errores tipados, retries 5xx, cola con
-recuperación, tooling estricto y agente de revisión embebido. La TUI todavía es un menú
-mínimo; las pantallas funcionales son la Fase 2.
+**v1.0.0** — primera versión funcional completa. Las 10 pantallas del menú
+principal están implementadas y operativas, pipeline end-to-end probado,
+notificaciones del SO cross-platform, updater in-app. Suite de tests
+verde (ver `CHANGELOG.md` para detalles).
 
 ## Stack
 
@@ -205,4 +204,5 @@ audio duración max      : 5 min
 - `docs/ARCHITECTURE.md` — capas, ports, ciclo de vida del job
 - `docs/CODE_QUALITY.md` — reglas que aplica el agente
 - `docs/API_KIE.md` — endpoints de Kie
-- Plan original: `~/Documents/notas/kie-avatar-tui-plans-from-openclaw-workspace.md`
+- `docs/VERSIONING.md` — esquema L/M/S → SemVer
+- `docs/RELEASE.md` — workflow de release
