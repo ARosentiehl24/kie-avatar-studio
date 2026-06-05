@@ -16,7 +16,6 @@ hay muchos jobs y solo interesa una clase.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
 from typing import ClassVar, Final
 
 from textual.app import ComposeResult
@@ -239,10 +238,3 @@ def _format_summary(total: int, active: int, queued: int, done: int, failed: int
         f"[green]{done} listos[/green]  ·  "
         f"[red]{failed} fallidos[/red]"
     )
-
-
-# Helper para detectar timestamps de test (no usado en runtime, pero
-# disponible si la screen necesita formatear timestamps relativos).
-def _is_recent(when: datetime, max_age_seconds: int = 60) -> bool:
-    delta = datetime.now(when.tzinfo) - when
-    return delta.total_seconds() <= max_age_seconds

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import ClassVar, Final
 
@@ -510,10 +510,6 @@ def _format_time_left(delta: timedelta) -> str:
         return f"{days}d {hours}h"
     minutes = int((total_seconds % _SECONDS_PER_HOUR) // _SECONDS_PER_MINUTE)
     return f"{hours}h {minutes}m"
-
-
-# Importado solo para mantener el name visible aunque solo se use en log line.
-_DATETIME_FOR_LINTERS = datetime
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[ImagesScreen], Awaitable[None]]] = {

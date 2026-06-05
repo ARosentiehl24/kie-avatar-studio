@@ -37,7 +37,11 @@ from loguru import logger
 
 from ..config import Settings
 from ..domain.errors import (
-    ImageGenerationValidationError,
+    GeneratedImageExpiredError,
+    GeneratedImageNotFoundError,
+    ImageExpiredError,
+    ImageNotFoundError,
+    JobValidationError,
     KieError,
 )
 from ..domain.models import (
@@ -95,7 +99,12 @@ class ImageJobRunner:
             task_id = await self._create_task(job, refs=refs, settings=settings)
             image_url = await self._poll_for_url(task_id)
             await self._finalize(job, image_url, refs_count=len(refs), settings=settings)
-        except (KieError, ImageGenerationValidationError) as exc:
+        except (KieError, JobValidationError) as exc:
+            # KieError cubre los errores HTTP de Kie y los NotFound de
+            # store local (ImageNotFoundError, GeneratedImageNotFoundError).
+            # JobValidationError cubre fallas de validación de prompt/settings/refs
+            # y las expiraciones tipadas (ImageExpiredError, GeneratedImageExpiredError,
+            # ImageGenerationValidationError).
             await self._fail(job, exc)
         except Exception as exc:
             logger.exception("ImageJob {} falló con error no manejado", job.id)
@@ -215,22 +224,22 @@ class ImageJobRunner:
             if ref.kind == ImageAssetKind.UPLOADED:
                 stored = await self._uploaded_store.get(ref.id)
                 if stored is None:
-                    raise KieError(
+                    raise ImageNotFoundError(
                         f"ref '{ref.label}' (uploaded) ya no existe en el catálogo local"
                     )
                 if stored.is_expired(self._upload_retention_hours, now=now):
-                    raise KieError(
+                    raise ImageExpiredError(
                         f"ref '{ref.label}' (uploaded) expiró en Kie hace "
                         f"{-stored.time_left(self._upload_retention_hours, now=now)}"
                     )
             else:
                 gen = await self._generated_store.get(ref.id)
                 if gen is None:
-                    raise KieError(
+                    raise GeneratedImageNotFoundError(
                         f"ref '{ref.label}' (generated) ya no existe en el catálogo local"
                     )
                 if gen.is_expired(self._generated_retention_days, now=now):
-                    raise KieError(
+                    raise GeneratedImageExpiredError(
                         f"ref '{ref.label}' (generated) expiró en Kie hace "
                         f"{-gen.time_left(self._generated_retention_days, now=now)}"
                     )

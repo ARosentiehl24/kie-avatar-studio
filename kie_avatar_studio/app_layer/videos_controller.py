@@ -26,7 +26,6 @@ Casos de uso que maneja:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Final
 
@@ -220,9 +219,12 @@ class VideosController:
         Decisión: el binario en disco es del usuario; el controller solo
         toca el registro local. Si quiere borrar el video físico, tiene
         el path en `job.output_path` y un file manager.
+
+        `JobsDB.delete` es idempotente (no levanta si el id ya no existe),
+        así que no hace falta capturar excepciones — un error real
+        (DB caída, permisos) debe propagar para que la UI lo muestre.
         """
-        with contextlib.suppress(Exception):
-            await self._repo.delete(job_id)
+        await self._repo.delete(job_id)
 
     # --- internals ---------------------------------------------------------
 
