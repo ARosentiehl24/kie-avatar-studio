@@ -6,7 +6,29 @@ MINOR, **S** → PATCH.
 
 ## [Unreleased]
 
-_Nada todavía. Próximos cambios se anotan acá antes del release._
+### Fixed (S)
+
+- **Build de Windows .exe**: `dist/KieAvatarStudio.exe` fallaba al
+  arrancar con `ImportError: attempted relative import with no known
+  parent package` porque PyInstaller corría `kie_avatar_studio/__main__.py`
+  como módulo top-level (`__main__`), sin paquete padre, y rompía los
+  imports relativos del paquete. Se introdujo `packaging/entry.py` como
+  wrapper con import absoluto y se actualizó `packaging/kie_avatar_studio.spec`
+  para apuntar al wrapper (más paths absolutos derivados de `SPECPATH`
+  para que la build sea independiente del CWD). Test guardrail nuevo en
+  `tests/test_main_entry.py`.
+- **`.exe` instalado en Program Files**: `Settings.ensure_dirs()` usaba
+  paths relativos al CWD (`./data`, `./logs`, ...). Al lanzar el shortcut
+  generado por Inno Setup, el CWD era `C:\Program Files\Kie Avatar Studio\`
+  → no-writable para usuarios sin admin → la app explotaba apenas
+  intentaba crear los directorios. `config.py` ahora detecta
+  `sys.frozen` y resuelve los defaults a `%LOCALAPPDATA%\KieAvatarStudio\`
+  en Windows, `~/Library/Application Support/KieAvatarStudio/` en macOS,
+  y `$XDG_DATA_HOME/KieAvatarStudio/` (o `~/.local/share/...`) en Linux.
+  El `.env` queda en la misma raíz (resuelto vía `data_dir.parent` en
+  `app.py:150`, sin cambios ahí). En modo dev (`python -m kie_avatar_studio`)
+  el comportamiento NO cambia: paths siguen relativos al CWD. Tests
+  en `tests/test_config.py`.
 
 ---
 

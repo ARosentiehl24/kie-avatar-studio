@@ -11,30 +11,52 @@
 # - `console=True`: la app ES una TUI, NECESITA una consola con TTY.
 #   Con `console=False` Textual no podría renderizar.
 # - `--onefile` equivalente: usamos `EXE` directo sin `COLLECT`.
-# - Hidden imports: Pydantic v2, Loguru y aiosqlite necesitan que
-#   PyInstaller sepa de algunos módulos que importan dinámicamente.
+# - `textual` usa `__getattr__` en `widgets/__init__.py` para lazy-load
+#   submódulos (`_tab_pane`, `_data_table`, etc.). El analizador estático
+#   de PyInstaller NO los descubre; sin `collect_all('textual')` el .exe
+#   muere con `ModuleNotFoundError: No module named 'textual.widgets._tab_pane'`.
+# - Pydantic v2 y pydantic_settings también cargan submódulos dinámicamente
+#   (validadores, hooks de configuración): los cubrimos con `collect_submodules`.
+# - El script de entrada es `packaging/entry.py` (NO `__main__.py`
+#   del paquete): un wrapper con import absoluto necesario para que
+#   PyInstaller no rompa los imports relativos internos. Detalles en
+#   el docstring de `packaging/entry.py`.
 
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# `__file__` no está definido en el namespace del spec, pero `SPECPATH`
+# sí: PyInstaller lo inyecta apuntando al directorio del .spec.
+SPEC_DIR = Path(SPECPATH).resolve()
+ROOT_DIR = SPEC_DIR.parent
+
 block_cipher = None
 
+# `collect_all` devuelve (datas, binaries, hiddenimports) para un paquete
+# entero, incluyendo módulos lazy-loaded vía `__getattr__` que el análisis
+# estático no detecta.
+textual_datas, textual_binaries, textual_hiddenimports = collect_all('textual')
+
 a = Analysis(
-    ['../kie_avatar_studio/__main__.py'],
-    pathex=[],
-    binaries=[],
+    [str(SPEC_DIR / 'entry.py')],
+    pathex=[str(ROOT_DIR)],
+    binaries=textual_binaries,
     datas=[
-        # CSS de Textual (loadeado en runtime con CSS_PATH).
-        ('../kie_avatar_studio/ui/styles.tcss', 'kie_avatar_studio/ui'),
+        # CSS propio de la app (loadeado en runtime con CSS_PATH).
+        (str(ROOT_DIR / 'kie_avatar_studio' / 'ui' / 'styles.tcss'),
+         'kie_avatar_studio/ui'),
+        *textual_datas,
     ],
     hiddenimports=[
         'aiosqlite',
         'loguru',
-        'pydantic',
-        'pydantic_settings',
-        'textual',
-        'textual.widgets',
-        'textual.screen',
         'httpx',
+        *collect_submodules('pydantic'),
+        *collect_submodules('pydantic_settings'),
+        *textual_hiddenimports,
     ],
     hookspath=[],
     hooksconfig={},
