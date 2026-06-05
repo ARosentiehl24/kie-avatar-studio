@@ -5,6 +5,15 @@ TextArea para el prompt + botones Cancelar / Generar. Solo dispatch
 + render (CR-10.1): la validación de assets expirados y la
 construcción del `VideoJob` viven en `VideosController`.
 
+El selector de imagen acepta tanto `UploadedImage` (TTL 24h) como
+`GeneratedImage` (TTL 14d) — el listado se construye en
+`ImageCatalogController.list_usable_assets()` y llega acá como
+`list[ImageAssetRef]`. El value del Select usa un id sintético
+`"kind:id"` para que dos refs con el mismo id (uploaded + generated)
+sean distinguibles. Al dismiss, el form devuelve el `ImageAssetRef`
+completo (no el id) para que el controller resuelva contra el store
+correcto.
+
 El usuario puede previsualizar el audio seleccionado antes de
 generar el video, reusando el mismo `AudioPlayer` que la pantalla
 Audios.
@@ -19,11 +28,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Static, TextArea
+from textual.widgets import Button, Label, Select, Static, TextArea
 
 from ...app_layer.audio_player import AudioPlayer
 from ...domain.errors import UrlValidationError
-from ...domain.models import GeneratedAudio, UploadedImage
+from ...domain.models import GeneratedAudio, ImageAssetKind, ImageAssetRef
 
 _FORM_TITLE: Final[str] = "Generar video desde imagen + audio existentes"
 _PROMPT_MAX_CHARS: Final[int] = 5000
@@ -34,9 +43,14 @@ _NO_ASSETS_MSG: Final[str] = (
 
 @dataclass(frozen=True, slots=True)
 class NewVideoFormResult:
-    """Payload devuelto cuando el usuario confirma el form."""
+    """Payload devuelto cuando el usuario confirma el form.
 
-    image_id: str
+    `image_ref` es un DTO discriminado (`uploaded` o `generated`) para
+    que el caller resuelva contra el store correcto. `audio_id` sigue
+    siendo string porque actualmente solo hay un store de audio.
+    """
+
+    image_ref: ImageAssetRef
     audio_id: str
     prompt: str
 
@@ -50,14 +64,18 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
 
     def __init__(
         self,
-        images: list[UploadedImage],
+        image_refs: list[ImageAssetRef],
         audios: list[GeneratedAudio],
         audio_player: AudioPlayer,
     ) -> None:
         super().__init__()
-        self._images = images
+        self._image_refs = image_refs
         self._audios = audios
         self._audio_player = audio_player
+        # Index para resolver rápido el ref desde el value del Select.
+        self._refs_by_select_value: dict[str, ImageAssetRef] = {
+            _select_value(ref): ref for ref in image_refs
+        }
 
     def compose(self) -> ComposeResult:
         # Mismo patrón que el modal Generar Audio: outer Vertical (no
@@ -66,13 +84,13 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
         with Vertical(id="video-form-dialog"):
             with VerticalScroll(id="video-form-body"):
                 yield Static(_FORM_TITLE, id="video-form-title")
-                yield Label("Imagen (de la pantalla Imágenes)")
+                yield Label("Imagen (subida o generada con Nano Banana)")
                 yield Select(
-                    options=_image_options(self._images),
-                    allow_blank=not self._images,
+                    options=_image_options(self._image_refs),
+                    allow_blank=not self._image_refs,
                     id="video-image",
                 )
-                if not self._images:
+                if not self._image_refs:
                     yield Static(
                         _NO_ASSETS_MSG.format(kind="imágenes", screen="Imágenes"),
                         id="video-image-warning",
@@ -86,8 +104,8 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
                         allow_blank=not self._audios,
                         id="video-audio",
                     )
-                    yield Button("🔊 Preview", id="video-audio-preview", classes="btn-info")
-                    yield Button("⏹", id="video-audio-stop", classes="btn-glyph")
+                    yield Button("Preview", id="video-audio-preview", classes="btn-info")
+                    yield Button("Detener", id="video-audio-stop", classes="btn-warning")
                 if not self._audios:
                     yield Static(
                         _NO_ASSETS_MSG.format(kind="audios", screen="Audios"),
@@ -109,9 +127,9 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
 
     def on_mount(self) -> None:
         # Si hay assets, dejamos el primero seleccionado por defecto.
-        if self._images:
+        if self._image_refs:
             select = self.query_one("#video-image", Select)
-            select.value = self._images[0].id
+            select.value = _select_value(self._image_refs[0])
         if self._audios:
             select = self.query_one("#video-audio", Select)
             select.value = self._audios[0].id
@@ -154,11 +172,11 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
         prompt_area = self.query_one("#video-prompt", TextArea)
         error = self.query_one("#video-form-error", Static)
 
-        image_id = image_select.value
+        image_value = image_select.value
         audio_id = audio_select.value
         prompt = prompt_area.text.strip()
 
-        if not isinstance(image_id, str) or not image_id:
+        if not isinstance(image_value, str) or not image_value:
             error.update("[red]Elegí una imagen.[/red]")
             return
         if not isinstance(audio_id, str) or not audio_id:
@@ -171,7 +189,15 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
             error.update(f"[red]Prompt supera {_PROMPT_MAX_CHARS} caracteres.[/red]")
             return
 
-        self.dismiss(NewVideoFormResult(image_id=image_id, audio_id=audio_id, prompt=prompt))
+        ref = self._refs_by_select_value.get(image_value)
+        if ref is None:
+            # El catálogo cambió mientras el modal estaba abierto y el
+            # valor del select ya no apunta a un ref vivo. Pedimos al
+            # usuario reabrir el modal en vez de encolar algo inválido.
+            error.update("[red]Esa imagen ya no está disponible. Cerrá y reabrí el form.[/red]")
+            return
+
+        self.dismiss(NewVideoFormResult(image_ref=ref, audio_id=audio_id, prompt=prompt))
 
     async def _on_preview(self) -> None:
         """Reproduce el audio seleccionado para que el usuario lo verifique."""
@@ -190,12 +216,31 @@ class NewVideoFormScreen(ModalScreen[NewVideoFormResult | None]):
             return
 
 
-def _image_options(images: list[UploadedImage]) -> list[tuple[str, str]]:
+def _select_value(ref: ImageAssetRef) -> str:
+    """Encodea (kind, id) en un único string usable como value del Select.
+
+    Necesario porque dos refs pueden tener mismo `id` si vienen de stores
+    distintos (uploaded vs generated). Usamos `:` como separador porque
+    los ids generados por la app no contienen `:` (timestamps + hex).
+    """
+    return f"{ref.kind.value}:{ref.id}"
+
+
+def _kind_badge(kind: ImageAssetKind) -> str:
+    """Etiqueta corta para el dropdown que aclara origen de la imagen."""
+    if kind == ImageAssetKind.UPLOADED:
+        return "[subida]"
+    return "[generada]"
+
+
+def _image_options(refs: list[ImageAssetRef]) -> list[tuple[str, str]]:
     """`(display, value)` para el Select de imágenes."""
-    if not images:
-        # Select de Textual no admite lista vacía: damos un placeholder.
+    if not refs:
         return [("(sin imágenes — usá la pantalla Imágenes primero)", "")]
-    return [(f"{img.label}  ·  {_short(img.kie_file_path)}", img.id) for img in images]
+    return [
+        (f"{_kind_badge(ref.kind)} {ref.label}  ·  {_short(ref.kie_url)}", _select_value(ref))
+        for ref in refs
+    ]
 
 
 def _audio_options(audios: list[GeneratedAudio]) -> list[tuple[str, str]]:
@@ -208,8 +253,3 @@ def _short(text: str, max_len: int = 36) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1] + "…"
-
-
-# Helper para que el caller pueda construir un Input de Select sin
-# importar Textual directamente (usado por tests). Sin uso runtime.
-_ = Input

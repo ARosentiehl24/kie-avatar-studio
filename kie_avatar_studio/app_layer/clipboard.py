@@ -3,7 +3,7 @@
 Textual usa OSC 52 (escape sequence al terminal) para `copy_to_clipboard`,
 pero MUCHAS terminales lo bloquean por default (GNOME Terminal, VS Code
 terminal, tmux sin config, SSH sin allow-osc-52, etc). En esos casos el
-usuario aprieta "Copiar URL", ve "✓ copiado" y la URL no quedó.
+usuario aprieta "Copiar URL", ve "✅ copiado" y la URL no quedó.
 
 Este módulo intenta backends del sistema primero (donde el clipboard
 real SÍ se actualiza) y solo cae a OSC 52 como último recurso. Devuelve

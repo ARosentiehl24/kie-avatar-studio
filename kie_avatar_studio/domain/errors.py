@@ -53,8 +53,10 @@ class ImageValidationError(JobValidationError):
 class ImageExpiredError(ImageValidationError):
     """La imagen referenciada ya expiró en Kie y no se puede reutilizar.
 
-    Política oficial: los archivos viven 14 días desde el upload
-    (`KIE_FILE_RETENTION_DAYS`). El usuario debe cargar una nueva imagen.
+    Política oficial: los archivos subidos por File Upload API viven
+    24 horas desde el upload (`KIE_UPLOAD_RETENTION_HOURS`). Para
+    imágenes generadas (`GeneratedImage`) el límite es 14 días — ver
+    `GeneratedImageExpiredError`. El usuario debe cargar una nueva.
     """
 
 
@@ -96,3 +98,26 @@ class VoicePresetValidationError(JobValidationError):
 
 class VoicePresetNotFoundError(KieError):
     """Se intentó operar sobre un `VoicePreset` por id pero no existe."""
+
+
+class ImageGenerationValidationError(JobValidationError):
+    """Un `ImageJob` (Nano Banana 2) no cumple las restricciones del dominio.
+
+    Cubre prompt vacío/largo, settings fuera del catálogo (aspect_ratio,
+    resolution, output_format) y refs inválidas (más de 14, URL malformada,
+    duplicados). Ver `policies.validate_image_prompt`,
+    `policies.validate_image_settings` y `policies.validate_image_refs`.
+    """
+
+
+class GeneratedImageNotFoundError(KieError):
+    """Se intentó operar sobre un `GeneratedImage` por id pero no existe."""
+
+
+class GeneratedImageExpiredError(ImageGenerationValidationError):
+    """La imagen generada referenciada ya expiró en Kie y no se puede reutilizar.
+
+    Política oficial: las imágenes generadas viven 14 días desde la
+    creación (`KIE_GENERATED_RETENTION_DAYS`). El usuario debe
+    regenerar la imagen o usar otra.
+    """

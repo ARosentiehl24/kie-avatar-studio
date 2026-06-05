@@ -155,8 +155,8 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
                         allow_blank=False,
                         id="audio-voice",
                     )
-                    yield Button("🔊 Preview", id="audio-preview", classes="btn-info")
-                    yield Button("⏹", id="audio-preview-stop", classes="btn-glyph")
+                    yield Button("Preview", id="audio-preview", classes="btn-info")
+                    yield Button("Detener", id="audio-preview-stop", classes="btn-warning")
                 with Collapsible(title="Avanzado — voice settings", id="audio-advanced"):
                     yield Label("stability (0.0 - 1.0, vacío = default 0.5)")
                     yield Input(
@@ -190,7 +190,7 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
                 # "Guardar como preset" solo aparece si presets están
                 # habilitados — sino el botón no tendría caller posible.
                 if self._presets is not None:
-                    yield Button("💾 Guardar preset", id="save-preset", classes="btn-info")
+                    yield Button("Guardar preset", id="save-preset", classes="btn-info")
                 yield Button("Generar y otro", id="generate-more", classes="btn-info")
                 yield Button("Generar", id="generate", variant="primary")
 
@@ -256,7 +256,7 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
             settings.language_code if settings and settings.language_code else ""
         )
         self._set_error(
-            f"[dim]✓ preset '{preset.label}' cargado (podés ajustar antes de generar)[/dim]"
+            f"[dim]✅ preset '{preset.label}' cargado (podés ajustar antes de generar)[/dim]"
         )
 
     def action_cancel(self) -> None:

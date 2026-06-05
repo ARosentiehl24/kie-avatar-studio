@@ -28,6 +28,17 @@ def new_audio_id() -> str:
     return f"aud_{stamp}_{uuid.uuid4().hex[:_SHORT_UUID_LEN]}"
 
 
+def new_image_job_id() -> str:
+    """Identificador único para `ImageJob`/`GeneratedImage`: `img_<UTCtimestamp>_<short_uuid>`.
+
+    Mismo formato que `new_job_id`/`new_audio_id`. `ImageJob.id` y
+    `GeneratedImage.id` comparten valor para idempotencia (un retry
+    hace upsert sobre la misma fila en `generated_images`).
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    return f"img_{stamp}_{uuid.uuid4().hex[:_SHORT_UUID_LEN]}"
+
+
 def sanitize_filename(name: str) -> str:
     """Devuelve un nombre seguro para usar en filesystem; nunca retorna cadena vacía."""
     cleaned = _FILENAME_INVALID.sub("_", name).strip("_")

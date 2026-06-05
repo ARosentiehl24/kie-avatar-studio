@@ -1,34 +1,53 @@
-"""Pantalla `Imágenes`: galería de fotos ya subidas a Kie.
+"""Pantalla `Imágenes`: galería mixta uploaded + generated + cola de generación.
 
-Solo dispatch + render (CR-10.1). Recibe `ImagesController` y dos callables
-para abrir paths locales / URLs en el visor del sistema (inyectados para
-mockear en tests).
+Solo dispatch + render (CR-10.1). Mirror del patrón de `AudiosScreen`:
+una tabla unificada que muestra tres tipos de fila:
+
+- **Subidas** (`UploadedImage`): imágenes que el usuario cargó. TTL 24h.
+- **Generadas** (`GeneratedImage`): salidas de Nano Banana 2. TTL 14d.
+- **Jobs en cola** (`ImageJob`): generación en curso o terminales sin
+  resultado todavía (failed/cancelled).
+
+El listener al `image_queue` refresca en vivo cuando cualquier job
+cambia de estado.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import ClassVar, Final
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
+from ...app_layer.generated_images_controller import GeneratedImagesController
+from ...app_layer.image_catalog_controller import ImageCatalogController
 from ...app_layer.images_controller import ImagesController
 from ...domain.errors import (
+    GeneratedImageExpiredError,
+    GeneratedImageNotFoundError,
     ImageExpiredError,
+    ImageGenerationValidationError,
     ImageNotFoundError,
     ImageValidationError,
     KieError,
     UrlValidationError,
 )
-from ...domain.models import UploadedImage
+from ...domain.events import ImageJobUpdated
+from ...domain.models import GeneratedImage, ImageJob, ImageJobStatus, UploadedImage
 from .._clipboard_feedback import copy_url_with_feedback
+from .generate_image import (
+    GenerateImageFormDefaults,
+    GenerateImageFormResult,
+    GenerateImageFormScreen,
+)
 from .upload_image import UploadImageFormResult, UploadImageFormScreen
 
 OpenLocalPath = Callable[[Path], Awaitable[None]]
@@ -40,33 +59,44 @@ _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
 _SECONDS_PER_MINUTE: Final[int] = 60
 _SECONDS_PER_HOUR: Final[int] = 60 * _SECONDS_PER_MINUTE
 _SECONDS_PER_DAY: Final[int] = 24 * _SECONDS_PER_HOUR
-_IMAGE_TABLE_COLUMNS: Final[tuple[str, ...]] = (
+_TABLE_COLUMNS: Final[tuple[str, ...]] = (
+    "Tipo",
     "ID",
     "Label",
+    "Estado / Detalle",
     "Tamaño",
-    "MIME",
-    "Path Kie",
-    "Local",
-    "Subida",
+    "Creado",
     "Expira",
 )
 _BYTES_PER_MB: Final[float] = 1024 * 1024
-_TABLE_PATH_MAX_LEN: Final[int] = 36
-# Coherente con `ui/screens/audios.py` y `ui/screens/settings.py`: si el
-# saldo es menor o igual a esto, lo mostramos en rojo.
 _LOW_CREDITS_THRESHOLD: Final[float] = 5.0
+
+# Prefijos para los row keys de la tabla — distinguen origen para los
+# selected handlers sin tener que mantener un dict paralelo.
+_KEY_PREFIX_UPLOADED: Final[str] = "U:"
+_KEY_PREFIX_GENERATED: Final[str] = "G:"
+_KEY_PREFIX_JOB: Final[str] = "J:"
 
 
 class ImagesScreen(Screen[None]):
-    """Galería de imágenes subidas a Kie."""
+    """Galería mixta de imágenes en Kie (uploaded + generated + cola)."""
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "go_back", "Volver"),
     ]
 
+    class _ImageRefreshRequested(Message):
+        """Mensaje interno: el queue avisó cambio de algún job → refrescar UI."""
+
+        def __init__(self, job: ImageJob) -> None:
+            super().__init__()
+            self.job = job
+
     def __init__(
         self,
-        controller: ImagesController,
+        uploads_controller: ImagesController,
+        generated_controller: GeneratedImagesController,
+        image_catalog: ImageCatalogController,
         open_local_path: OpenLocalPath,
         open_url: OpenUrl,
         *,
@@ -74,60 +104,72 @@ class ImagesScreen(Screen[None]):
         check_credits: CheckCredits | None = None,
     ) -> None:
         super().__init__()
-        self._controller = controller
+        self._uploads = uploads_controller
+        self._generated = generated_controller
+        self._catalog = image_catalog
         self._open_local_path = open_local_path
         self._open_url = open_url
         self._default_input_dir = default_input_dir
         self._check_credits = check_credits
+        self._unsubscribe: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Vertical(id="images-box"):
-            yield Static("[b]Imágenes subidas a Kie[/b]", id="images-title")
+            yield Static("[b]Imágenes en Kie (subidas + generadas + cola)[/b]", id="images-title")
             yield Static("[dim]Saldo Kie: consultando…[/dim]", id="images-credits")
             table: DataTable[str] = DataTable(
                 id="images-table", cursor_type="row", zebra_stripes=True
             )
-            for column in _IMAGE_TABLE_COLUMNS:
+            for column in _TABLE_COLUMNS:
                 table.add_column(column, key=column)
             yield table
             with Horizontal(classes="actions-row actions-row-keys"):
                 yield Button("Cargar", id="img-upload", variant="primary")
+                yield Button("Generar", id="img-generate", variant="primary")
                 yield Button("Ver", id="img-view", classes="btn-info")
                 yield Button("Copiar URL", id="img-copy-url", classes="btn-info")
+                yield Button("Cancelar job", id="img-cancel-job", classes="btn-warning")
+                yield Button("Reintentar", id="img-retry", classes="btn-warning")
                 yield Button("Quitar", id="img-delete", variant="error")
             yield Static(
-                f"[dim]Path Kie = ubicación interna. Usá 'Copiar URL' para "
-                f"obtener la URL descargable completa. Quitar elimina solo "
-                f"el registro local — Kie retiene el archivo "
-                f"{self._controller.retention_hours}h y lo borra "
-                f"automático. Los expirados se quitan solos al arrancar la app.[/dim]",
+                f"[dim]Subidas: TTL {self._uploads.retention_hours}h en Kie. "
+                f"Generadas: TTL {self._generated.retention_days}d. "
+                "'Quitar' borra solo el registro local; Kie las auto-expira.[/dim]",
                 id="images-hint",
             )
             yield Static("", id="status-bar")
         yield Footer()
 
     async def on_mount(self) -> None:
+        self._unsubscribe = self._generated.subscribe(self._on_queue_event)
         await self._refresh_table()
         if self._check_credits is not None:
             self.app.run_worker(self._refresh_credits(), exclusive=False)
         else:
             self.query_one("#images-credits", Static).update("")
 
+    async def on_unmount(self) -> None:
+        if self._unsubscribe is not None:
+            self._unsubscribe()
+            self._unsubscribe = None
+
     async def _refresh_credits(self) -> None:
-        """Best-effort: consulta saldo y actualiza el indicador, nunca lanza."""
         if self._check_credits is None:
             return
         try:
             balance = await self._check_credits()
         except Exception:
             balance = None
-        widget = self.query_one("#images-credits", Static)
+        try:
+            widget = self.query_one("#images-credits", Static)
+        except Exception:
+            return
         if balance is None:
             widget.update("[dim]Saldo Kie: no disponible (sin key activa o sin red)[/dim]")
             return
         formatted = (
-            f"[red]Saldo Kie: {balance:.2f} cr ⚠ bajo[/red]"
+            f"[red]Saldo Kie: {balance:.2f} cr ❗ bajo[/red]"
             if balance <= _LOW_CREDITS_THRESHOLD
             else f"[dim]Saldo Kie: {balance:.2f} cr[/dim]"
         )
@@ -142,6 +184,16 @@ class ImagesScreen(Screen[None]):
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
+
+    # --- queue events → UI refresh ----------------------------------------
+
+    def _on_queue_event(self, event: ImageJobUpdated) -> None:
+        self.post_message(self._ImageRefreshRequested(event.job))
+
+    async def on_images_screen__image_refresh_requested(
+        self, _event: _ImageRefreshRequested
+    ) -> None:
+        await self._refresh_table()
 
     # --- handlers ---------------------------------------------------------
 
@@ -159,26 +211,68 @@ class ImagesScreen(Screen[None]):
     async def _persist_upload(self, payload: UploadImageFormResult) -> None:
         self._set_status(f"… subiendo '{payload.label}' a Kie")
         try:
-            image = await self._controller.upload(payload.local_path, payload.label)
+            image = await self._uploads.upload(payload.local_path, payload.label)
         except ImageValidationError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"❌ {exc}", error=True)
             return
         except KieError as exc:
-            self._set_status(f"✖ upload falló: {exc}", error=True)
+            self._set_status(f"❌ upload falló: {exc}", error=True)
             return
-        self._set_status(f"✓ imagen '{image.label}' subida ({image.kie_url})")
+        self._set_status(f"✅ imagen '{image.label}' subida ({image.kie_url})")
         await self._refresh_table()
 
-    async def _handle_view(self) -> None:
-        """Resuelve la imagen y la abre con el visor más apropiado."""
-        image_id = self._selected_id()
-        if image_id is None:
-            self._set_status("Selecciona una imagen en la tabla primero", error=True)
+    async def _handle_generate(self) -> None:
+        """Abre el modal de generación con las refs disponibles cargadas."""
+        refs = await self._catalog.list_usable_assets()
+        self.app.push_screen(
+            GenerateImageFormScreen(available_refs=refs),
+            self._on_generate_form_dismissed,
+        )
+
+    def _on_generate_form_dismissed(self, result: GenerateImageFormResult | None) -> None:
+        if result is None:
             return
+        self.app.run_worker(self._enqueue_generation(result), exclusive=False)
+        if result.keep_open:
+            self.app.run_worker(
+                self._reopen_generate_form(GenerateImageFormDefaults(settings=result.settings)),
+                exclusive=False,
+            )
+
+    async def _reopen_generate_form(self, defaults: GenerateImageFormDefaults) -> None:
+        refs = await self._catalog.list_usable_assets()
+        self.app.push_screen(
+            GenerateImageFormScreen(available_refs=refs, defaults=defaults),
+            self._on_generate_form_dismissed,
+        )
+
+    async def _enqueue_generation(self, payload: GenerateImageFormResult) -> None:
         try:
-            image = await self._controller.get_for_use(image_id)
+            job = await self._generated.enqueue_generation(
+                payload.label, payload.prompt, payload.settings, payload.refs
+            )
+        except ImageGenerationValidationError as exc:
+            self._set_status(f"❌ {exc}", error=True)
+            return
+        self._set_status(f"✅ '{job.label}' encolado — mirá el progreso en la tabla")
+
+    async def _handle_view(self) -> None:
+        kind, asset_id = self._selected_kind_and_id()
+        if kind is None or asset_id is None:
+            self._set_status("Seleccioná una imagen o job en la tabla", error=True)
+            return
+        if kind == _KEY_PREFIX_UPLOADED:
+            await self._view_uploaded(asset_id)
+        elif kind == _KEY_PREFIX_GENERATED:
+            await self._view_generated(asset_id)
+        else:
+            self._set_status("Los jobs en cola no se pueden ver hasta completar", error=True)
+
+    async def _view_uploaded(self, image_id: str) -> None:
+        try:
+            image = await self._uploads.get_for_use(image_id)
         except ImageExpiredError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"❌ {exc}", error=True)
             return
         except ImageNotFoundError:
             self._set_status("La imagen ya no existe", error=True)
@@ -187,66 +281,115 @@ class ImagesScreen(Screen[None]):
         if await asyncio.to_thread(local.is_file):
             await self._open_local_with_status(local)
         else:
-            await self._open_url_with_clipboard_fallback(image)
+            await self._open_url_with_clipboard_fallback(image.kie_url)
+
+    async def _view_generated(self, image_id: str) -> None:
+        try:
+            image = await self._generated.get_for_use(image_id)
+        except GeneratedImageExpiredError as exc:
+            self._set_status(f"❌ {exc}", error=True)
+            return
+        except GeneratedImageNotFoundError:
+            self._set_status("La imagen generada ya no existe", error=True)
+            return
+        # Generadas no tienen archivo local (no descargamos eager). Abrimos URL.
+        await self._open_url_with_clipboard_fallback(image.kie_url)
 
     async def _open_local_with_status(self, local: Path) -> None:
         try:
             await self._open_local_path(local)
         except OSError as exc:
-            self._set_status(f"✖ no pude abrir el visor: {exc}", error=True)
+            self._set_status(f"❌ no pude abrir el visor: {exc}", error=True)
             return
-        self._set_status(f"✓ abriendo {local} en visor del sistema")
+        self._set_status(f"✅ abriendo {local} en visor del sistema")
 
-    async def _open_url_with_clipboard_fallback(self, image: UploadedImage) -> None:
-        # Copiamos al clipboard ANTES de intentar abrir el navegador: el toast
-        # de Textual trunca URLs largas, así que dejarla en el clipboard es la
-        # única forma confiable de que el usuario tenga la URL completa aun
-        # si el browser falla.
-        clip_msg, _ = await copy_url_with_feedback(
-            image.kie_url, osc52_fallback=self.app.copy_to_clipboard
-        )
+    async def _open_url_with_clipboard_fallback(self, url: str) -> None:
+        clip_msg, _ = await copy_url_with_feedback(url, osc52_fallback=self.app.copy_to_clipboard)
         try:
-            await self._open_url(image.kie_url)
+            await self._open_url(url)
         except (OSError, UrlValidationError) as exc:
             self._set_status(
-                f"✖ no pude abrir el navegador ({exc})\n{clip_msg}",
+                f"❌ no pude abrir el navegador ({exc})\n{clip_msg}",
                 error=True,
             )
             return
-        self._set_status(f"✓ archivo local no encontrado; abriendo URL en navegador\n{clip_msg}")
+        self._set_status(f"✅ abriendo URL en navegador\n{clip_msg}")
 
     async def _handle_copy_url(self) -> None:
-        image_id = self._selected_id()
-        if image_id is None:
-            self._set_status("Selecciona una imagen en la tabla primero", error=True)
+        kind, asset_id = self._selected_kind_and_id()
+        if kind is None or asset_id is None:
+            self._set_status("Seleccioná una imagen o job en la tabla", error=True)
             return
-        try:
-            image = await self._controller.get_for_use(image_id)
-        except ImageExpiredError as exc:
-            self._set_status(f"✖ {exc}", error=True)
-            return
-        except ImageNotFoundError:
-            self._set_status("La imagen ya no existe", error=True)
+        url = await self._resolve_url(kind, asset_id)
+        if url is None:
             return
         message, is_error = await copy_url_with_feedback(
-            image.kie_url, osc52_fallback=self.app.copy_to_clipboard
+            url, osc52_fallback=self.app.copy_to_clipboard
         )
         self._set_status(message, error=is_error)
 
-    async def _handle_delete(self) -> None:
-        image_id = self._selected_id()
-        if image_id is None:
-            self._set_status("Selecciona una imagen en la tabla primero", error=True)
-            return
+    async def _resolve_url(self, kind: str, asset_id: str) -> str | None:
         try:
-            await self._controller.delete(image_id)
-        except ImageNotFoundError:
-            self._set_status("La imagen ya no existe", error=True)
+            if kind == _KEY_PREFIX_UPLOADED:
+                return (await self._uploads.get_for_use(asset_id)).kie_url
+            if kind == _KEY_PREFIX_GENERATED:
+                return (await self._generated.get_for_use(asset_id)).kie_url
+            job = await self._generated.get_image_job(asset_id)
+            if job is None or not job.kie_url:
+                self._set_status("Ese job todavía no tiene URL", error=True)
+                return None
+            return job.kie_url
+        except (ImageExpiredError, GeneratedImageExpiredError) as exc:
+            self._set_status(f"❌ {exc}", error=True)
+            return None
+        except (ImageNotFoundError, GeneratedImageNotFoundError):
+            self._set_status("Ya no existe", error=True)
+            return None
+
+    async def _handle_cancel_job(self) -> None:
+        kind, asset_id = self._selected_kind_and_id()
+        if kind != _KEY_PREFIX_JOB or asset_id is None:
+            self._set_status("Solo se cancelan jobs en curso", error=True)
             return
-        self._set_status(
-            f"✓ '{image_id}' quitada del registro local "
-            f"(Kie la conserva ~{self._controller.retention_hours}h hasta auto-borrado)"
-        )
+        cancelled = await self._generated.cancel(asset_id)
+        if cancelled:
+            self._set_status(f"❌ job '{asset_id}' cancelado")
+        else:
+            self._set_status("No pude cancelar (job ya terminó o no existe)", error=True)
+
+    async def _handle_retry(self) -> None:
+        kind, asset_id = self._selected_kind_and_id()
+        if kind != _KEY_PREFIX_JOB or asset_id is None:
+            self._set_status("Solo se reintentan jobs fallidos/cancelados", error=True)
+            return
+        success = await self._generated.retry(asset_id)
+        if success:
+            self._set_status(f"🔁 job '{asset_id}' reencolado")
+        else:
+            self._set_status("No pude reencolar (estado no aplica)", error=True)
+
+    async def _handle_delete(self) -> None:
+        kind, asset_id = self._selected_kind_and_id()
+        if kind is None or asset_id is None:
+            self._set_status("Seleccioná una imagen o job en la tabla", error=True)
+            return
+        if kind == _KEY_PREFIX_UPLOADED:
+            try:
+                await self._uploads.delete(asset_id)
+            except ImageNotFoundError:
+                self._set_status("La imagen ya no existe", error=True)
+                return
+            self._set_status(f"✅ '{asset_id}' quitado del registro local")
+        elif kind == _KEY_PREFIX_GENERATED:
+            try:
+                await self._generated.delete(asset_id)
+            except GeneratedImageNotFoundError:
+                self._set_status("La imagen generada ya no existe", error=True)
+                return
+            self._set_status(f"✅ generada '{asset_id}' quitada del registro local")
+        else:
+            await self._generated.delete_job(asset_id)
+            self._set_status(f"✅ job '{asset_id}' quitado")
         await self._refresh_table()
 
     # --- helpers ---------------------------------------------------------
@@ -254,41 +397,101 @@ class ImagesScreen(Screen[None]):
     async def _refresh_table(self) -> None:
         table = self.query_one("#images-table", DataTable)
         table.clear()
-        retention = self._controller.retention_hours
-        for image in await self._controller.list_uploaded():
+        # Mostramos primero jobs en curso (más volátiles), luego generadas
+        # (TTL más largo), luego uploaded (TTL más corto).
+        for job in await self._generated.list_image_jobs():
+            # Si el job está COMPLETED y existe la generated, lo omitimos
+            # de la fila "job" (se verá en la fila "generated") para no
+            # duplicar visualmente.
+            if job.status == ImageJobStatus.COMPLETED:
+                continue
+            table.add_row(*_row_for_job(job), key=f"{_KEY_PREFIX_JOB}{job.id}")
+        retention_days = self._generated.retention_days
+        for generated in await self._generated.list_generated():
             table.add_row(
-                image.id,
-                image.label,
-                _format_size(image.file_size),
-                image.mime_type,
-                # Mostramos el path interno de Kie, NO la URL completa: el
-                # DataTable de Textual auto-detecta cualquier "https://..." y
-                # lo convierte en link clickable; al estar truncado con "…",
-                # clickear genera URLs inválidas con %E2%80%A6 al final.
-                # Para obtener la URL descargable están los botones
-                # "Copiar URL" y "Ver".
-                _truncate(image.kie_file_path, _TABLE_PATH_MAX_LEN),
-                "✓" if image.local_file_exists() else "✖",
-                image.uploaded_at.strftime("%Y-%m-%d %H:%M"),
-                _format_time_left(image.time_left(retention)),
-                key=image.id,
+                *_row_for_generated(generated, retention_days),
+                key=f"{_KEY_PREFIX_GENERATED}{generated.id}",
+            )
+        retention_hours = self._uploads.retention_hours
+        for uploaded in await self._uploads.list_uploaded():
+            table.add_row(
+                *_row_for_uploaded(uploaded, retention_hours),
+                key=f"{_KEY_PREFIX_UPLOADED}{uploaded.id}",
             )
 
-    def _selected_id(self) -> str | None:
+    def _selected_kind_and_id(self) -> tuple[str | None, str | None]:
         table = self.query_one("#images-table", DataTable)
         if table.row_count == 0:
-            return None
+            return None, None
         try:
             row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        except Exception:  # tabla sin selección — sin captura tipada en esta API
-            return None
-        return row_key.value
+        except Exception:
+            return None, None
+        value = row_key.value
+        if not value:
+            return None, None
+        for prefix in (_KEY_PREFIX_UPLOADED, _KEY_PREFIX_GENERATED, _KEY_PREFIX_JOB):
+            if value.startswith(prefix):
+                return prefix, value[len(prefix) :]
+        return None, None
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
-        bar = self.query_one("#status-bar", Static)
+        try:
+            bar = self.query_one("#status-bar", Static)
+        except Exception:
+            return
         bar.update(f"[red]{message}[/red]" if error else message)
         timeout = _LONG_NOTIFICATION_TIMEOUT if error else _NOTIFICATION_TIMEOUT
         self.notify(message, severity="error" if error else "information", timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Helpers de formato — extraerlos a `_image_format.py` si el archivo crece.
+# ---------------------------------------------------------------------------
+
+
+def _row_for_uploaded(image: UploadedImage, retention_hours: int) -> tuple[str, ...]:
+    return (
+        "subida",
+        image.id,
+        image.label,
+        f"{image.mime_type} ({'local ✅' if image.local_file_exists() else 'local ❌'})",
+        _format_size(image.file_size),
+        image.uploaded_at.strftime("%Y-%m-%d %H:%M"),
+        _format_time_left(image.time_left(retention_hours)),
+    )
+
+
+def _row_for_generated(image: GeneratedImage, retention_days: int) -> tuple[str, ...]:
+    detail_parts = [f"refs: {image.refs_count}"]
+    if image.settings is not None:
+        detail_parts.append(
+            f"{image.settings.aspect_ratio} {image.settings.resolution} "
+            f"{image.settings.output_format}"
+        )
+    size = _format_size(image.file_size) if image.file_size is not None else "—"
+    return (
+        "generada",
+        image.id,
+        image.label,
+        " · ".join(detail_parts),
+        size,
+        image.generated_at.strftime("%Y-%m-%d %H:%M"),
+        _format_time_left(image.time_left(retention_days)),
+    )
+
+
+def _row_for_job(job: ImageJob) -> tuple[str, ...]:
+    detail = job.error if job.error else f"task: {job.task_id or '—'}"
+    return (
+        f"job · {job.status.value}",
+        job.id,
+        job.label,
+        detail,
+        "—",
+        job.created_at.strftime("%Y-%m-%d %H:%M"),
+        "—",
+    )
 
 
 def _format_size(size_bytes: int) -> str:
@@ -298,7 +501,6 @@ def _format_size(size_bytes: int) -> str:
 
 
 def _format_time_left(delta: timedelta) -> str:
-    """Formatea un `timedelta` como 'Xd Yh' o 'EXPIRADO' si es negativo."""
     total_seconds = delta.total_seconds()
     if total_seconds <= 0:
         return "EXPIRADO"
@@ -310,15 +512,16 @@ def _format_time_left(delta: timedelta) -> str:
     return f"{hours}h {minutes}m"
 
 
-def _truncate(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
+# Importado solo para mantener el name visible aunque solo se use en log line.
+_DATETIME_FOR_LINTERS = datetime
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[ImagesScreen], Awaitable[None]]] = {
     "img-upload": ImagesScreen._handle_upload,
+    "img-generate": ImagesScreen._handle_generate,
     "img-view": ImagesScreen._handle_view,
     "img-copy-url": ImagesScreen._handle_copy_url,
+    "img-cancel-job": ImagesScreen._handle_cancel_job,
+    "img-retry": ImagesScreen._handle_retry,
     "img-delete": ImagesScreen._handle_delete,
 }

@@ -249,11 +249,30 @@ Button:disabled {
     height: 3;
 }
 
-/* 4-5 botones cortos uniformemente distribuidos (API Keys / Audios). */
+/* Botones de acciones en filas múltiples. Cada uno se ajusta dinámicamente
+ * al ancho de su texto + padding interno simétrico.
+ *
+ * Reglas de simetría (CR-3.7):
+ *   - `width: auto` → el botón toma el ancho de su contenido.
+ *   - `padding: 0 2` → 2 cells de aire a la IZQUIERDA y 2 a la DERECHA
+ *     del texto. El default de Textual es `0 1`, demasiado apretado.
+ *   - `min-width: 0` → anula el `min-width: 12` global del Button base,
+ *     que estaba forzando aire extra en botones cortos como "Ver" o
+ *     "Quitar" y rompiendo la simetría visual.
+ *
+ * Resultado: cada botón ocupa exactamente `len(texto) + 4` cells, con
+ * padding interno idéntico (2 + 2 = 4) en TODOS los botones del row.
+ * El row se centra como bloque gracias a `actions-row.align: center middle`.
+ *
+ * Antes usábamos `width: 1fr; max-width: 24` (estiraba todos los botones
+ * al mismo ancho, creando aire interno muy distinto entre textos cortos
+ * y largos) y luego `width: auto; min-width: 14` (mantenía un piso fijo
+ * que rompía la simetría para textos < 10 chars). El cambio actual elimina
+ * ambos compromisos y deja el ancho 100% dinámico. */
 .actions-row-keys Button {
-    width: 1fr;
-    min-width: 8;
-    max-width: 24;
+    width: auto;
+    min-width: 0;
+    padding: 0 2;
 }
 
 /* 1 botón "Guardar X" largo (Endpoints/Ejecución/Defaults) — ancho fijo
@@ -488,7 +507,7 @@ ImageFilePickerScreen {
     width: 92;
     max-width: 95%;
     height: 90%;
-    border: solid $accent;
+    border: none;
     background: $surface;
     padding: 2 4;
 }
@@ -731,16 +750,15 @@ GenerateAudioFormScreen {
 }
 
 #audio-form-dialog {
-    width: 100;
+    /* Width 120 (antes 100): el footer tiene 4 botones (Cancelar,
+     * Guardar preset, Generar y otro, Generar). Con 4×width:22 + 4×margin:2×2 =
+     * 104 cells solo de botones, no entraban en 100. 120 da aire para
+     * los labels largos sin recortar el "y" de "Generar y otro". */
+    width: 120;
     max-width: 95%;
     height: auto;
     border: none;
     background: $surface;
-    /* Padding generoso para que el contenido no toque los bordes
-     * del modal. Antes era `0 1` (casi nada): los Labels quedaban
-     * pegados al borde izquierdo y los botones tocaban el borde
-     * derecho. `1 3` da 3 cols de aire lateral y 1 línea arriba/
-     * abajo. */
     padding: 1 3;
     overflow: hidden;
     layout: vertical;
@@ -770,10 +788,13 @@ GenerateAudioFormScreen {
 }
 
 #audio-form-footer Button {
-    margin: 0 2;
+    /* Margin horizontal mínimo entre botones (2 cells). Width auto-
+     * fit con un piso de 16 para que labels cortos ("Generar") no se
+     * desbalanceen con largos ("Guardar preset", "Generar y otro"). */
+    margin: 0 1;
     height: 3;
-    width: 22;
-    min-width: 16;
+    width: auto;
+    min-width: 18;
 }
 
 #audio-form-title {
@@ -815,10 +836,11 @@ GenerateAudioFormScreen {
     min-width: 16;
 }
 
-/* Botón "⏹" de stop: compacto, fuera de la escala porque su rol es glyph. */
+/* Botón "Detener" del preview de audio: ancho coherente con el botón
+ * "Preview" al lado. Antes era width:4 cuando solo mostraba el emoji
+ * "⏹" — al cambiar a label "Detener" necesita aire para el texto. */
 #audio-preview-stop {
-    min-width: 4;
-    width: 4;
+    min-width: 12;
 }
 
 #audio-advanced {
@@ -857,7 +879,10 @@ KeyFormScreen {
     width: 72;
     max-width: 90%;
     height: auto;
-    border: solid $accent;
+    /* Sin borde: el contraste de `$surface` contra el fondo dimmed del
+     * MainScreen ya marca el modal. Coherente con `#audio-form-dialog`,
+     * `#video-form-dialog`, `#image-form-dialog` y `#gen-image-dialog`. */
+    border: none;
     background: $surface;
     padding: 2 4;
 }
@@ -994,8 +1019,7 @@ NewVideoFormScreen {
 }
 
 #video-audio-stop {
-    min-width: 4;
-    width: 4;
+    min-width: 12;
 }
 
 /* Labels dentro del body: separados del contenido anterior con
@@ -1175,4 +1199,123 @@ BatchScreen {
     height: auto;
     padding-top: 2;
     content-align: center middle;
+}
+
+/* ============================================================================
+ * GenerateImage modal (Nano Banana 2)
+ *
+ * Mismo patrón sticky-footer que GenerateAudio: outer Vertical (no
+ * scroll) + body scrollable + footer fijo abajo. Sin border para
+ * coherencia con los otros modales (el contraste de `$surface` ya marca
+ * el modal). TextAreas con altura acotada para que el modal no se
+ * estire infinito y los Selects de settings en una sola fila lateral.
+ * ============================================================================ */
+
+GenerateImageFormScreen {
+    align: center middle;
+}
+
+#gen-image-dialog {
+    /* Width 120: footer con 3 botones de width auto + min-width 18,
+     * más los 3 Selects horizontales del row de settings. */
+    width: 120;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: none;
+    background: $surface;
+    padding: 1 3;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#gen-image-body {
+    height: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#gen-image-footer {
+    height: 3;
+    align: center middle;
+    padding: 0 1;
+    margin-top: 2;
+}
+
+#gen-image-footer Button {
+    margin: 0 1;
+    height: 3;
+    width: auto;
+    min-width: 18;
+}
+
+#gen-image-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+/* Labels dentro del body: igual patrón que audio/video. */
+#gen-image-body Label {
+    margin-top: 1;
+}
+
+/* TextArea del label: 1 línea visible (chico). Sin esto se estira al
+ * tamaño del contenido y el body queda enorme. */
+#gen-image-label {
+    height: 3;
+}
+
+/* TextArea del prompt: 8 líneas visibles con scroll interno si crece. */
+#gen-image-prompt {
+    height: 8;
+}
+
+#gen-image-prompt-counter {
+    color: $text-muted;
+    content-align: right middle;
+    height: 1;
+    margin-bottom: 1;
+}
+
+/* Row horizontal con los 3 Selects (aspect_ratio, resolution, format). */
+#gen-image-settings-row {
+    height: auto;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#gen-image-settings-row .gen-image-setting {
+    width: 1fr;
+    height: auto;
+    margin-right: 2;
+}
+
+#gen-image-settings-row Select {
+    width: 1fr;
+}
+
+/* SelectionList de referencias: altura fija con scroll interno para
+ * evitar que el modal crezca cuando hay muchas imágenes. */
+#gen-image-refs {
+    height: 10;
+    border: none;
+    background: $boost;
+    margin-top: 1;
+}
+
+#gen-image-refs-empty {
+    color: $text-muted;
+    height: auto;
+    padding: 1;
+}
+
+#gen-image-error {
+    color: $error;
+    padding: 0;
+    height: auto;
+    margin-top: 1;
 }

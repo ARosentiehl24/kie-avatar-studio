@@ -14,6 +14,7 @@ from typing import Any, Final, Literal
 
 from .errors import (
     AudioValidationError,
+    ImageGenerationValidationError,
     ImageValidationError,
     JobValidationError,
     KeyValidationError,
@@ -21,7 +22,7 @@ from .errors import (
     VoiceSettingsValidationError,
 )
 from .kie_voice_catalog import is_builtin_voice
-from .models import VideoJob, VoiceSettings
+from .models import ImageAssetRef, ImageGenerationSettings, VideoJob, VoiceSettings
 
 MAX_SCRIPT_CHARS: Final[int] = 5000
 MAX_PROMPT_CHARS: Final[int] = 5000
@@ -29,6 +30,37 @@ _BYTES_PER_MB: Final[int] = 1024 * 1024
 MAX_IMAGE_BYTES: Final[int] = 10 * _BYTES_PER_MB
 MAX_AUDIO_BYTES: Final[int] = 100 * _BYTES_PER_MB
 MAX_AUDIO_SECONDS: Final[int] = 5 * 60
+
+# Restricciones del endpoint Nano Banana 2 (`docs.kie.ai/market/google/nanobanana2`).
+# El prompt admite hasta 20.000 chars (mucho más generoso que el de avatar/TTS)
+# y la API acepta hasta 14 refs como `image_input` (cada una debe ser una URL
+# pública, jpg/png/webp ≤ 30 MB). Validamos cantidad y forma de las URLs;
+# el tamaño y mimetype reales los enforcea Kie al consumir la URL.
+MAX_IMAGE_PROMPT_CHARS: Final[int] = 20000
+MAX_IMAGE_REFS: Final[int] = 14
+
+# Enums del input del endpoint. Mantenemos el orden del spec para que la UI
+# los muestre tal como aparecen en la doc oficial. `auto` es el default del
+# spec y representa "Nano Banana decide según las refs / el prompt".
+ASPECT_RATIOS: Final[tuple[str, ...]] = (
+    "auto",
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+    "1:4",
+    "1:8",
+    "4:1",
+    "8:1",
+)
+RESOLUTIONS: Final[tuple[str, ...]] = ("1K", "2K", "4K")
+OUTPUT_FORMATS: Final[tuple[str, ...]] = ("jpg", "png")
 
 # Política de retención de Kie. La documentación oficial (docs.kie.ai §6 Data
 # Retention Policy) distingue dos categorías:
@@ -386,3 +418,72 @@ def validate_voice_settings(settings: VoiceSettings) -> None:
             raise VoiceSettingsValidationError(
                 "language_code debe ser un código ISO 639-1 de 2 letras (ej: 'es', 'en')"
             )
+
+
+def validate_image_prompt(prompt: str) -> None:
+    """Valida el prompt de generación de imagen para Nano Banana 2.
+
+    Límite oficial: 20.000 chars (`docs.kie.ai/market/google/nanobanana2`).
+    """
+    if not prompt or prompt != prompt.strip():
+        raise ImageGenerationValidationError(
+            "el prompt no puede estar vacío ni tener espacios alrededor"
+        )
+    if len(prompt) > MAX_IMAGE_PROMPT_CHARS:
+        raise ImageGenerationValidationError(
+            f"el prompt supera {MAX_IMAGE_PROMPT_CHARS} caracteres"
+        )
+
+
+def validate_image_settings(settings: ImageGenerationSettings) -> None:
+    """Valida que los enums del input estén dentro del catálogo del modelo.
+
+    Pydantic no enforce los enums (los dejamos como strings para que el
+    modelo sobreviva si Kie suma ratios/resoluciones nuevas sin rebuild
+    de la app); la validación dura vive acá para que el caller emita
+    el error tipado en español antes de pegarle a Kie.
+    """
+    if settings.aspect_ratio not in ASPECT_RATIOS:
+        raise ImageGenerationValidationError(
+            f"aspect_ratio inválido: {settings.aspect_ratio!r} (válidos: {', '.join(ASPECT_RATIOS)})"
+        )
+    if settings.resolution not in RESOLUTIONS:
+        raise ImageGenerationValidationError(
+            f"resolution inválido: {settings.resolution!r} (válidos: {', '.join(RESOLUTIONS)})"
+        )
+    if settings.output_format not in OUTPUT_FORMATS:
+        raise ImageGenerationValidationError(
+            f"output_format inválido: {settings.output_format!r} "
+            f"(válidos: {', '.join(OUTPUT_FORMATS)})"
+        )
+
+
+def validate_image_refs(refs: list[ImageAssetRef]) -> None:
+    """Valida las refs (`image_input`) de un job de generación.
+
+    Reglas:
+    - Hasta `MAX_IMAGE_REFS` (14 — límite duro del endpoint).
+    - URLs http(s) bien formadas (reutiliza `validate_http_url`).
+    - Sin duplicados por `kie_url` (Kie acepta duplicados pero no aportan
+      nada y consumen un slot del máximo de 14).
+
+    NO valida expiración: eso depende del momento de ejecución y lo hace
+    el runner contra el store correspondiente justo antes de
+    `create_nano_banana_task`. Una ref válida acá puede estar expirada
+    al ejecutar el job si pasó mucho tiempo en la cola.
+    """
+    if len(refs) > MAX_IMAGE_REFS:
+        raise ImageGenerationValidationError(
+            f"máximo {MAX_IMAGE_REFS} refs permitidas (recibí {len(refs)})"
+        )
+    seen: set[str] = set()
+    for ref in refs:
+        try:
+            validate_http_url(ref.kie_url)
+        except UrlValidationError as exc:
+            raise ImageGenerationValidationError(
+                f"ref '{ref.label}' tiene URL inválida: {exc}"
+            ) from exc
+        if ref.kie_url in seen:
+            raise ImageGenerationValidationError(f"ref '{ref.label}' está duplicada en la lista")
+        seen.add(ref.kie_url)

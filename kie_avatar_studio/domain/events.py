@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from .models import AudioJob, AudioJobStatus, JobStatus, VideoJob
+from .models import AudioJob, AudioJobStatus, ImageJob, ImageJobStatus, JobStatus, VideoJob
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,16 +28,28 @@ class AudioJobUpdated:
     job: AudioJob
 
 
-JobKind = Literal["video", "audio"]
+@dataclass(frozen=True, slots=True)
+class ImageJobUpdated:
+    """Notificación de que un `ImageJob` cambió de estado o campos relevantes.
+
+    Mismo patrón que `AudioJobUpdated`: un evento por tipo de job para
+    evitar que las pantallas tengan que matchear runtime types al
+    suscribirse al `QueueManager` correspondiente.
+    """
+
+    job: ImageJob
+
+
+JobKind = Literal["video", "audio", "image"]
 
 
 @dataclass(frozen=True, slots=True)
 class HistoryEntry:
-    """Vista normalizada de un job (video o audio) para la pantalla Historial.
+    """Vista normalizada de un job (video, audio o image) para la pantalla Historial.
 
     Permite que la `HistoryScreen` muestre una tabla unificada sin tener
-    que conocer la diferencia entre `VideoJob` y `AudioJob`. El `raw`
-    queda disponible si alguna fila necesita atributos específicos
+    que conocer la diferencia entre `VideoJob`, `AudioJob` e `ImageJob`.
+    El `raw` queda disponible si alguna fila necesita atributos específicos
     (típicamente para abrir la pantalla nativa del job).
 
     Status se proyecta a su `value` para que la pantalla solo trabaje con
@@ -50,9 +62,9 @@ class HistoryEntry:
     id: str
     label: str
     status_value: str
-    detail: str  # script (audio) o prompt (video) — preview para la tabla.
+    detail: str  # script (audio), prompt (video) o prompt (image) — preview para la tabla.
     created_at: datetime
-    raw: VideoJob | AudioJob
+    raw: VideoJob | AudioJob | ImageJob
 
     @classmethod
     def from_video_job(cls, job: VideoJob) -> HistoryEntry:
@@ -74,6 +86,18 @@ class HistoryEntry:
             label=job.label,
             status_value=job.status.value,
             detail=job.script,
+            created_at=job.created_at,
+            raw=job,
+        )
+
+    @classmethod
+    def from_image_job(cls, job: ImageJob) -> HistoryEntry:
+        return cls(
+            kind="image",
+            id=job.id,
+            label=job.label,
+            status_value=job.status.value,
+            detail=job.prompt,
             created_at=job.created_at,
             raw=job,
         )
@@ -103,8 +127,15 @@ _TERMINAL_AUDIO_STATUS_VALUES: frozenset[str] = frozenset(
         AudioJobStatus.CANCELLED.value,
     }
 )
+_TERMINAL_IMAGE_STATUS_VALUES: frozenset[str] = frozenset(
+    {
+        ImageJobStatus.COMPLETED.value,
+        ImageJobStatus.FAILED.value,
+        ImageJobStatus.CANCELLED.value,
+    }
+)
 TERMINAL_HISTORY_STATUS_VALUES: frozenset[str] = (
-    _TERMINAL_VIDEO_STATUS_VALUES | _TERMINAL_AUDIO_STATUS_VALUES
+    _TERMINAL_VIDEO_STATUS_VALUES | _TERMINAL_AUDIO_STATUS_VALUES | _TERMINAL_IMAGE_STATUS_VALUES
 )
 
 

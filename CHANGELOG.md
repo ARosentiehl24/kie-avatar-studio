@@ -6,7 +6,47 @@ MINOR, **S** → PATCH.
 
 ## [Unreleased]
 
-_Nada todavía. Próximos cambios se anotan acá antes del release._
+### Added (M)
+
+- **Generación de imágenes con Nano Banana 2 (Google) vía Kie**. Nuevo
+  subsistema completo paralelo al de audio TTS:
+  - `ImageJob` + `ImageJobRunner` + `ImageJobLifecycle` + cola persistente
+    `ImageQueueManager` con la misma state machine que audio
+    (`queued → validating → creating → polling → completed | failed | cancelled`).
+  - `GeneratedImage` reusable como `image_url` del `VideoJob` (retención 14d en Kie).
+  - Pantalla `Imágenes` expandida a **galería mixta uploaded + generated + cola**
+    con botones `Cargar`, `Generar`, `Ver`, `Copiar URL`, `Cancelar job`,
+    `Reintentar`, `Quitar`. Listener al `image_queue` refresca en vivo.
+  - Nuevo modal `Generar imagen` con prompt (max 20k chars), settings
+    (`aspect_ratio`, `resolution`, `output_format`) y selector múltiple de
+    refs hasta 14 del catálogo combinado uploaded + generated.
+  - `ImageAssetRef` DTO discriminado (`uploaded` / `generated`) + nuevo
+    `ImageCatalogController` (facade fina) → `VideosController.enqueue_from_assets`
+    ahora acepta cualquier tipo de imagen como input del avatar.
+  - `HistoryController`, `HistoryScreen` y `QueueScreen` extendidos para
+    incluir image jobs (con su propio filtro 🖼 + badge `image`).
+  - Notificación del SO al completar/fallar (toast "✓ Imagen lista").
+  - `_mark_creating_image_jobs_as_failed` al arrancar la app para evitar
+    duplicar créditos si la app crasheó entre `createTask` y persistir
+    `task_id` (mirror del patrón de audio).
+  - Semáforo global de `max_parallel_jobs` ahora compartido entre las
+    **tres** colas (video + audio + image) — test `test_cross_queue_parallelism.py`
+    garantiza que el límite no se viola con jobs concurrentes de los tres
+    tipos.
+- Documentación de la API de Nano Banana 2 en `docs/API_KIE.md` §5.
+
+### Changed (M)
+
+- `VideosController.enqueue_from_assets(image_ref, audio_id, prompt)`:
+  ahora recibe un `ImageAssetRef` discriminado en lugar de `image_id`
+  plano. La resolución contra el store correcto (uploaded/generated) y
+  el chequeo de TTL apropiado por kind (24h vs 14d) viven en
+  `ImageCatalogController.resolve_asset()` (CR-3.7). Evita colisión de
+  ids entre stores y bugs de expiración cruzada.
+- Pantalla `Nuevo video` (`NewVideoFormScreen`): selector de imagen ahora
+  acepta tanto `UploadedImage` como `GeneratedImage`, etiquetando cada
+  opción como `[subida]` o `[generada]`. Devuelve `ImageAssetRef`
+  (no `image_id`) para que `VideosController` resuelva sin asumir origen.
 
 ---
 

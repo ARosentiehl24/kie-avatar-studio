@@ -23,8 +23,15 @@ from typing import Any, Final
 
 from loguru import logger
 
-from ..domain.events import AudioJobUpdated, JobUpdated
-from ..domain.models import AudioJob, AudioJobStatus, JobStatus, VideoJob
+from ..domain.events import AudioJobUpdated, ImageJobUpdated, JobUpdated
+from ..domain.models import (
+    AudioJob,
+    AudioJobStatus,
+    ImageJob,
+    ImageJobStatus,
+    JobStatus,
+    VideoJob,
+)
 from ..domain.ports import DesktopNotifier
 
 # Status que disparan toast. Cancelled NO porque la cancelación la
@@ -34,6 +41,9 @@ _VIDEO_NOTIFY_STATUS: Final[frozenset[JobStatus]] = frozenset(
 )
 _AUDIO_NOTIFY_STATUS: Final[frozenset[AudioJobStatus]] = frozenset(
     {AudioJobStatus.COMPLETED, AudioJobStatus.FAILED}
+)
+_IMAGE_NOTIFY_STATUS: Final[frozenset[ImageJobStatus]] = frozenset(
+    {ImageJobStatus.COMPLETED, ImageJobStatus.FAILED}
 )
 
 # Truncado del label/script en el toast: notify-send y Windows toast
@@ -58,6 +68,7 @@ class JobNotificationBridge:
         # pantallas (Cola, Historial, Videos) suben/bajan listeners.
         self._notified_video_ids: set[str] = set()
         self._notified_audio_ids: set[str] = set()
+        self._notified_image_ids: set[str] = set()
         # Mantenemos referencia fuerte a las tasks fire-and-forget para
         # que el GC no las recoja antes de que el subprocess termine.
         self._pending: set[asyncio.Task[None]] = set()
@@ -82,6 +93,15 @@ class JobNotificationBridge:
         self._notified_audio_ids.add(job.id)
         self._schedule(self._notify_audio(job))
 
+    def on_image_event(self, event: ImageJobUpdated) -> None:
+        job = event.job
+        if job.status not in _IMAGE_NOTIFY_STATUS:
+            return
+        if job.id in self._notified_image_ids:
+            return
+        self._notified_image_ids.add(job.id)
+        self._schedule(self._notify_image(job))
+
     # --- internals -----------------------------------------------------
 
     def _schedule(self, coro: Coroutine[Any, Any, None]) -> None:
@@ -101,11 +121,11 @@ class JobNotificationBridge:
         success = job.status == JobStatus.COMPLETED
         label = _short_label(job.script or job.id)
         if success:
-            title = "✓ Video listo"
+            title = "✅ Video listo"
             output = job.output_path or "(ver pantalla Videos)"
             message = f"{label}\n→ {output}"
         else:
-            title = "✖ Video falló"
+            title = "❌ Video falló"
             message = f"{label}\n{_short_error(job.error)}"
         await self._notifier.notify(title=title, message=message, success=success)
 
@@ -113,10 +133,21 @@ class JobNotificationBridge:
         success = job.status == AudioJobStatus.COMPLETED
         label = _short_label(job.label or job.id)
         if success:
-            title = "✓ Audio listo"
+            title = "✅ Audio listo"
             message = f"{label}\n→ Escuchá desde Audios (a)"
         else:
-            title = "✖ Audio falló"
+            title = "❌ Audio falló"
+            message = f"{label}\n{_short_error(job.error)}"
+        await self._notifier.notify(title=title, message=message, success=success)
+
+    async def _notify_image(self, job: ImageJob) -> None:
+        success = job.status == ImageJobStatus.COMPLETED
+        label = _short_label(job.label or job.id)
+        if success:
+            title = "✅ Imagen lista"
+            message = f"{label}\n→ Mirala en Imágenes (i)"
+        else:
+            title = "❌ Imagen falló"
             message = f"{label}\n{_short_error(job.error)}"
         await self._notifier.notify(title=title, message=message, success=success)
 

@@ -79,7 +79,7 @@ async def test_videos_screen_buttons_render(tmp_path: Path) -> None:
         await pilot.pause()
         for btn_id, expected in (
             ("vid-new", "Nuevo video"),
-            ("vid-open", "▶ Abrir mp4"),
+            ("vid-open", "Abrir mp4"),
             ("vid-copy-url", "Copiar URL"),
             ("vid-cancel-job", "Cancelar job"),
             ("vid-retry", "Reintentar"),
@@ -116,7 +116,10 @@ async def test_new_video_modal_lists_available_assets(tmp_path: Path) -> None:
 
         image_select = app.screen.query_one("#video-image", Select)
         audio_select = app.screen.query_one("#video-audio", Select)
-        assert image_select.value == "img-1"
+        # Tras el refactor a `ImageAssetRef`, el value del select de imagen
+        # es un id sintético `kind:id` para distinguir colisiones entre
+        # uploaded y generated. El de audio sigue siendo el id plano.
+        assert image_select.value == "uploaded:img-1"
         assert audio_select.value == "aud-1"
 
 

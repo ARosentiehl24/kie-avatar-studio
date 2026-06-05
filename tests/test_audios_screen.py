@@ -101,8 +101,8 @@ async def test_audios_screen_buttons_render_with_labels(tmp_path: Path) -> None:
         await pilot.pause()
         for btn_id, expected in (
             ("aud-generate", "Generar"),
-            ("aud-listen", "🔊 Escuchar"),
-            ("aud-stop", "⏹  Detener"),
+            ("aud-listen", "Escuchar"),
+            ("aud-stop", "Detener"),
             ("aud-copy-url", "Copiar URL"),
             ("aud-cancel-job", "Cancelar job"),
             ("aud-retry", "Reintentar"),

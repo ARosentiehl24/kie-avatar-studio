@@ -23,6 +23,7 @@ from ..domain.models import KieTaskCreated, KieUploadResult, VoiceSettings
 DEFAULT_UPLOAD_PATH: Final[str] = "images/avatar-models"
 DEFAULT_TTS_MODEL: Final[str] = "elevenlabs/text-to-speech-multilingual-v2"
 DEFAULT_AVATAR_MODEL: Final[str] = "kling/ai-avatar-pro"
+DEFAULT_NANO_BANANA_MODEL: Final[str] = "nano-banana-2"
 
 _DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
 _MAX_RETRIES: Final[int] = 3
@@ -128,6 +129,41 @@ class KieClient:
         body = {
             "model": model,
             "input": {"image_url": image_url, "audio_url": audio_url, "prompt": prompt},
+        }
+        return await self._create_task(body)
+
+    async def create_nano_banana_task(
+        self,
+        prompt: str,
+        *,
+        image_input: list[str] | None = None,
+        aspect_ratio: str = "auto",
+        resolution: str = "1K",
+        output_format: str = "jpg",
+        model: str = DEFAULT_NANO_BANANA_MODEL,
+    ) -> KieTaskCreated:
+        """POST /api/v1/jobs/createTask — crea task de Nano Banana 2 (Google).
+
+        El input acepta hasta 14 URLs de referencia en `image_input` (deben ser
+        URLs públicas; típicamente las que devuelve `upload_file` o `kie_url` de
+        un `GeneratedImage`). Los valores aceptados por `aspect_ratio`,
+        `resolution` y `output_format` están listados en `domain.policies`
+        (`ASPECT_RATIOS`, `RESOLUTIONS`, `OUTPUT_FORMATS`); el cliente NO los
+        valida — lo hace `policies.validate_image_settings` antes de llamar.
+        Mantenerlo así respeta CR-2.1 (KieClient = solo HTTP).
+
+        Si `image_input` es `None`, enviamos lista vacía: es el valor que el
+        OpenAPI spec espera para text-to-image puro.
+        """
+        body = {
+            "model": model,
+            "input": {
+                "prompt": prompt,
+                "image_input": image_input or [],
+                "aspect_ratio": aspect_ratio,
+                "resolution": resolution,
+                "output_format": output_format,
+            },
         }
         return await self._create_task(body)
 

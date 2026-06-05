@@ -1,4 +1,10 @@
-"""Tests de `VideosController`: enqueue_from_assets + acciones + wait_for_job."""
+"""Tests de `VideosController`: enqueue_from_assets + acciones + wait_for_job.
+
+Tras el refactor a `ImageAssetRef`, los assertions de "tipo de imagen
+correcto" están cubiertos en `test_videos_controller_mixed_assets.py`.
+Acá testeamos el contrato base con UploadedImage como kind por defecto
+y los caminos de error compartidos.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from kie_avatar_studio.app_layer.image_catalog_controller import ImageCatalogController
 from kie_avatar_studio.app_layer.queue_manager import QueueManager
 from kie_avatar_studio.app_layer.video_job_lifecycle import VideoJobLifecycle
 from kie_avatar_studio.app_layer.videos_controller import VideosController
@@ -20,12 +27,15 @@ from kie_avatar_studio.domain.errors import (
 from kie_avatar_studio.domain.events import JobUpdated
 from kie_avatar_studio.domain.models import (
     GeneratedAudio,
+    ImageAssetKind,
+    ImageAssetRef,
     JobStatus,
     UploadedImage,
     VideoJob,
 )
 from kie_avatar_studio.infra.audios_db import AudiosDB
 from kie_avatar_studio.infra.db import JobsDB
+from kie_avatar_studio.infra.generated_images_db import GeneratedImagesDB
 from kie_avatar_studio.infra.images_db import ImagesDB
 
 
@@ -59,10 +69,22 @@ async def images_store(tmp_path) -> ImagesDB:
 
 
 @pytest.fixture
+async def generated_images_store(tmp_path) -> GeneratedImagesDB:
+    d = GeneratedImagesDB(tmp_path / "jobs.db")
+    await d.init()
+    return d
+
+
+@pytest.fixture
 async def audios_store(tmp_path) -> AudiosDB:
     d = AudiosDB(tmp_path / "jobs.db")
     await d.init()
     return d
+
+
+@pytest.fixture
+def catalog(images_store, generated_images_store) -> ImageCatalogController:
+    return ImageCatalogController(images_store, generated_images_store)
 
 
 def _build_queue(
@@ -103,6 +125,16 @@ def _sample_audio(
     )
 
 
+def _uploaded_ref(image_id: str = "img-1") -> ImageAssetRef:
+    return ImageAssetRef(
+        kind=ImageAssetKind.UPLOADED,
+        id=image_id,
+        label="avatar Maria",
+        kie_url=f"https://tempfile.redpandaai.co/kieai/{image_id}.png",
+        expires_at=datetime.now(UTC) + timedelta(hours=24),
+    )
+
+
 # --- enqueue_from_assets ---------------------------------------------------
 
 
@@ -111,24 +143,22 @@ async def test_enqueue_from_assets_happy_path(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await images_store.upsert(_sample_image())
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
-    job = await ctl.enqueue_from_assets("img-1", "aud-1", "Plano medio, luz suave")
+    job = await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "Plano medio, luz suave")
 
     assert job.status == JobStatus.QUEUED
     assert job.prompt == "Plano medio, luz suave"
-    # URLs ya pobladas (el runner saltará upload + TTS).
     assert job.image_url == "https://tempfile.redpandaai.co/kieai/img-1.png"
     assert job.audio_url == "https://tempfile.redpandaai.co/kieai/aud-1.mp3"
-    # Script y voice copiados como metadata informativa desde el audio.
     assert job.script == "Hola, soy María"
     assert job.voice == "EkK5I93UQWFDigLMpZcX"
-    # Persistido + procesado.
     fetched = await jobs_repo.get(job.id)
     assert fetched is not None
     await queue.drain()
@@ -139,16 +169,16 @@ async def test_enqueue_from_assets_happy_path(
 async def test_enqueue_from_assets_rejects_missing_image(
     tmp_settings,
     jobs_repo: JobsDB,
-    images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
     with pytest.raises(ImageNotFoundError):
-        await ctl.enqueue_from_assets("ghost", "aud-1", "x")
+        await ctl.enqueue_from_assets(_uploaded_ref("ghost"), "aud-1", "x")
     assert runner.processed == []
 
 
@@ -157,14 +187,15 @@ async def test_enqueue_from_assets_rejects_missing_audio(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await images_store.upsert(_sample_image())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
     with pytest.raises(AudioNotFoundError):
-        await ctl.enqueue_from_assets("img-1", "ghost", "x")
+        await ctl.enqueue_from_assets(_uploaded_ref(), "ghost", "x")
     assert runner.processed == []
 
 
@@ -173,16 +204,17 @@ async def test_enqueue_from_assets_rejects_expired_image(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     old = datetime.now(UTC) - timedelta(days=20)
     await images_store.upsert(_sample_image(uploaded_at=old))
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
     with pytest.raises(ImageExpiredError, match="expiró"):
-        await ctl.enqueue_from_assets("img-1", "aud-1", "x")
+        await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "x")
 
 
 async def test_enqueue_from_assets_rejects_expired_audio(
@@ -190,16 +222,17 @@ async def test_enqueue_from_assets_rejects_expired_audio(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     old = datetime.now(UTC) - timedelta(days=20)
     await images_store.upsert(_sample_image())
     await audios_store.upsert(_sample_audio(generated_at=old))
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
     with pytest.raises(AudioExpiredError, match="expiró"):
-        await ctl.enqueue_from_assets("img-1", "aud-1", "x")
+        await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "x")
 
 
 async def test_enqueue_from_assets_rejects_empty_prompt(
@@ -207,15 +240,16 @@ async def test_enqueue_from_assets_rejects_empty_prompt(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await images_store.upsert(_sample_image())
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
     with pytest.raises(JobValidationError, match="prompt"):
-        await ctl.enqueue_from_assets("img-1", "aud-1", "   ")
+        await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "   ")
 
 
 # --- wait_for_job + subscribe ----------------------------------------------
@@ -226,14 +260,15 @@ async def test_wait_for_job_resolves_on_terminal(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await images_store.upsert(_sample_image())
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner(target_status=JobStatus.COMPLETED)
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
-    job = await ctl.enqueue_from_assets("img-1", "aud-1", "p")
+    job = await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "p")
     terminal = await asyncio.wait_for(ctl.wait_for_job(job.id), timeout=2.0)
 
     assert terminal.id == job.id
@@ -243,12 +278,12 @@ async def test_wait_for_job_resolves_on_terminal(
 async def test_subscribe_returns_unsubscribe(
     tmp_settings,
     jobs_repo: JobsDB,
-    images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
     initial = len(queue._listeners)  # type: ignore[attr-defined]
 
     unsubscribe = ctl.subscribe(lambda _e: None)
@@ -265,14 +300,15 @@ async def test_list_and_get_video_jobs(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await images_store.upsert(_sample_image())
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
-    job = await ctl.enqueue_from_assets("img-1", "aud-1", "p")
+    job = await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "p")
     await queue.drain()
 
     listed = await ctl.list_video_jobs()
@@ -287,14 +323,15 @@ async def test_delete_job_removes_from_repo(
     jobs_repo: JobsDB,
     images_store: ImagesDB,
     audios_store: AudiosDB,
+    catalog: ImageCatalogController,
 ) -> None:
     await images_store.upsert(_sample_image())
     await audios_store.upsert(_sample_audio())
     runner = _RecordingRunner()
     queue = _build_queue(tmp_settings, jobs_repo, runner)
-    ctl = VideosController(jobs_repo, images_store, audios_store, queue)
+    ctl = VideosController(jobs_repo, catalog, audios_store, queue)
 
-    job = await ctl.enqueue_from_assets("img-1", "aud-1", "p")
+    job = await ctl.enqueue_from_assets(_uploaded_ref(), "aud-1", "p")
     await queue.drain()
 
     await ctl.delete_job(job.id)

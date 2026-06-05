@@ -24,23 +24,49 @@ no triviales.
 
 ## Cómo correr y probar
 
+Python **≥ 3.11** (usa `datetime.now(UTC)`, never `utcnow()` — CR-5.6).
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"                  # pytest, pytest-asyncio, ruff, mypy,
                                          # pytest-cov, import-linter, pre-commit
+pre-commit install                       # instala los hooks (ruff/mypy/imports/agent-sync)
 cp .env.example .env                     # poner KIE_API_KEY
 
 python -m kie_avatar_studio              # lanza la TUI
 pytest -q                                # toda la suite
 pytest tests/test_models.py::test_job_default_status -q   # un solo test
+pytest tests/test_kie_client.py -q       # un solo archivo
 
-./scripts/check.sh                       # ruff + mypy + import-linter + pytest+cov
+./scripts/check.sh                       # ruff + mypy + import-linter + agent-sync + pytest+cov
 ./scripts/check.sh fast                  # versión rápida (sin mypy ni cov)
 make check                               # alias de check.sh
+make lint | fmt | typecheck | imports | test | cov   # atajos individuales
 ```
 
 `pytest-asyncio` está en modo **auto** (`pyproject.toml`); no decores los tests async con
-`@pytest.mark.asyncio`.
+`@pytest.mark.asyncio`. CI (`.github/workflows/ci.yml`) corre exactamente lo mismo que
+`scripts/check.sh`.
+
+### Fixtures de tests disponibles (`tests/conftest.py`)
+
+Reutilizá estas antes de armar las tuyas:
+
+- `tmp_settings` — `Settings` aislados en `tmp_path` con `ensure_dirs()` ya llamado.
+- `jobs_db` — `JobsDB` inicializado contra `tmp_settings.db_path`.
+- `mock_transport_factory` / `mock_kie_client` — `httpx.MockTransport` + `KieClient`
+  con captura de requests. **Siempre** mockear HTTP así; cero llamadas reales a Kie.
+
+### Trampas comunes (no "arreglar" sin entender)
+
+- `tests/agent_fixtures/{bad,good}_feature.py` **violan reglas a propósito** — son la
+  entrada de `test_agent_smoke.py` que valida al `code-quality-reviewer`. No las edites
+  ni les apliques fixes de ruff; tienen `per-file-ignores` específicos en `pyproject.toml`.
+- Ruff bloquea `requests` y `time.sleep` vía `flake8-tidy-imports.banned-api` (TID251)
+  con el mensaje `Usa httpx async (CR-5.1).` / `Usa asyncio.sleep (CR-5.1).`. Si ves ese
+  error, NO agregues un `# noqa`: cambiá al equivalente async.
+- Cambios user-visible van bajo `[Unreleased]` en `CHANGELOG.md` (esquema L/M/S, ver
+  `docs/VERSIONING.md`).
 
 ## Arquitectura (lo mínimo a respetar)
 
@@ -62,7 +88,8 @@ fallar `pre-commit` y `scripts/check.sh`.
   QueueManager` y los inyecta. **Sin singletons globales.**
 - La UI nunca llama a `KieClient` ni a `JobsDB`; solo usa `queue.enqueue/cancel/retry` y se
   suscribe con `queue.add_listener`.
-- Flujo de un job (solo `JobRunner` muta `status`, y siempre persiste antes de seguir):
+- Flujo de un job de **video** (solo `JobRunner` muta `status`, y siempre persiste antes
+  de seguir):
 
 ```
 queued → validating → (uploading_image ∥ creating_audio) → waiting_audio
@@ -71,6 +98,42 @@ queued → validating → (uploading_image ∥ creating_audio) → waiting_audio
 
 `upload_image` y `create_audio` corren en paralelo con `asyncio.gather`. Entre jobs el
 paralelismo lo limita `asyncio.Semaphore(settings.max_parallel_jobs)`.
+
+### Subsistemas paralelos al de video
+
+Hay **dos subsistemas independientes** al lado del de video, ambos con el mismo
+patrón (job + runner + lifecycle + DBs + queue + controller + pantalla). No
+mezclar lógica con `JobRunner` (CR-2.1).
+
+**Audio TTS** (pantalla "Generar Audio" dentro de `Audios` (A)):
+
+- `app_layer/audio_job_runner.py` — `AudioJobRunner`, state machine
+  `queued → validating → creating → polling → completed | failed`.
+- `infra/audio_jobs_db.py` — persiste `AudioJob` (cola).
+- `infra/audios_db.py` — persiste `GeneratedAudio` (resultado).
+- `infra/audio_downloader.py` — descarga el `mp3` final lazy.
+- `domain/models.py` define `AudioJob`, `AudioJobStatus`, `GeneratedAudio`, `VoiceSettings`.
+
+**Generación de imagen** (Nano Banana 2 vía Kie, pantalla "Generar Imagen"
+dentro de `Imágenes` (I)):
+
+- `app_layer/image_job_runner.py` — `ImageJobRunner`, misma state machine
+  que audio + revalidación de refs antes de `createTask` (TTL 24h para
+  uploaded, 14d para generated).
+- `app_layer/image_job_lifecycle.py` — reglas de cancel/retry.
+- `app_layer/generated_images_controller.py` — cola + persistencia.
+- `app_layer/image_catalog_controller.py` — facade fina mixta uploaded +
+  generated para selectors (usado por `new_video.py` y `generate_image.py`).
+- `infra/image_jobs_db.py` — persiste `ImageJob`.
+- `infra/generated_images_db.py` — persiste `GeneratedImage`.
+- `domain/models.py` define `ImageJob`, `ImageJobStatus`, `GeneratedImage`,
+  `ImageGenerationSettings`, `ImageAssetKind`, `ImageAssetRef`.
+
+**Reuso de imagen entre subsistemas**: el `kie_url` de un `GeneratedImage`
+es válido como `image_url` del `VideoJob`. `VideosController.enqueue_from_assets()`
+recibe un `ImageAssetRef` discriminado (no un id plano) para resolver
+contra el store correcto vía `ImageCatalogController` y aplicar el TTL
+apropiado por `kind`.
 
 ## Convenciones del repo
 

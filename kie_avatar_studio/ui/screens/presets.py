@@ -114,7 +114,7 @@ class PresetsScreen(Screen[None]):
         except VoicePresetNotFoundError:
             self._set_status("Ese preset ya no existe", error=True)
             return
-        self._set_status(f"✓ preset '{preset.label}' eliminado")
+        self._set_status(f"✅ preset '{preset.label}' eliminado")
         await self._refresh_table()
 
     def _on_form_dismissed(self, result: PresetFormResult | None) -> None:
@@ -132,7 +132,7 @@ class PresetsScreen(Screen[None]):
                     voice_settings=result.voice_settings,
                     description=result.description,
                 )
-                msg = f"✓ preset '{preset.label}' actualizado"
+                msg = f"✅ preset '{preset.label}' actualizado"
             else:
                 preset = await self._controller.create(
                     label=result.label,
@@ -140,12 +140,12 @@ class PresetsScreen(Screen[None]):
                     voice_settings=result.voice_settings,
                     description=result.description,
                 )
-                msg = f"✓ preset '{preset.label}' creado"
+                msg = f"✅ preset '{preset.label}' creado"
         except VoicePresetValidationError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"❌ {exc}", error=True)
             return
         except VoicePresetNotFoundError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"❌ {exc}", error=True)
             return
         self._set_status(msg)
         await self._refresh_table()

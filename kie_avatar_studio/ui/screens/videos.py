@@ -31,7 +31,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from ...app_layer.audio_player import AudioPlayer
 from ...app_layer.audios_controller import AudiosController
-from ...app_layer.images_controller import ImagesController
+from ...app_layer.image_catalog_controller import ImageCatalogController
 from ...app_layer.videos_controller import VideosController
 from ...domain.errors import JobValidationError
 from ...domain.events import JobUpdated
@@ -95,7 +95,7 @@ class VideosScreen(Screen[None]):
     def __init__(
         self,
         videos_controller: VideosController,
-        images_controller: ImagesController,
+        image_catalog: ImageCatalogController,
         audios_controller: AudiosController,
         audio_player: AudioPlayer,
         open_local_path: OpenLocalPath,
@@ -103,7 +103,7 @@ class VideosScreen(Screen[None]):
     ) -> None:
         super().__init__()
         self._controller = videos_controller
-        self._images = images_controller
+        self._image_catalog = image_catalog
         self._audios = audios_controller
         self._audio_player = audio_player
         self._open_local_path = open_local_path
@@ -114,7 +114,7 @@ class VideosScreen(Screen[None]):
         yield Header(show_clock=True)
         with Vertical(id="videos-box"):
             yield Static("[b]Cola de videos (Kling AI Avatar Pro)[/b]", id="videos-title")
-            yield Static(_format_counters(0, 0, 0, 0), id="videos-counters")
+            yield Static(_format_counters(0, 0, 0, 0, 0), id="videos-counters")
             table: DataTable[str] = DataTable(
                 id="videos-table", cursor_type="row", zebra_stripes=True
             )
@@ -123,7 +123,7 @@ class VideosScreen(Screen[None]):
             yield table
             with Horizontal(classes="actions-row actions-row-keys"):
                 yield Button("Nuevo video", id="vid-new", variant="primary")
-                yield Button("▶ Abrir mp4", id="vid-open", classes="btn-info")
+                yield Button("Abrir mp4", id="vid-open", classes="btn-info")
                 yield Button("Copiar URL", id="vid-copy-url", classes="btn-info")
                 yield Button("Cancelar job", id="vid-cancel-job", classes="btn-warning")
                 yield Button("Reintentar", id="vid-retry", classes="btn-warning")
@@ -171,11 +171,11 @@ class VideosScreen(Screen[None]):
 
     async def _handle_new(self) -> None:
         """Abre el modal de creación con los assets disponibles cargados."""
-        images = await self._images.list_uploaded()
+        image_refs = await self._image_catalog.list_usable_assets()
         audios = await self._audios.list_generated()
         self.app.push_screen(
             NewVideoFormScreen(
-                images=images,
+                image_refs=image_refs,
                 audios=audios,
                 audio_player=self._audio_player,
             ),
@@ -190,15 +190,15 @@ class VideosScreen(Screen[None]):
     async def _enqueue(self, payload: NewVideoFormResult) -> None:
         try:
             job = await self._controller.enqueue_from_assets(
-                payload.image_id, payload.audio_id, payload.prompt
+                payload.image_ref, payload.audio_id, payload.prompt
             )
         except JobValidationError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"❌ {exc}", error=True)
             return
         except Exception as exc:
-            self._set_status(f"✖ no pude encolar el video: {exc}", error=True)
+            self._set_status(f"❌ no pude encolar el video: {exc}", error=True)
             return
-        self._set_status(f"✓ video encolado (id={job.id}) — mirá el progreso en la tabla")
+        self._set_status(f"✅ video encolado (id={job.id}) — mirá el progreso en la tabla")
 
     async def _handle_open(self) -> None:
         job = await self._selected_job()
@@ -225,11 +225,11 @@ class VideosScreen(Screen[None]):
             await self._open_local_path(path)
         except OSError as exc:
             self._set_status(
-                f"✖ no pude abrir el mp4 ({exc}); ruta: {path}",
+                f"❌ no pude abrir el mp4 ({exc}); ruta: {path}",
                 error=True,
             )
             return
-        self._set_status(f"✓ abriendo {path}")
+        self._set_status(f"✅ abriendo {path}")
 
     async def _handle_copy_url(self) -> None:
         job = await self._selected_job()
@@ -258,7 +258,7 @@ class VideosScreen(Screen[None]):
             return
         cancelled = await self._controller.cancel(job.id)
         if cancelled:
-            self._set_status(f"✖ '{job.id}' cancelado")
+            self._set_status(f"❌ '{job.id}' cancelado")
         else:
             self._set_status(
                 f"No pude cancelar '{job.id}' (estado actual: {job.status.value})",
@@ -277,7 +277,7 @@ class VideosScreen(Screen[None]):
             return
         success = await self._controller.retry(job.id)
         if success:
-            self._set_status(f"🔄 '{job.id}' reencolado")
+            self._set_status(f"🔁 '{job.id}' reencolado")
         else:
             self._set_status(f"No pude reencolar '{job.id}'", error=True)
 
@@ -293,7 +293,7 @@ class VideosScreen(Screen[None]):
             return
         await self._controller.delete_job(job.id)
         self._set_status(
-            f"✓ '{job.id}' quitado del registro local (el mp4 en outputs/ se conserva)"
+            f"✅ '{job.id}' quitado del registro local (el mp4 en outputs/ se conserva)"
         )
 
     # --- helpers ----------------------------------------------------------
@@ -345,11 +345,11 @@ def _format_assets(job: VideoJob) -> str:
     """Resumen breve de los assets del job para la tabla."""
     parts: list[str] = []
     if job.image_url:
-        parts.append("🖼 ✓")
+        parts.append("📷 ✅")
     elif job.image_path:
-        parts.append(f"🖼 {truncate(job.image_path, 14)}")
+        parts.append(f"📷 {truncate(job.image_path, 14)}")
     if job.audio_url:
-        parts.append("🔊 ✓")
+        parts.append("🔊 ✅")
     elif job.voice:
         parts.append(f"🔊 {truncate(job.voice, 10)}")
     return "  ".join(parts) if parts else "—"
@@ -368,31 +368,33 @@ def _format_output(job: VideoJob) -> str:
     return "—"
 
 
-def _compute_counters(jobs: list[VideoJob]) -> tuple[int, int, int, int]:
-    """Cuenta (activos, en_cola, listos, fallidos) para el panel superior."""
+def _compute_counters(jobs: list[VideoJob]) -> tuple[int, int, int, int, int]:
+    """Cuenta (total, active, queued, done, failed) para el panel superior."""
     active = sum(1 for j in jobs if j.status in _ACTIVE_STATUSES)
     queued = sum(1 for j in jobs if j.status in _QUEUED_STATUSES)
     done = sum(1 for j in jobs if j.status in _DONE_STATUSES)
     failed = sum(1 for j in jobs if j.status in _FAILED_STATUSES)
-    return active, queued, done, failed
+    return len(jobs), active, queued, done, failed
 
 
-def _format_counters(active: int, queued: int, done: int, failed: int) -> str:
-    active_part = (
-        f"[bold cyan]🔄 {active} generando[/bold cyan]"
-        if active > 0
-        else "[dim]🔄 0 generando[/dim]"
+def _format_counters(total: int, active: int, queued: int, done: int, failed: int) -> str:
+    """Counters sin emojis: el color del texto ya comunica el estado.
+
+    Patrón uniforme con HistoryScreen / AudiosScreen / QueueScreen:
+    `Total N · activos · en cola · listos · fallidos`.
+
+    Decisión de UI (CR-3.7): cuando un counter tiene un color semántico
+    (cyan = activo, yellow = en cola, green = listo, red = fallido), el
+    emoji prefix es redundante visualmente y problemático en terminales
+    con fuente emoji incompleta. El color + label es 100% portable.
+    """
+    return (
+        f"[bold]Total {total}[/bold]  ·  "
+        f"[cyan]{active} generando[/cyan]  ·  "
+        f"[yellow]{queued} en cola[/yellow]  ·  "
+        f"[green]{done} listos[/green]  ·  "
+        f"[red]{failed} fallidos[/red]"
     )
-    queued_part = (
-        f"[bold yellow]⏳ {queued} en cola[/bold yellow]"
-        if queued > 0
-        else "[dim]⏳ 0 en cola[/dim]"
-    )
-    done_part = f"[bold green]✓ {done} listos[/bold green]" if done > 0 else "[dim]✓ 0 listos[/dim]"
-    failed_part = (
-        f"[bold red]✖ {failed} fallidos[/bold red]" if failed > 0 else "[dim]✖ 0 fallidos[/dim]"
-    )
-    return f"{active_part}  ·  {queued_part}  ·  {done_part}  ·  {failed_part}"
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[VideosScreen], Awaitable[None]]] = {

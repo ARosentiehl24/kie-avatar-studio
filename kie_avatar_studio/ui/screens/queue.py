@@ -29,6 +29,7 @@ from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from ...app_layer.audios_controller import AudiosController
+from ...app_layer.generated_images_controller import GeneratedImagesController
 from ...app_layer.history_controller import HistoryController
 from ...app_layer.videos_controller import VideosController
 from ...domain.events import (
@@ -36,8 +37,13 @@ from ...domain.events import (
     HistoryEntry,
     JobKind,
 )
-from ...domain.models import AudioJobStatus, JobStatus
-from .._status_badges import AUDIO_STATUS_BADGES, BASE_STATUS_BADGES, VIDEO_STATUS_BADGES
+from ...domain.models import AudioJobStatus, ImageJobStatus, JobStatus
+from .._status_badges import (
+    AUDIO_STATUS_BADGES,
+    BASE_STATUS_BADGES,
+    IMAGE_STATUS_BADGES,
+    VIDEO_STATUS_BADGES,
+)
 from .._table_helpers import get_selected_row_key, select_row_by_key
 from .._text_format import truncate
 
@@ -55,25 +61,28 @@ _TABLE_COLUMNS: Final[tuple[str, ...]] = (
 _KIND_ICONS: Final[dict[JobKind, str]] = {
     "video": "🎬 Video",
     "audio": "🔊 Audio",
+    "image": "📷 Imagen",
 }
 
-# Mismo set que HistoryScreen: combina badges de los 3 grupos.
+# Mismo set que HistoryScreen: combina badges de los 4 grupos.
 _STATUS_BADGES: Final[dict[str, str]] = {
     **BASE_STATUS_BADGES,
     **VIDEO_STATUS_BADGES,
     **AUDIO_STATUS_BADGES,
+    **IMAGE_STATUS_BADGES,
 }
 
 # Filtros por tipo (mismo patrón que HistoryScreen).
 _KIND_FILTERS: Final[dict[str, frozenset[JobKind]]] = {
-    "queue-filter-all": frozenset({"video", "audio"}),
+    "queue-filter-all": frozenset({"video", "audio", "image"}),
     "queue-filter-video": frozenset({"video"}),
     "queue-filter-audio": frozenset({"audio"}),
+    "queue-filter-image": frozenset({"image"}),
 }
 
 # Status considerados "queued" para el conteo + bulk cancel.
 _QUEUED_VALUES: Final[frozenset[str]] = frozenset(
-    {JobStatus.QUEUED.value, AudioJobStatus.QUEUED.value}
+    {JobStatus.QUEUED.value, AudioJobStatus.QUEUED.value, ImageJobStatus.QUEUED.value}
 )
 # Status considerados "fallido" para el bulk retry.
 _FAILED_VALUES: Final[frozenset[str]] = frozenset(
@@ -82,6 +91,8 @@ _FAILED_VALUES: Final[frozenset[str]] = frozenset(
         JobStatus.CANCELLED.value,
         AudioJobStatus.FAILED.value,
         AudioJobStatus.CANCELLED.value,
+        ImageJobStatus.FAILED.value,
+        ImageJobStatus.CANCELLED.value,
     }
 )
 
@@ -106,19 +117,21 @@ class QueueScreen(Screen[None]):
         history_controller: HistoryController,
         audios_controller: AudiosController,
         videos_controller: VideosController,
+        generated_images_controller: GeneratedImagesController,
     ) -> None:
         super().__init__()
         self._history = history_controller
         self._audios = audios_controller
         self._videos = videos_controller
+        self._generated_images = generated_images_controller
         self._unsubscribe: Callable[[], None] | None = None
-        self._kind_filter: frozenset[JobKind] = frozenset({"video", "audio"})
+        self._kind_filter: frozenset[JobKind] = frozenset({"video", "audio", "image"})
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Vertical(id="queue-box"):
             yield Static("[b]Cola de trabajos — activos & fallidos[/b]", id="queue-title")
-            yield Static(_format_summary(0, 0, 0), id="queue-summary")
+            yield Static(_format_summary(0, 0, 0, 0), id="queue-summary")
             with Horizontal(classes="actions-row actions-row-keys", id="queue-filters"):
                 yield Button(
                     "Todos",
@@ -126,8 +139,9 @@ class QueueScreen(Screen[None]):
                     variant="primary",
                     classes="btn-filter",
                 )
-                yield Button("🎬 Solo video", id="queue-filter-video", classes="btn-filter")
-                yield Button("🔊 Solo audio", id="queue-filter-audio", classes="btn-filter")
+                yield Button("Solo video", id="queue-filter-video", classes="btn-filter")
+                yield Button("Solo audio", id="queue-filter-audio", classes="btn-filter")
+                yield Button("Solo imagen", id="queue-filter-image", classes="btn-filter")
                 yield Button("Refrescar", id="queue-refresh", classes="btn-info")
             table: DataTable[str] = DataTable(
                 id="queue-table", cursor_type="row", zebra_stripes=True
@@ -136,10 +150,10 @@ class QueueScreen(Screen[None]):
                 table.add_column(column, key=column)
             yield table
             with Horizontal(classes="actions-row actions-row-keys", id="queue-actions"):
-                yield Button("✖ Cancelar", id="queue-cancel", classes="btn-warning")
-                yield Button("🔄 Reintentar", id="queue-retry", classes="btn-warning")
-                yield Button("✖ Cancelar cola", id="queue-cancel-all", variant="error")
-                yield Button("🔄 Reintentar fallidos", id="queue-retry-all", variant="primary")
+                yield Button("Cancelar", id="queue-cancel", classes="btn-warning")
+                yield Button("Reintentar", id="queue-retry", classes="btn-warning")
+                yield Button("Cancelar cola", id="queue-cancel-all", variant="error")
+                yield Button("Reintentar fallidos", id="queue-retry-all", variant="primary")
             yield Static(
                 "[dim]Esta pantalla muestra solo jobs no-completados. Para ver el "
                 "historial completo (incluyendo finalizados), usá Historial (H). "
@@ -209,7 +223,7 @@ class QueueScreen(Screen[None]):
             return
         ok = await self._cancel_entry(entry)
         if ok:
-            self._set_status(f"✖ '{entry.label}' cancelado")
+            self._set_status(f"❌ '{entry.label}' cancelado")
         else:
             self._set_status(f"No pude cancelar '{entry.label}'", error=True)
 
@@ -225,7 +239,7 @@ class QueueScreen(Screen[None]):
             return
         ok = await self._retry_entry(entry)
         if ok:
-            self._set_status(f"🔄 '{entry.label}' reencolado")
+            self._set_status(f"🔁 '{entry.label}' reencolado")
         else:
             self._set_status(f"No pude reencolar '{entry.label}'", error=True)
 
@@ -247,7 +261,7 @@ class QueueScreen(Screen[None]):
             if await self._cancel_entry(entry):
                 cancelled += 1
         self._set_status(
-            f"✖ Cancelados {cancelled} de {len(targets)} jobs en cola"
+            f"❌ Cancelados {cancelled} de {len(targets)} jobs en cola"
             + ("" if cancelled == len(targets) else " (algunos fallaron)"),
             error=cancelled < len(targets),
         )
@@ -264,7 +278,7 @@ class QueueScreen(Screen[None]):
             if await self._retry_entry(entry):
                 retried += 1
         self._set_status(
-            f"🔄 Reencolados {retried} de {len(targets)} jobs fallidos"
+            f"🔁 Reencolados {retried} de {len(targets)} jobs fallidos"
             + ("" if retried == len(targets) else " (algunos fallaron)"),
             error=retried < len(targets),
         )
@@ -274,11 +288,15 @@ class QueueScreen(Screen[None]):
     async def _cancel_entry(self, entry: HistoryEntry) -> bool:
         if entry.kind == "audio":
             return await self._audios.cancel(entry.id)
+        if entry.kind == "image":
+            return await self._generated_images.cancel(entry.id)
         return await self._videos.cancel(entry.id)
 
     async def _retry_entry(self, entry: HistoryEntry) -> bool:
         if entry.kind == "audio":
             return await self._audios.retry(entry.id)
+        if entry.kind == "image":
+            return await self._generated_images.retry(entry.id)
         return await self._videos.retry(entry.id)
 
     # --- queries ----------------------------------------------------------
@@ -297,7 +315,12 @@ class QueueScreen(Screen[None]):
                 # mostrar para reintentar.
                 or e.status_value in _FAILED_VALUES
             )
-            and e.status_value not in {JobStatus.COMPLETED.value, AudioJobStatus.COMPLETED.value}
+            and e.status_value
+            not in {
+                JobStatus.COMPLETED.value,
+                AudioJobStatus.COMPLETED.value,
+                ImageJobStatus.COMPLETED.value,
+            }
         ]
 
     async def _refresh(self) -> None:
@@ -378,27 +401,24 @@ def _format_age(entry: HistoryEntry) -> str:
     return f"{total // _SECONDS_PER_DAY}d {(total % _SECONDS_PER_DAY) // _SECONDS_PER_HOUR}h"
 
 
-def _compute_summary(entries: list[HistoryEntry]) -> tuple[int, int, int]:
-    """Cuenta (queued, en_progreso, fallidos)."""
+def _compute_summary(entries: list[HistoryEntry]) -> tuple[int, int, int, int]:
+    """Cuenta (total, queued, en_progreso, fallidos)."""
     queued = sum(1 for e in entries if e.status_value in _QUEUED_VALUES)
     failed = sum(1 for e in entries if e.status_value in _FAILED_VALUES)
     in_progress = len(entries) - queued - failed
-    return queued, in_progress, failed
+    return len(entries), queued, in_progress, failed
 
 
-def _format_summary(queued: int, in_progress: int, failed: int) -> str:
-    """Header de contadores. Resalta valores >0 para que se vea actividad."""
-    q_part = (
-        f"[bold yellow]⏳ {queued} en cola[/bold yellow]"
-        if queued > 0
-        else "[dim]⏳ 0 en cola[/dim]"
+def _format_summary(total: int, queued: int, in_progress: int, failed: int) -> str:
+    """Header de contadores con coloreo por estado.
+
+    Patrón uniforme con HistoryScreen / AudiosScreen / VideosScreen:
+    `Total N · activos · en cola · fallidos`. Sin emojis prefix —
+    el color del texto comunica el estado de forma 100% portable.
+    """
+    return (
+        f"[bold]Total {total}[/bold]  ·  "
+        f"[cyan]{in_progress} procesando[/cyan]  ·  "
+        f"[yellow]{queued} en cola[/yellow]  ·  "
+        f"[red]{failed} fallidos[/red]"
     )
-    p_part = (
-        f"[bold cyan]🔄 {in_progress} procesando[/bold cyan]"
-        if in_progress > 0
-        else "[dim]🔄 0 procesando[/dim]"
-    )
-    f_part = (
-        f"[bold red]✖ {failed} fallidos[/bold red]" if failed > 0 else "[dim]✖ 0 fallidos[/dim]"
-    )
-    return f"{q_part}  ·  {p_part}  ·  {f_part}"

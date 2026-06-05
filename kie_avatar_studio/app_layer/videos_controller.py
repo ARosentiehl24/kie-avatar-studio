@@ -7,20 +7,20 @@ delega la ejecución al `queue` de video (que usa `JobRunner` para upload
 `VideoJob` viene con `image_url` y/o `audio_url` poblados, salta esos
 pasos para no regastar créditos.
 
-Esta versión solo expone `enqueue_from_assets` (Modo B del refactor de
-Nuevo Video): el usuario elige una `UploadedImage` + un `GeneratedAudio`
-ya existentes y agrega solo el prompt. Cuando se implemente el form de
-"video desde cero" (Modo A), se agregará `enqueue_from_scratch` con
-imagen local + script + voz.
+Esta versión expone `enqueue_from_assets` (Modo B: imagen + audio
+existentes) aceptando un `ImageAssetRef` discriminado para que pueda
+elegirse indistintamente una `UploadedImage` (TTL 24h) o un
+`GeneratedImage` (TTL 14d). La resolución y el chequeo de expiración
+los hace `ImageCatalogController` (CR-3.7 + CR-2.1: un único lugar
+sabe cómo combinar los dos stores).
 
 Casos de uso que maneja:
-- `enqueue_from_assets`: valida assets + arma VideoJob con URLs ya
-  pobladas + encola.
-- `wait_for_job`: helper análogo al de Audios para que la UI pueda
-  bloquearse opcionalmente hasta el terminal.
-- `subscribe`: registra listener al stream de `JobUpdated`.
-- `cancel` / `retry` / `delete_job` / `list_video_jobs` /
-  `get_video_job`: idénticos en shape a los del AudiosController.
+- `enqueue_from_assets`: resuelve la ref de imagen + valida el audio +
+  arma el `VideoJob` con URLs ya pobladas + encola.
+- `enqueue_from_scratch`: imagen local + script + voz (sin cambios).
+- `wait_for_job`, `subscribe`, `cancel`, `retry`, `delete_job`,
+  `list_video_jobs`, `get_video_job`: idénticos en shape a
+  `AudiosController`.
 """
 
 from __future__ import annotations
@@ -35,14 +35,14 @@ from loguru import logger
 from ..domain.errors import (
     AudioExpiredError,
     AudioNotFoundError,
-    ImageExpiredError,
-    ImageNotFoundError,
     JobValidationError,
 )
 from ..domain.events import JobUpdated
-from ..domain.models import JobStatus, VideoJob
-from ..domain.ports import AudioStore, ImageStore, JobRepository
+from ..domain.models import ImageAssetRef, JobStatus, VideoJob
+from ..domain.policies import KIE_GENERATED_RETENTION_DAYS
+from ..domain.ports import AudioStore, JobRepository
 from .ids import new_job_id
+from .image_catalog_controller import ImageCatalogController
 from .queue_manager import QueueManager
 
 _PROMPT_MAX_LENGTH: Final[int] = 5000
@@ -56,12 +56,12 @@ class VideosController:
     def __init__(
         self,
         repo: JobRepository,
-        images_store: ImageStore,
+        image_catalog: ImageCatalogController,
         audios_store: AudioStore,
         queue: QueueManager[VideoJob, JobUpdated],
     ) -> None:
         self._repo = repo
-        self._images = images_store
+        self._image_catalog = image_catalog
         self._audios = audios_store
         self._queue = queue
 
@@ -78,39 +78,29 @@ class VideosController:
 
     async def enqueue_from_assets(
         self,
-        image_id: str,
+        image_ref: ImageAssetRef,
         audio_id: str,
         prompt: str,
     ) -> VideoJob:
         """Crea un `VideoJob` reusando una imagen + un audio ya en Kie.
 
-        Resuelve los assets pasados por id, valida que no estén expirados
-        y arma el `VideoJob` con `image_url` y `audio_url` ya poblados.
-        El runner saltará el upload y el TTS (Modo B).
+        La imagen viene como `ImageAssetRef` discriminado (uploaded o
+        generated): `ImageCatalogController` resuelve la URL actualizada
+        y aplica el TTL correcto según `kind` (24h para uploaded, 14d
+        para generated). Esto evita colisiones de id entre stores y
+        garantiza que el caller no asuma equivocadamente el origen.
 
         Lanza:
-        - `ImageNotFoundError` / `ImageExpiredError` si la imagen no
-          existe o ya venció en Kie.
-        - `AudioNotFoundError` / `AudioExpiredError` análogo para audio.
+        - `ImageNotFoundError` / `ImageExpiredError` para refs uploaded.
+        - `GeneratedImageNotFoundError` / `GeneratedImageExpiredError`
+          para refs generated.
+        - `AudioNotFoundError` / `AudioExpiredError` para el audio.
         - `JobValidationError` si el prompt está vacío o excede el límite.
         """
         clean_prompt = self._validate_prompt(prompt)
-        image = await self._images.get(image_id)
-        if image is None:
-            raise ImageNotFoundError(f"no existe ninguna imagen con id={image_id!r}")
-        # Las constantes de retención están en domain.policies; las
-        # importamos local para no inflar la lista de imports del
-        # controller. Imagen: 24h (File Upload API). Audio: 14d
-        # (generated media). Son ventanas distintas a propósito — Kie
-        # las trata diferente.
-        from ..domain.policies import KIE_GENERATED_RETENTION_DAYS, KIE_UPLOAD_RETENTION_HOURS
-
-        if image.is_expired(KIE_UPLOAD_RETENTION_HOURS):
-            raise ImageExpiredError(
-                f"la imagen '{image.label}' expiró en Kie hace "
-                f"{-image.time_left(KIE_UPLOAD_RETENTION_HOURS)} "
-                "(Kie expira los uploads tras 24h). Subila de nuevo."
-            )
+        # El catalog resuelve la URL actualizada y valida expiración
+        # según el `kind` de la ref (TTL correcto por origen).
+        resolved_image = await self._image_catalog.resolve_asset(image_ref.kind, image_ref.id)
 
         audio = await self._audios.get(audio_id)
         if audio is None:
@@ -131,16 +121,17 @@ class VideosController:
             # `image_path` queda vacío a propósito: validate_job lo
             # detecta y saltea su validación (la imagen ya está en Kie).
             image_path="",
-            image_url=image.kie_url,
+            image_url=resolved_image.kie_url,
             audio_url=audio.kie_url,
             status=JobStatus.QUEUED,
         )
         await self._repo.upsert(job)
         self._queue.enqueue(job)
         logger.info(
-            "VideoJob encolado (id={}, imagen='{}', audio='{}')",
+            "VideoJob encolado (id={}, imagen='{}' ({}), audio='{}')",
             job.id,
-            image.label,
+            resolved_image.label,
+            resolved_image.kind.value,
             audio.label,
         )
         return job

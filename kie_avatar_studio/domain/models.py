@@ -80,6 +80,127 @@ AUDIO_RESUMABLE_STATUSES: frozenset[AudioJobStatus] = frozenset(
 )
 
 
+class ImageJobStatus(StrEnum):
+    """Estados del lifecycle de un `ImageJob` (generación de imagen Nano Banana 2).
+
+    Mirror de `AudioJobStatus`: el flujo es lineal validar → crear task → polling.
+    No hay step de upload local (las refs ya están como URLs en Kie) ni de
+    download eager (la imagen generada queda como `kie_url`, se descarga
+    lazy al "Ver" igual que `GeneratedAudio`).
+    """
+
+    QUEUED = "queued"
+    VALIDATING = "validating"
+    CREATING = "creating"
+    POLLING = "polling"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+IMAGE_TERMINAL_STATUSES: frozenset[ImageJobStatus] = frozenset(
+    {ImageJobStatus.COMPLETED, ImageJobStatus.FAILED, ImageJobStatus.CANCELLED}
+)
+
+IMAGE_RESUMABLE_STATUSES: frozenset[ImageJobStatus] = frozenset(
+    # Mismo razonamiento que en audio: QUEUED y POLLING son retomables sin
+    # perder créditos. CREATING queda excluido y se marca FAILED al restart
+    # (ver `app._mark_creating_image_jobs_as_failed`) para evitar pagar
+    # dos veces si el POST a Kie llegó pero la respuesta nunca volvió.
+    {ImageJobStatus.QUEUED, ImageJobStatus.POLLING}
+)
+
+
+class ImageAssetKind(StrEnum):
+    """Origen de una imagen reutilizable como input de otro job.
+
+    Discriminador del DTO `ImageAssetRef`. Permite resolver la imagen
+    contra el store correcto (uploaded vs generated) y aplicar la
+    política de retención correspondiente (24h vs 14d) sin ambigüedad
+    entre ids que podrían colisionar entre stores.
+    """
+
+    UPLOADED = "uploaded"
+    GENERATED = "generated"
+
+
+class ImageAssetRef(BaseModel):
+    """Referencia discriminada a una imagen ya hosteada en Kie.
+
+    Usada como input por:
+    - `GenerateImageFormScreen` para el selector de refs (`image_input`).
+    - `NewVideoFormScreen` para elegir la imagen del video entre
+      uploaded + generated en un único selector.
+    - `VideosController.enqueue_from_assets()` para resolver la imagen
+      sin asumir que viene de `UploadedImage`.
+
+    `expires_at` se calcula en el catálogo al momento de listar; la
+    pantalla lo usa para mostrar tiempo restante y para excluir refs
+    ya vencidas. El runner valida nuevamente justo antes de llamar a
+    Kie (las refs pueden vencer entre encolar y ejecutar).
+    """
+
+    kind: ImageAssetKind
+    id: str
+    label: str
+    kie_url: str
+    expires_at: datetime
+
+
+class ImageGenerationSettings(BaseModel):
+    """Parámetros opcionales del input de Nano Banana 2 expuestos al usuario.
+
+    Los defaults coinciden con los del OpenAPI spec del endpoint
+    (`docs.kie.ai/market/google/nanobanana2`). Las validaciones de enum
+    viven en `policies.validate_image_settings` para que el dominio
+    emita errores tipados en español.
+    """
+
+    aspect_ratio: str = "auto"
+    resolution: str = "1K"
+    output_format: str = "jpg"
+
+
+class ImageJob(BaseModel):
+    """Job de generación de imagen persistido en cola estructurada.
+
+    Espejo de `AudioJob` para imágenes. Procesado por `ImageJobRunner`
+    bajo el mismo `QueueManager` y `Semaphore(max_parallel_jobs)`. Al
+    completarse exitosamente persiste un `GeneratedImage` con el mismo
+    `id` (idempotencia: reintentos no duplican filas en
+    `generated_images`).
+
+    `refs_json` guarda la lista serializada de `ImageAssetRef`
+    (no las URLs sueltas) para que el runner pueda revalidar cada
+    referencia antes de llamar a Kie (chequear expiración por kind).
+    `settings_json` aplica la misma estrategia con
+    `ImageGenerationSettings` — opcional porque un job puede usar
+    todos los defaults del modelo.
+
+    `kie_url` y `kie_file_path` quedan poblados cuando el polling
+    termina con éxito; antes son `None`.
+    """
+
+    id: str
+    label: str
+    prompt: str
+    settings_json: str | None = None
+    refs_json: str | None = None
+    status: ImageJobStatus = ImageJobStatus.QUEUED
+    task_id: str | None = None
+    kie_url: str | None = None
+    kie_file_path: str | None = None
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+    def is_terminal(self) -> bool:
+        return self.status in IMAGE_TERMINAL_STATUSES
+
+    def is_resumable(self) -> bool:
+        return self.status in IMAGE_RESUMABLE_STATUSES
+
+
 class VideoJob(BaseModel):
     id: str
     # `script`/`voice`/`image_path` quedan opcionales en el modo "reuse de
@@ -312,6 +433,54 @@ class GeneratedAudio(BaseModel):
 
     def time_left(self, retention_days: int, *, now: datetime | None = None) -> timedelta:
         """Tiempo restante antes de que Kie auto-borre el audio.
+
+        Puede ser negativo (ya expiró); el caller decide cómo formatearlo.
+        """
+        reference = now or _utcnow()
+        return self.expires_at(retention_days) - reference
+
+
+class GeneratedImage(BaseModel):
+    """Imagen ya generada por Nano Banana 2 y servida por Kie.
+
+    Mirror exacto de `GeneratedAudio`: solo guardamos `kie_url` y la
+    descarga local es lazy al hacer "Ver". La política de retención
+    es la misma (14 días, `KIE_GENERATED_RETENTION_DAYS`) porque para
+    Kie todo el output de los modelos cae en la misma categoría
+    "generated media".
+
+    `settings` y `refs_count` son metadata informativa que aparece en
+    la tabla; el catálogo (`ImageCatalogController`) NO los usa para
+    resolver la imagen — solo necesita `kie_url` y `expires_at`.
+
+    `file_size` y `mime_type` quedan opcionales: `recordInfo` para
+    Nano Banana no siempre los devuelve, y como no descargamos el
+    archivo eager no podemos derivarlos. La pantalla muestra "—" cuando
+    están en `None`.
+    """
+
+    id: str
+    label: str
+    prompt: str
+    settings: ImageGenerationSettings | None = None
+    refs_count: int = 0
+    kie_url: str
+    kie_file_path: str
+    file_size: int | None = None
+    mime_type: str | None = None
+    generated_at: datetime = Field(default_factory=_utcnow)
+
+    def expires_at(self, retention_days: int) -> datetime:
+        """Devuelve la fecha en que Kie borrará la imagen automáticamente."""
+        return self.generated_at + timedelta(days=retention_days)
+
+    def is_expired(self, retention_days: int, *, now: datetime | None = None) -> bool:
+        """Indica si la imagen ya debería estar borrada en Kie."""
+        reference = now or _utcnow()
+        return reference >= self.expires_at(retention_days)
+
+    def time_left(self, retention_days: int, *, now: datetime | None = None) -> timedelta:
+        """Tiempo restante antes de que Kie auto-borre la imagen.
 
         Puede ser negativo (ya expiró); el caller decide cómo formatearlo.
         """
