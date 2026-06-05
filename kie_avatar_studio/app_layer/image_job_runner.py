@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Final
 
 from loguru import logger
 
@@ -66,9 +65,6 @@ from ..domain.ports import (
     KieGateway,
 )
 from .polling import poll_task_for_url
-
-DEFAULT_POLL_INTERVAL_SECONDS: Final[int] = 5
-DEFAULT_TASK_TIMEOUT_SECONDS: Final[int] = 5 * 60
 
 
 class ImageJobRunner:

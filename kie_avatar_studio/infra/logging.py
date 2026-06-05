@@ -139,9 +139,20 @@ class _InterceptHandler(logging.Handler):
 
 
 def bridge_stdlib_logging(level: str = "INFO") -> None:
-    """Instala el handler de intercepción una sola vez."""
+    """Instala el handler de intercepción una sola vez.
+
+    Además silencia loggers ruidosos de librerías de red (`httpx`,
+    `httpcore`) que loguean cada request en `INFO` — eso ensucia los
+    logs y los caplog de pytest sin aportar nada al usuario final.
+    Los errores reales (WARNING+) sí pasan.
+    """
     root = logging.getLogger()
     if any(isinstance(h, _InterceptHandler) for h in root.handlers):
         return
     root.handlers = [_InterceptHandler()]
     root.setLevel(level)
+    # Loggers de librerías externas que loguean cada request HTTP. El
+    # usuario no necesita ver "GET https://api.github.com/.../releases/latest
+    # 200 OK" cada vez que arranca la app. Los WARNING/ERROR sí pasan.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
 from pathlib import Path
 from typing import ClassVar, Final
 
@@ -41,8 +40,10 @@ from ...domain.errors import (
     UrlValidationError,
 )
 from ...domain.events import ImageJobUpdated
-from ...domain.models import GeneratedImage, ImageJob, ImageJobStatus, UploadedImage
+from ...domain.models import ImageJob, ImageJobStatus
 from .._clipboard_feedback import copy_url_with_feedback
+from .._icons import ERROR, OK, RETRY, WARNING
+from ._image_format import row_for_generated, row_for_job, row_for_uploaded
 from .generate_image import (
     GenerateImageFormDefaults,
     GenerateImageFormResult,
@@ -56,9 +57,6 @@ CheckCredits = Callable[[], Awaitable[float | None]]
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
-_SECONDS_PER_MINUTE: Final[int] = 60
-_SECONDS_PER_HOUR: Final[int] = 60 * _SECONDS_PER_MINUTE
-_SECONDS_PER_DAY: Final[int] = 24 * _SECONDS_PER_HOUR
 _TABLE_COLUMNS: Final[tuple[str, ...]] = (
     "Tipo",
     "ID",
@@ -68,7 +66,6 @@ _TABLE_COLUMNS: Final[tuple[str, ...]] = (
     "Creado",
     "Expira",
 )
-_BYTES_PER_MB: Final[float] = 1024 * 1024
 _LOW_CREDITS_THRESHOLD: Final[float] = 5.0
 
 # Prefijos para los row keys de la tabla — distinguen origen para los
@@ -169,7 +166,7 @@ class ImagesScreen(Screen[None]):
             widget.update("[dim]Saldo Kie: no disponible (sin key activa o sin red)[/dim]")
             return
         formatted = (
-            f"[red]Saldo Kie: {balance:.2f} cr ❗ bajo[/red]"
+            f"[red]Saldo Kie: {balance:.2f} cr {WARNING} bajo[/red]"
             if balance <= _LOW_CREDITS_THRESHOLD
             else f"[dim]Saldo Kie: {balance:.2f} cr[/dim]"
         )
@@ -213,12 +210,12 @@ class ImagesScreen(Screen[None]):
         try:
             image = await self._uploads.upload(payload.local_path, payload.label)
         except ImageValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         except KieError as exc:
-            self._set_status(f"❌ upload falló: {exc}", error=True)
+            self._set_status(f"{ERROR} upload falló: {exc}", error=True)
             return
-        self._set_status(f"✅ imagen '{image.label}' subida ({image.kie_url})")
+        self._set_status(f"{OK} imagen '{image.label}' subida ({image.kie_url})")
         await self._refresh_table()
 
     async def _handle_generate(self) -> None:
@@ -252,9 +249,9 @@ class ImagesScreen(Screen[None]):
                 payload.label, payload.prompt, payload.settings, payload.refs
             )
         except ImageGenerationValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status(f"✅ '{job.label}' encolado — mirá el progreso en la tabla")
+        self._set_status(f"{OK} '{job.label}' encolado — mirá el progreso en la tabla")
 
     async def _handle_view(self) -> None:
         kind, asset_id = self._selected_kind_and_id()
@@ -272,7 +269,7 @@ class ImagesScreen(Screen[None]):
         try:
             image = await self._uploads.get_for_use(image_id)
         except ImageExpiredError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         except ImageNotFoundError:
             self._set_status("La imagen ya no existe", error=True)
@@ -287,7 +284,7 @@ class ImagesScreen(Screen[None]):
         try:
             image = await self._generated.get_for_use(image_id)
         except GeneratedImageExpiredError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         except GeneratedImageNotFoundError:
             self._set_status("La imagen generada ya no existe", error=True)
@@ -299,9 +296,9 @@ class ImagesScreen(Screen[None]):
         try:
             await self._open_local_path(local)
         except OSError as exc:
-            self._set_status(f"❌ no pude abrir el visor: {exc}", error=True)
+            self._set_status(f"{ERROR} no pude abrir el visor: {exc}", error=True)
             return
-        self._set_status(f"✅ abriendo {local} en visor del sistema")
+        self._set_status(f"{OK} abriendo {local} en visor del sistema")
 
     async def _open_url_with_clipboard_fallback(self, url: str) -> None:
         clip_msg, _ = await copy_url_with_feedback(url, osc52_fallback=self.app.copy_to_clipboard)
@@ -309,11 +306,11 @@ class ImagesScreen(Screen[None]):
             await self._open_url(url)
         except (OSError, UrlValidationError) as exc:
             self._set_status(
-                f"❌ no pude abrir el navegador ({exc})\n{clip_msg}",
+                f"{ERROR} no pude abrir el navegador ({exc})\n{clip_msg}",
                 error=True,
             )
             return
-        self._set_status(f"✅ abriendo URL en navegador\n{clip_msg}")
+        self._set_status(f"{OK} abriendo URL en navegador\n{clip_msg}")
 
     async def _handle_copy_url(self) -> None:
         kind, asset_id = self._selected_kind_and_id()
@@ -340,7 +337,7 @@ class ImagesScreen(Screen[None]):
                 return None
             return job.kie_url
         except (ImageExpiredError, GeneratedImageExpiredError) as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return None
         except (ImageNotFoundError, GeneratedImageNotFoundError):
             self._set_status("Ya no existe", error=True)
@@ -353,7 +350,7 @@ class ImagesScreen(Screen[None]):
             return
         cancelled = await self._generated.cancel(asset_id)
         if cancelled:
-            self._set_status(f"❌ job '{asset_id}' cancelado")
+            self._set_status(f"{ERROR} job '{asset_id}' cancelado")
         else:
             self._set_status("No pude cancelar (job ya terminó o no existe)", error=True)
 
@@ -364,7 +361,7 @@ class ImagesScreen(Screen[None]):
             return
         success = await self._generated.retry(asset_id)
         if success:
-            self._set_status(f"🔁 job '{asset_id}' reencolado")
+            self._set_status(f"{RETRY} job '{asset_id}' reencolado")
         else:
             self._set_status("No pude reencolar (estado no aplica)", error=True)
 
@@ -379,17 +376,17 @@ class ImagesScreen(Screen[None]):
             except ImageNotFoundError:
                 self._set_status("La imagen ya no existe", error=True)
                 return
-            self._set_status(f"✅ '{asset_id}' quitado del registro local")
+            self._set_status(f"{OK} '{asset_id}' quitado del registro local")
         elif kind == _KEY_PREFIX_GENERATED:
             try:
                 await self._generated.delete(asset_id)
             except GeneratedImageNotFoundError:
                 self._set_status("La imagen generada ya no existe", error=True)
                 return
-            self._set_status(f"✅ generada '{asset_id}' quitada del registro local")
+            self._set_status(f"{OK} generada '{asset_id}' quitada del registro local")
         else:
             await self._generated.delete_job(asset_id)
-            self._set_status(f"✅ job '{asset_id}' quitado")
+            self._set_status(f"{OK} job '{asset_id}' quitado")
         await self._refresh_table()
 
     # --- helpers ---------------------------------------------------------
@@ -405,17 +402,17 @@ class ImagesScreen(Screen[None]):
             # duplicar visualmente.
             if job.status == ImageJobStatus.COMPLETED:
                 continue
-            table.add_row(*_row_for_job(job), key=f"{_KEY_PREFIX_JOB}{job.id}")
+            table.add_row(*row_for_job(job), key=f"{_KEY_PREFIX_JOB}{job.id}")
         retention_days = self._generated.retention_days
         for generated in await self._generated.list_generated():
             table.add_row(
-                *_row_for_generated(generated, retention_days),
+                *row_for_generated(generated, retention_days),
                 key=f"{_KEY_PREFIX_GENERATED}{generated.id}",
             )
         retention_hours = self._uploads.retention_hours
         for uploaded in await self._uploads.list_uploaded():
             table.add_row(
-                *_row_for_uploaded(uploaded, retention_hours),
+                *row_for_uploaded(uploaded, retention_hours),
                 key=f"{_KEY_PREFIX_UPLOADED}{uploaded.id}",
             )
 
@@ -443,73 +440,6 @@ class ImagesScreen(Screen[None]):
         bar.update(f"[red]{message}[/red]" if error else message)
         timeout = _LONG_NOTIFICATION_TIMEOUT if error else _NOTIFICATION_TIMEOUT
         self.notify(message, severity="error" if error else "information", timeout=timeout)
-
-
-# ---------------------------------------------------------------------------
-# Helpers de formato — extraerlos a `_image_format.py` si el archivo crece.
-# ---------------------------------------------------------------------------
-
-
-def _row_for_uploaded(image: UploadedImage, retention_hours: int) -> tuple[str, ...]:
-    return (
-        "subida",
-        image.id,
-        image.label,
-        f"{image.mime_type} ({'local ✅' if image.local_file_exists() else 'local ❌'})",
-        _format_size(image.file_size),
-        image.uploaded_at.strftime("%Y-%m-%d %H:%M"),
-        _format_time_left(image.time_left(retention_hours)),
-    )
-
-
-def _row_for_generated(image: GeneratedImage, retention_days: int) -> tuple[str, ...]:
-    detail_parts = [f"refs: {image.refs_count}"]
-    if image.settings is not None:
-        detail_parts.append(
-            f"{image.settings.aspect_ratio} {image.settings.resolution} "
-            f"{image.settings.output_format}"
-        )
-    size = _format_size(image.file_size) if image.file_size is not None else "—"
-    return (
-        "generada",
-        image.id,
-        image.label,
-        " · ".join(detail_parts),
-        size,
-        image.generated_at.strftime("%Y-%m-%d %H:%M"),
-        _format_time_left(image.time_left(retention_days)),
-    )
-
-
-def _row_for_job(job: ImageJob) -> tuple[str, ...]:
-    detail = job.error if job.error else f"task: {job.task_id or '—'}"
-    return (
-        f"job · {job.status.value}",
-        job.id,
-        job.label,
-        detail,
-        "—",
-        job.created_at.strftime("%Y-%m-%d %H:%M"),
-        "—",
-    )
-
-
-def _format_size(size_bytes: int) -> str:
-    if size_bytes >= _BYTES_PER_MB:
-        return f"{size_bytes / _BYTES_PER_MB:.1f} MB"
-    return f"{size_bytes / 1024:.1f} KB"
-
-
-def _format_time_left(delta: timedelta) -> str:
-    total_seconds = delta.total_seconds()
-    if total_seconds <= 0:
-        return "EXPIRADO"
-    days = int(total_seconds // _SECONDS_PER_DAY)
-    hours = int((total_seconds % _SECONDS_PER_DAY) // _SECONDS_PER_HOUR)
-    if days > 0:
-        return f"{days}d {hours}h"
-    minutes = int((total_seconds % _SECONDS_PER_HOUR) // _SECONDS_PER_MINUTE)
-    return f"{hours}h {minutes}m"
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[ImagesScreen], Awaitable[None]]] = {

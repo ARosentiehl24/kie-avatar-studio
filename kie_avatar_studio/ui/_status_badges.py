@@ -7,6 +7,10 @@ puede extender con sus propios status no-compartidos.
 El dict se construye a partir de los enums concretos para que sea
 imposible mantener un status sin badge ni un badge sin status.
 
+También expone `KIND_BADGES` con el label/icono visual de cada tipo
+de job (`video`, `audio`, `image`) — antes estaba duplicado entre
+`HistoryScreen` y `QueueScreen` como `_KIND_ICONS`.
+
 ### Decisión de UI: solo color, sin emojis prefix
 
 Los chars emoji-tipo-dingbat (`✅`, `❌`) no se renderizan en todos los
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from ..domain.events import JobKind
 from ..domain.models import AudioJobStatus, ImageJobStatus, JobStatus
 
 # Compartidos entre video, audio e image (mismo `value` en los tres
@@ -55,4 +60,14 @@ AUDIO_STATUS_BADGES: Final[dict[str, str]] = {
 IMAGE_STATUS_BADGES: Final[dict[str, str]] = {
     ImageJobStatus.CREATING.value: "[cyan]Creando[/cyan]",
     ImageJobStatus.POLLING.value: "[cyan]Procesando[/cyan]",
+}
+
+# Labels de cada tipo de job para columnas "Tipo" en tablas mixtas.
+# Compartidos entre `HistoryScreen` y `QueueScreen`. Si cambia el
+# emoji o el label de un kind, se cambia acá y se propaga a las dos
+# pantallas (CR-3.7).
+KIND_BADGES: Final[dict[JobKind, str]] = {
+    "video": "🎬 Video",
+    "audio": "🔊 Audio",
+    "image": "📷 Imagen",
 }

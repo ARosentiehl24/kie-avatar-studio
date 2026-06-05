@@ -48,6 +48,8 @@ from ...domain.events import AudioJobUpdated
 from ...domain.kie_voice_catalog import get_builtin_voice
 from ...domain.models import AudioJob, AudioJobStatus
 from .._clipboard_feedback import copy_url_with_feedback
+from .._counters import format_full_counters
+from .._icons import ERROR, OK, RETRY, WARNING
 from .._status_badges import AUDIO_STATUS_BADGES, BASE_STATUS_BADGES
 from .._table_helpers import get_selected_row_key, select_row_by_key
 from .._text_format import truncate as _truncate
@@ -270,7 +272,7 @@ class AudiosScreen(Screen[None]):
     async def _save_preset(self, payload: GenerateAudioFormResult) -> None:
         """Persiste un preset desde el modal y reabre con el preset disponible."""
         if self._presets_controller is None:
-            self._set_status("❌ Presets no disponibles", error=True)
+            self._set_status(f"{ERROR} Presets no disponibles", error=True)
             return
         if payload.save_as_preset_label is None:
             return
@@ -281,9 +283,9 @@ class AudiosScreen(Screen[None]):
                 voice_settings=payload.voice_settings,
             )
         except Exception as exc:
-            self._set_status(f"❌ no pude guardar el preset: {exc}", error=True)
+            self._set_status(f"{ERROR} no pude guardar el preset: {exc}", error=True)
             return
-        self._set_status(f"✅ preset '{preset.label}' guardado")
+        self._set_status(f"{OK} preset '{preset.label}' guardado")
         # Reabrir el modal precargando la voz/settings del preset recién
         # creado para que el usuario pueda generar inmediatamente con él.
         await self._open_generate_form_async(
@@ -306,9 +308,9 @@ class AudiosScreen(Screen[None]):
                 payload.voice_settings,
             )
         except AudioValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status(f"✅ '{job.label}' encolado — mirá la tabla para ver el progreso")
+        self._set_status(f"{OK} '{job.label}' encolado — mirá la tabla para ver el progreso")
 
     async def _refresh_credits(self) -> None:
         """Best-effort: consulta saldo y actualiza el indicador, nunca lanza.
@@ -332,7 +334,7 @@ class AudiosScreen(Screen[None]):
             widget.update("[dim]Saldo Kie: no disponible (sin key activa o sin red)[/dim]")
             return
         formatted = (
-            f"[red]Saldo Kie: {balance:.2f} cr ❗ bajo[/red]"
+            f"[red]Saldo Kie: {balance:.2f} cr {WARNING} bajo[/red]"
             if balance <= _LOW_CREDITS_THRESHOLD
             else f"[dim]Saldo Kie: {balance:.2f} cr[/dim]"
         )
@@ -353,11 +355,11 @@ class AudiosScreen(Screen[None]):
             await self._audio_player.play_audio(audio_url)
         except (OSError, UrlValidationError) as exc:
             self._set_status(
-                f"❌ no pude reproducir el audio ({exc})\n{clip_msg}",
+                f"{ERROR} no pude reproducir el audio ({exc})\n{clip_msg}",
                 error=True,
             )
             return
-        self._set_status(f"✅ reproduciendo (Detener para cancelar)\n{clip_msg}")
+        self._set_status(f"{OK} reproduciendo (Detener para cancelar)\n{clip_msg}")
 
     async def _handle_stop(self) -> None:
         """Detiene cualquier audio en reproducción. Idempotente."""
@@ -389,7 +391,7 @@ class AudiosScreen(Screen[None]):
             return
         cancelled = await self._controller.cancel(job.id)
         if cancelled:
-            self._set_status(f"❌ '{job.label}' cancelado")
+            self._set_status(f"{ERROR} '{job.label}' cancelado")
         else:
             self._set_status(
                 f"No pude cancelar '{job.label}' (estado actual: {job.status.value})",
@@ -408,7 +410,7 @@ class AudiosScreen(Screen[None]):
             return
         success = await self._controller.retry(job.id)
         if success:
-            self._set_status(f"🔁 '{job.label}' reencolado")
+            self._set_status(f"{RETRY} '{job.label}' reencolado")
         else:
             self._set_status(f"No pude reencolar '{job.label}'", error=True)
 
@@ -426,7 +428,7 @@ class AudiosScreen(Screen[None]):
         # con el mismo id. Ambos comparten id por idempotencia.
         await self._controller.delete_job(job.id)
         self._set_status(
-            f"✅ '{job.label}' quitado del registro local "
+            f"{OK} '{job.label}' quitado del registro local "
             f"(Kie conserva el audio ~{self._controller.retention_days}d si existía)"
         )
 
@@ -450,7 +452,7 @@ class AudiosScreen(Screen[None]):
         try:
             audio = await self._controller.get_for_use(job.id)
         except AudioExpiredError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return None
         except AudioNotFoundError:
             # Fallback: el GeneratedAudio fue borrado pero el job tiene la
@@ -552,23 +554,8 @@ def _compute_counters(jobs: list[AudioJob]) -> tuple[int, int, int, int, int]:
 
 
 def _format_counters(total: int, active: int, queued: int, done: int, failed: int) -> str:
-    """Render del panel de contadores superior con coloreo según valor.
-
-    Sin emojis prefix: el color del texto ya comunica el estado y los
-    chars emoji-tipo-dingbat (`✅`/`❌`) no se renderizan bien en todos
-    los terminales (caen a `√`/`✗` text-style sin separación visual).
-    Color + label es 100% portable.
-
-    Patrón uniforme con HistoryScreen / VideosScreen / QueueScreen:
-    `Total N · activos · en cola · listos · fallidos`.
-    """
-    return (
-        f"[bold]Total {total}[/bold]  ·  "
-        f"[cyan]{active} generando[/cyan]  ·  "
-        f"[yellow]{queued} en cola[/yellow]  ·  "
-        f"[green]{done} listos[/green]  ·  "
-        f"[red]{failed} fallidos[/red]"
-    )
+    """Wrapper sobre `ui._counters.format_full_counters` con label semántico."""
+    return format_full_counters(total, active, queued, done, failed, active_label="generando")
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[AudiosScreen], Awaitable[None]]] = {

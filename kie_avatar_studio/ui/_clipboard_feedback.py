@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..app_layer.clipboard import ClipboardResult, copy_to_clipboard
+from ._icons import ERROR, OK
 
 
 async def copy_url_with_feedback(
@@ -35,7 +36,7 @@ async def copy_url_with_feedback(
 
     if result.success and result.backend != "osc52":
         # Backend nativo confirmado: el clipboard del SO sí recibió el texto.
-        return ("✅ URL copiada al clipboard", False)
+        return (f"{OK} URL copiada al clipboard", False)
 
     if result.success and result.backend == "osc52":
         # Best-effort: la secuencia OSC 52 se envió al terminal, pero
@@ -45,4 +46,4 @@ async def copy_url_with_feedback(
     # Falló todo: backend explícito y sin fallback. Aquí SÍ damos la URL
     # porque el usuario la necesita para copiar a mano.
     detail = result.error or "sin backend disponible"
-    return (f"❌ No pude copiar ({detail}): {url}", True)
+    return (f"{ERROR} No pude copiar ({detail}): {url}", True)

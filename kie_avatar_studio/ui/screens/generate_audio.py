@@ -34,6 +34,7 @@ from ...domain.policies import (
     validate_voice_id,
     validate_voice_settings,
 )
+from .._icons import OK
 
 _FORM_TITLE: Final[str] = "Generar audio TTS (ElevenLabs vía Kie)"
 
@@ -256,7 +257,7 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
             settings.language_code if settings and settings.language_code else ""
         )
         self._set_error(
-            f"[dim]✅ preset '{preset.label}' cargado (podés ajustar antes de generar)[/dim]"
+            f"[dim]{OK} preset '{preset.label}' cargado (podés ajustar antes de generar)[/dim]"
         )
 
     def action_cancel(self) -> None:

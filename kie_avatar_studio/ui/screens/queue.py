@@ -38,10 +38,13 @@ from ...domain.events import (
     JobKind,
 )
 from ...domain.models import AudioJobStatus, ImageJobStatus, JobStatus
+from .._counters import format_queue_summary
+from .._icons import ERROR, RETRY
 from .._status_badges import (
     AUDIO_STATUS_BADGES,
     BASE_STATUS_BADGES,
     IMAGE_STATUS_BADGES,
+    KIND_BADGES,
     VIDEO_STATUS_BADGES,
 )
 from .._table_helpers import get_selected_row_key, select_row_by_key
@@ -57,12 +60,6 @@ _TABLE_COLUMNS: Final[tuple[str, ...]] = (
     "Detalle",
     "Antiguedad",
 )
-
-_KIND_ICONS: Final[dict[JobKind, str]] = {
-    "video": "🎬 Video",
-    "audio": "🔊 Audio",
-    "image": "📷 Imagen",
-}
 
 # Mismo set que HistoryScreen: combina badges de los 4 grupos.
 _STATUS_BADGES: Final[dict[str, str]] = {
@@ -223,7 +220,7 @@ class QueueScreen(Screen[None]):
             return
         ok = await self._cancel_entry(entry)
         if ok:
-            self._set_status(f"❌ '{entry.label}' cancelado")
+            self._set_status(f"{ERROR} '{entry.label}' cancelado")
         else:
             self._set_status(f"No pude cancelar '{entry.label}'", error=True)
 
@@ -239,7 +236,7 @@ class QueueScreen(Screen[None]):
             return
         ok = await self._retry_entry(entry)
         if ok:
-            self._set_status(f"🔁 '{entry.label}' reencolado")
+            self._set_status(f"{RETRY} '{entry.label}' reencolado")
         else:
             self._set_status(f"No pude reencolar '{entry.label}'", error=True)
 
@@ -261,7 +258,7 @@ class QueueScreen(Screen[None]):
             if await self._cancel_entry(entry):
                 cancelled += 1
         self._set_status(
-            f"❌ Cancelados {cancelled} de {len(targets)} jobs en cola"
+            f"{ERROR} Cancelados {cancelled} de {len(targets)} jobs en cola"
             + ("" if cancelled == len(targets) else " (algunos fallaron)"),
             error=cancelled < len(targets),
         )
@@ -278,7 +275,7 @@ class QueueScreen(Screen[None]):
             if await self._retry_entry(entry):
                 retried += 1
         self._set_status(
-            f"🔁 Reencolados {retried} de {len(targets)} jobs fallidos"
+            f"{RETRY} Reencolados {retried} de {len(targets)} jobs fallidos"
             + ("" if retried == len(targets) else " (algunos fallaron)"),
             error=retried < len(targets),
         )
@@ -331,7 +328,7 @@ class QueueScreen(Screen[None]):
         table.clear()
         for entry in entries:
             table.add_row(
-                _KIND_ICONS[entry.kind],
+                KIND_BADGES[entry.kind],
                 _STATUS_BADGES.get(entry.status_value, entry.status_value),
                 truncate(entry.label, _DETAIL_PREVIEW_LEN),
                 truncate(entry.detail, _DETAIL_PREVIEW_LEN),
@@ -410,15 +407,5 @@ def _compute_summary(entries: list[HistoryEntry]) -> tuple[int, int, int, int]:
 
 
 def _format_summary(total: int, queued: int, in_progress: int, failed: int) -> str:
-    """Header de contadores con coloreo por estado.
-
-    Patrón uniforme con HistoryScreen / AudiosScreen / VideosScreen:
-    `Total N · activos · en cola · fallidos`. Sin emojis prefix —
-    el color del texto comunica el estado de forma 100% portable.
-    """
-    return (
-        f"[bold]Total {total}[/bold]  ·  "
-        f"[cyan]{in_progress} procesando[/cyan]  ·  "
-        f"[yellow]{queued} en cola[/yellow]  ·  "
-        f"[red]{failed} fallidos[/red]"
-    )
+    """Wrapper sobre `ui._counters.format_queue_summary`."""
+    return format_queue_summary(total, queued, in_progress, failed)

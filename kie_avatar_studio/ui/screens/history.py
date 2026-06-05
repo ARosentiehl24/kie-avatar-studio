@@ -28,10 +28,12 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 from ...app_layer.history_controller import HistoryController
 from ...domain.events import TERMINAL_HISTORY_STATUS_VALUES, HistoryEntry, JobKind
 from ...domain.models import AudioJobStatus, ImageJobStatus, JobStatus
+from .._counters import format_full_counters
 from .._status_badges import (
     AUDIO_STATUS_BADGES,
     BASE_STATUS_BADGES,
     IMAGE_STATUS_BADGES,
+    KIND_BADGES,
     VIDEO_STATUS_BADGES,
 )
 from .._table_helpers import get_selected_row_key, select_row_by_key
@@ -47,13 +49,6 @@ _TABLE_COLUMNS: Final[tuple[str, ...]] = (
     "Detalle",
     "Creado",
 )
-
-# Iconos por tipo de job para escaneo rápido en la primera columna.
-_KIND_ICONS: Final[dict[JobKind, str]] = {
-    "video": "🎬 Video",
-    "audio": "🔊 Audio",
-    "image": "📷 Imagen",
-}
 
 # Renders de status: combinamos los compartidos (BASE) + los específicos
 # de cada tipo. La pantalla de Historial muestra los tres kinds, así
@@ -167,7 +162,7 @@ class HistoryScreen(Screen[None]):
         table.clear()
         for entry in filtered:
             table.add_row(
-                _KIND_ICONS[entry.kind],
+                KIND_BADGES[entry.kind],
                 _STATUS_BADGES.get(entry.status_value, entry.status_value),
                 _truncate(entry.label, _DETAIL_PREVIEW_LEN),
                 _truncate(entry.detail, _DETAIL_PREVIEW_LEN),
@@ -225,16 +220,5 @@ def _compute_summary(entries: list[HistoryEntry]) -> tuple[int, int, int, int, i
 
 
 def _format_summary(total: int, active: int, queued: int, done: int, failed: int) -> str:
-    """Render del header de contadores del historial.
-
-    Sin emojis prefix: el color ya comunica el estado (cyan=activo,
-    yellow=cola, green=listo, red=fallido). 100% portable entre
-    terminales con/sin fonts emoji completas.
-    """
-    return (
-        f"[bold]Total {total}[/bold]  ·  "
-        f"[cyan]{active} activos[/cyan]  ·  "
-        f"[yellow]{queued} en cola[/yellow]  ·  "
-        f"[green]{done} listos[/green]  ·  "
-        f"[red]{failed} fallidos[/red]"
-    )
+    """Wrapper sobre `ui._counters.format_full_counters`."""
+    return format_full_counters(total, active, queued, done, failed, active_label="activos")

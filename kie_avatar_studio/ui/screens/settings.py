@@ -34,6 +34,7 @@ from ...app_layer.keys_controller import KeysController
 from ...app_layer.settings_controller import SettingsController
 from ...domain.errors import JobValidationError, KeyValidationError, KieError
 from ...domain.models import KieKey
+from .._icons import ERROR, OK
 from .key_form import KeyFormResult, KeyFormScreen
 
 NotifyAsync = Callable[[], Awaitable[None]]
@@ -172,9 +173,9 @@ class SettingsScreen(Screen[None]):
         try:
             await self._keys.add_key(payload.id, payload.label, payload.key)
         except KeyValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status(f"✅ key '{payload.label}' agregada")
+        self._set_status(f"{OK} key '{payload.label}' agregada")
         await self._refresh_keys_table()
 
     async def _handle_activate_key(self) -> None:
@@ -185,9 +186,9 @@ class SettingsScreen(Screen[None]):
         try:
             await self._keys.set_active(key_id)
         except KieError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status(f"✅ key '{key_id}' activada")
+        self._set_status(f"{OK} key '{key_id}' activada")
         await self._refresh_keys_table()
         await self._notify_credentials_changed()
 
@@ -199,9 +200,9 @@ class SettingsScreen(Screen[None]):
         try:
             await self._keys.delete_key(key_id)
         except KieError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status(f"✅ key '{key_id}' eliminada")
+        self._set_status(f"{OK} key '{key_id}' eliminada")
         await self._refresh_keys_table()
 
     async def _handle_test_key(self) -> None:
@@ -213,7 +214,7 @@ class SettingsScreen(Screen[None]):
         try:
             tested = await self._keys.test_key(key_id)
         except KieError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         message = _format_test_result(tested)
         self._set_status(message, error=tested.last_validated_status != "ok")
@@ -227,9 +228,9 @@ class SettingsScreen(Screen[None]):
         try:
             self._settings.update_endpoints(api_base, upload_base)
         except JobValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status("✅ endpoints guardados en .env")
+        self._set_status(f"{OK} endpoints guardados en .env")
         await self._notify_endpoints_changed()
 
     async def _handle_save_execution(self) -> None:
@@ -238,15 +239,15 @@ class SettingsScreen(Screen[None]):
             poll = int(self.query_one("#poll-interval", Input).value)
             timeout = int(self.query_one("#task-timeout", Input).value)
         except ValueError:
-            self._set_status("❌ los valores deben ser enteros", error=True)
+            self._set_status(f"{ERROR} los valores deben ser enteros", error=True)
             return
         try:
             self._settings.update_execution(max_parallel, poll, timeout)
         except JobValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         self._set_status(
-            "✅ ejecución guardada en .env (reiniciá la app para aplicar el paralelismo)"
+            f"{OK} ejecución guardada en .env (reiniciá la app para aplicar el paralelismo)"
         )
 
     async def _handle_save_defaults(self) -> None:
@@ -255,9 +256,9 @@ class SettingsScreen(Screen[None]):
         try:
             self._settings.update_defaults(voice, prompt)
         except JobValidationError as exc:
-            self._set_status(f"❌ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
-        self._set_status("✅ defaults guardados en .env")
+        self._set_status(f"{OK} defaults guardados en .env")
 
     # --- helpers internos -------------------------------------------------
 
@@ -306,7 +307,9 @@ def _format_validation_cell(key: KieKey) -> str:
     if key.last_validated_status is None or key.last_validated_at is None:
         return "—"
     when = key.last_validated_at.strftime("%Y-%m-%d %H:%M")
-    glyph = {"ok": "✅", "unauthorized": "❌ 401", "error": "❌"}.get(key.last_validated_status, "?")
+    glyph = {"ok": OK, "unauthorized": f"{ERROR} 401", "error": ERROR}.get(
+        key.last_validated_status, "?"
+    )
     return f"{glyph} {when}"
 
 
@@ -331,10 +334,10 @@ def _format_test_result(key: KieKey) -> str:
             if key.last_known_credits is not None
             else ""
         )
-        return f"✅ '{key.label}' validada contra Kie{credits_suffix}"
+        return f"{OK} '{key.label}' validada contra Kie{credits_suffix}"
     if status == "unauthorized":
-        return f"❌ '{key.label}' rechazada por Kie (401/403)"
-    return f"❌ '{key.label}' no se pudo validar (error de red o servidor)"
+        return f"{ERROR} '{key.label}' rechazada por Kie (401/403)"
+    return f"{ERROR} '{key.label}' no se pudo validar (error de red o servidor)"
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
