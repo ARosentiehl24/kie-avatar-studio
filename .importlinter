@@ -1,0 +1,74 @@
+# import-linter — Contratos de capas para Kie Avatar Studio
+#
+# Forzados por `lint-imports` (CR-1). Cualquier import nuevo que rompa estas reglas hace
+# fallar pre-commit y CI. Si tenés que cruzar una capa, primero declara un Protocol en
+# domain/ports.py y depende de él.
+
+[importlinter]
+root_package = kie_avatar_studio
+include_external_packages = True
+
+# -------------------------------------------------------------------------
+# Contrato 1: orden estricto entre capas.
+# `app_layer` e `infra` son "siblings": ambas dependen de `domain`, ninguna puede
+# importar a la otra. La UI consume solo app_layer y domain.
+# `app.py` es la única excepción autorizada (composition root) y queda excluida.
+# -------------------------------------------------------------------------
+[importlinter:contract:layers]
+name = Capas en una sola dirección (CR-1)
+type = layers
+layers =
+    kie_avatar_studio.ui
+    kie_avatar_studio.app_layer | kie_avatar_studio.infra
+    kie_avatar_studio.domain
+exhaustive = False
+exhaustive_ignores =
+    kie_avatar_studio.app
+    kie_avatar_studio.config
+    kie_avatar_studio.__main__
+
+# -------------------------------------------------------------------------
+# Contrato 2: app_layer nunca importa infra (DIP, CR-1.1, CR-2.5)
+# -------------------------------------------------------------------------
+[importlinter:contract:app-layer-no-infra]
+name = app_layer no depende de infra (CR-1.1)
+type = forbidden
+source_modules =
+    kie_avatar_studio.app_layer
+forbidden_modules =
+    kie_avatar_studio.infra
+    httpx
+    aiosqlite
+    textual
+
+# -------------------------------------------------------------------------
+# Contrato 3: ui nunca importa infra ni clientes concretos (CR-10.1)
+# -------------------------------------------------------------------------
+[importlinter:contract:ui-no-infra]
+name = ui no depende de infra (CR-10.1)
+type = forbidden
+source_modules =
+    kie_avatar_studio.ui
+forbidden_modules =
+    kie_avatar_studio.infra
+    httpx
+    aiosqlite
+
+# -------------------------------------------------------------------------
+# Contrato 4: domain es puro (CR-1.3, CR-2.5)
+# -------------------------------------------------------------------------
+[importlinter:contract:domain-is-pure]
+name = domain no importa nada del paquete ni clientes externos (CR-1.3)
+type = forbidden
+source_modules =
+    kie_avatar_studio.domain
+forbidden_modules =
+    kie_avatar_studio.infra
+    kie_avatar_studio.app_layer
+    kie_avatar_studio.ui
+    kie_avatar_studio.app
+    kie_avatar_studio.config
+    httpx
+    aiosqlite
+    textual
+    loguru

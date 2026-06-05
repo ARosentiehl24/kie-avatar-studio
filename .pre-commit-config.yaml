@@ -1,0 +1,78 @@
+# Pre-commit: corre ruff, ruff-format, mypy, import-linter y pytest -q antes de cada commit.
+# Instalar:
+#   pip install -e ".[dev]"
+#   pre-commit install
+# Ejecutar manualmente:
+#   pre-commit run --all-files
+
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        args: [kie_avatar_studio]
+        pass_filenames: false
+        additional_dependencies:
+          # Runtime deps necesarias para que mypy resuelva los imports del paquete.
+          # Replica el venv local; sin esto mypy en pre-commit ve `Any` y rompe strict.
+          - textual>=0.85
+          - httpx>=0.27
+          - aiosqlite>=0.20
+          - loguru>=0.7
+          - pydantic>=2.8
+          - pydantic-settings>=2.5
+          - types-aiofiles
+
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter (CR-1)
+        entry: lint-imports
+        language: python
+        pass_filenames: false
+        types: [python]
+        # import-linter hace dynamic imports del paquete real, así que necesita
+        # las mismas deps de runtime que mypy.
+        additional_dependencies:
+          - import-linter>=2.0
+          - textual>=0.85
+          - httpx>=0.27
+          - aiosqlite>=0.20
+          - loguru>=0.7
+          - pydantic>=2.8
+          - pydantic-settings>=2.5
+
+      - id: agent-sync
+        name: code-quality-reviewer sincronizado
+        entry: scripts/check_agent_sync.sh
+        language: system
+        pass_filenames: false
+        files: ^(docs/agents/code-quality-reviewer\.prompt\.md|\.opencode/agents/code-quality-reviewer\.md|\.github/agents/code-quality-reviewer\.agent\.md)$
+
+      - id: pytest-quick
+        name: pytest -q
+        # Apunta al python del venv del proyecto (.venv/bin/python).
+        # Razones:
+        # - `language: python` crea un venv aislado SIN el paquete
+        #   `kie_avatar_studio` instalado en editable.
+        # - `language: system` + `entry: pytest` falla si git push se
+        #   invoca sin venv activo (PATH no tiene `pytest`).
+        # - `.venv/bin/python -m pytest` siempre funciona porque el
+        #   path es relativo al repo.
+        # Si trabajás con otro venv (ej. `.venv-dev/`), ajustá esta
+        # línea. Es el único lugar donde se asume la ubicación.
+        entry: .venv/bin/python -m pytest -q
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]

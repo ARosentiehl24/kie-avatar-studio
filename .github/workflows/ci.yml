@@ -1,0 +1,44 @@
+# CI: en cada push/PR a main, corre los mismos checks que el pre-commit.
+# Acelera el feedback cuando alguien (o un colaborador futuro) abre un PR.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ruff + mypy + import-linter + pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install project + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff
+        run: ruff check kie_avatar_studio/ tests/
+
+      - name: ruff format check
+        run: ruff format --check kie_avatar_studio/ tests/
+
+      - name: mypy
+        run: mypy --strict kie_avatar_studio/
+
+      - name: import-linter
+        run: lint-imports
+
+      - name: pytest
+        run: pytest -q

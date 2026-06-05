@@ -1,0 +1,7 @@
+{
+  "prompts": [
+    { "id": "natural", "label": "Natural a cámara", "text": "Mirada a cámara, expresión natural, gestos suaves, tono confiado." },
+    { "id": "energy", "label": "Alta energía", "text": "Energía alta, sonrisa amplia, gestos expresivos, tono entusiasta." },
+    { "id": "doctor", "label": "Profesional médico", "text": "Tono cálido y profesional, postura estable, mirada empática, gestos contenidos." }
+  ]
+}

@@ -1,0 +1,73 @@
+# Entornos y secretos
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Datos locales
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/keys.json
+data/keys.json.tmp
+data/keys.json.bak
+data/voice_previews/
+data/audio_cache/
+inputs/*
+!inputs/.gitkeep
+outputs/*
+!outputs/.gitkeep
+logs/*
+!logs/.gitkeep
+batch_jobs/*
+!batch_jobs/.gitkeep
+presets/voices/*.json
+!presets/.gitkeep
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Build / packaging artifacts (regenerables con pip install -e .)
+*.egg-info/
+build/
+dist/
+
+# Test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+
+# CodeGraph index (regenerable con `codegraph init -i` / `codegraph sync`).
+# El directorio .codegraph/ se versiona solo por su .gitignore interno;
+# acá excluimos todos los artefactos del daemon y la DB por defensa.
+.codegraph/*.db
+.codegraph/*.db-shm
+.codegraph/*.db-wal
+.codegraph/cache/
+.codegraph/*.log
+.codegraph/*.pid
+.codegraph/*.sock
+.codegraph/.dirty
+
+# Artefactos del CLI host (Copilot CLI workspace state)
+.agents/
+skills-lock.json
+
+# PyInstaller / Inno Setup output local
+build/
+dist/
+*.spec.bak
+
+# Scripts personales del CLI host (no parte del proyecto)
+resume-copilot.*
+restore-session.*
+.tools/
+.copilot/
+.copilot-session

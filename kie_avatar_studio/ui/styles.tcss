@@ -1,0 +1,1178 @@
+/* Estilos globales de la app. CSS único (SPEC §12.3) — no usar CSS inline en widgets.
+ *
+ * Estética: refresh estilo OpenCode / Claude Code (tema `tokyo-night` activado
+ * desde `App.theme`). Bordes finos `solid` con color sutil, sin esquinas
+ * redondeadas. La jerarquía visual la dan el peso de texto y el color de
+ * acento, no los bordes.
+ */
+
+/* ============================================================================
+ * Spacing scale (mínimo 2 NO-CERO, escala 2-friendly, simetría visual 1:2)
+ *
+ * IMPORTANTE: en una TUI una celda de caracter NO es cuadrada — mide
+ * aproximadamente el doble de alto que de ancho (~1:2). Por eso un
+ * `padding: 2 2` (numéricamente "simétrico") **se ve asimétrico** al ojo:
+ * 2 cells arriba/abajo ocupan ~32px visualmente, 2 cells izq/der ocupan
+ * ~16px. Resultado: el borde superior e inferior parece el doble de
+ * grueso que los laterales.
+ *
+ * REGLA: para padding/margin shorthand, el valor horizontal debe ser el
+ * DOBLE del vertical para verse simétrico al ojo.
+ *
+ * Pares canónicos (vertical : horizontal):
+ *
+ *   padding: 1 2     ← compacto simétrico
+ *   padding: 2 4     ← cómodo simétrico (preferido)
+ *   padding: 3 6     ← generoso simétrico
+ *   padding: 4 8     ← muy generoso simétrico
+ *
+ * Para padding/margin de un solo lado (padding-top, margin-left), la
+ * escala es: 2, 4, 8, 12, 16, 20, 24, 28, ...
+ *
+ * Donde:
+ *   - 2 es el mínimo (granularidad fina).
+ *   - 4, 8, 12, ... son los espacios cómodos (preferidos).
+ *   - 0 solo se permite como "ausencia de spacing en ese eje", NO como
+ *     spacing reducido (`margin: 0 2` = sin margen vertical, 2 horizontal).
+ *
+ * Excepciones documentadas (NO ampliar sin justificación explícita):
+ *   - `height: 1` en barras de status y counters de 1 línea (texto puro).
+ *   - `height: 3` en Button (1 visual + 2 chrome interno de Textual).
+ *   - `min-width: 1` / `width: 1fr` en columnas fluidas (no son medidas).
+ *   - `width: 4` en `#audio-preview-stop` (glyph único, no label).
+ *   - `padding-top: 0` en `.actions-row` (margin-top: 2 ya separa, sumar
+ *     padding empuja botones fuera del bounding del padre Vertical).
+ *
+ * Tokens reutilizables del theme tokyo-night:
+ *   $boost                     → cards y botones default
+ *   $surface                   → fondos de modales
+ *   $primary-background        → backgrounds dimmed (tablas, viewers)
+ *   $primary-background-lighten-2 → borders sutiles (línea fina)
+ *   $accent                    → títulos, énfasis sutil
+ *   $primary                   → botón primary, focus
+ *   $error                     → botón destructive, mensajes de error
+ *   $text                      → texto principal
+ *   $text-muted                → descripciones secundarias / hints
+ * ============================================================================ */
+
+Screen {
+    align: center middle;
+    background: $background;
+}
+
+/* ----------------------------------------------------------------------------
+ * Botones planos: override del default `border: tall` de Textual que daba
+ * apariencia 3D + highlight persistente al click. Mantenemos:
+ *   - Border `none` en estado base, hover, focus y -active.
+ *   - Background diferenciado por variant (default / primary / error).
+ *   - Hover y active sutiles via tinte de background, no border.
+ * -------------------------------------------------------------------------- */
+
+Button {
+    border: none;
+    height: 3;          /* 1 visual + 2 chrome interno Textual (excepción) */
+    min-width: 12;
+    text-style: none;
+    background: $boost;
+    color: $text;
+}
+
+Button:focus {
+    border: none;
+    text-style: bold;
+}
+
+Button:hover {
+    background: $boost-lighten-1;
+    border: none;
+}
+
+Button.-active {
+    background: $accent-darken-1;
+    border: none;
+    tint: transparent;
+}
+
+Button.-primary {
+    background: $primary;
+    color: $text;
+}
+
+Button.-primary:hover {
+    background: $primary-lighten-1;
+}
+
+Button.-primary.-active {
+    background: $primary-darken-1;
+}
+
+Button.-default {
+    background: $boost;
+    color: $text;
+}
+
+Button.-error {
+    background: $error;
+    color: $text;
+}
+
+Button.-error:hover {
+    background: $error-lighten-1;
+}
+
+Button.-error.-active {
+    background: $error-darken-1;
+}
+
+/* ----------------------------------------------------------------------------
+ * Variantes semánticas adicionales (extensión a las built-in primary/error).
+ *
+ * Textual define `primary`, `default`, `error`, `success`, `warning` como
+ * variantes built-in del Button, pero `success` y `warning` no tienen un
+ * estilo consistente con el theme tokyo-night que usamos. Definimos
+ * variantes propias como **clases CSS** (no `variant=`) para no chocar con
+ * las built-in y mantener control total del color:
+ *
+ *   .btn-info     → cyan/azul   → acciones de lectura no destructivas
+ *                                  (ver, copiar, escuchar, abrir, preview)
+ *   .btn-success  → verde       → acciones que confirman algo (raro,
+ *                                  típicamente uso variant="primary" en su lugar)
+ *   .btn-warning  → amarillo    → acciones reversibles que avisan
+ *                                  (reintentar, cancelar job, pausar, refrescar)
+ *   .btn-glyph    → compacto    → botones de un solo emoji/glifo (⏹, 🔁)
+ *                                  con width chico y background sutil
+ *
+ * Uso: yield Button("Copiar URL", id="...", classes="btn-info")
+ *
+ * Mantener semántica consistente entre pantallas: si en una pantalla un
+ * tipo de acción es btn-info, en otra debe serlo también. Esto entrena al
+ * usuario para escanear visualmente sin leer cada label.
+ * -------------------------------------------------------------------------- */
+
+Button.btn-info {
+    background: $accent;
+    color: $text;
+}
+
+Button.btn-info:hover {
+    background: $accent-lighten-1;
+}
+
+Button.btn-info.-active {
+    background: $accent-darken-1;
+}
+
+Button.btn-success {
+    background: $success;
+    color: $text;
+}
+
+Button.btn-success:hover {
+    background: $success-lighten-1;
+}
+
+Button.btn-success.-active {
+    background: $success-darken-1;
+}
+
+Button.btn-warning {
+    background: $warning;
+    /* Warning suele ser amarillo brillante; el texto en blanco no
+     * contrasta. Usamos el surface oscuro para legibilidad. */
+    color: $surface;
+}
+
+Button.btn-warning:hover {
+    background: $warning-lighten-1;
+}
+
+Button.btn-warning.-active {
+    background: $warning-darken-1;
+}
+
+/* Glyph buttons: para acciones de 1-2 chars (emojis/símbolos). El
+ * background es sutil para que no "grite" más que la acción principal
+ * al lado. Suelen vivir en horizontal rows junto a otro botón main
+ * (ej. Preview + Stop). */
+Button.btn-glyph {
+    background: $panel-lighten-1;
+    color: $text-muted;
+    min-width: 4;
+}
+
+Button.btn-glyph:hover {
+    background: $panel-lighten-2;
+    color: $error;
+}
+
+Button.btn-glyph.-active {
+    background: $error-darken-1;
+    color: $text;
+}
+
+Button:disabled {
+    background: $surface;
+    color: $text-muted;
+    text-style: none;
+}
+
+/* ----------------------------------------------------------------------------
+ * Layout primitives compartidas (escala 1/2/4)
+ * -------------------------------------------------------------------------- */
+
+.section-label {
+    color: $text-muted;
+    padding-top: 2;
+    text-style: bold;
+}
+
+.field-row {
+    height: auto;
+    padding: 2 4;
+}
+
+.actions-row {
+    height: 3;
+    align: center middle;
+    /* `padding-top: 0` deliberado: el espaciado lo da `margin-top: 2` con
+     * el bloque superior. Sumar padding-top adicional empuja los botones
+     * fuera del bounding del padre Vertical en viewports compactos. */
+    padding-top: 0;
+    margin-top: 2;
+}
+
+.actions-row Button {
+    /* Margin horizontal entre botones; vertical 0 para no overflowear la
+     * row de height: 3. La separacion visual contra otros widgets la da
+     * `actions-row.margin-top`. */
+    margin: 0 2;
+    height: 3;
+}
+
+/* 4-5 botones cortos uniformemente distribuidos (API Keys / Audios). */
+.actions-row-keys Button {
+    width: 1fr;
+    min-width: 8;
+    max-width: 24;
+}
+
+/* 1 botón "Guardar X" largo (Endpoints/Ejecución/Defaults) — ancho fijo
+ * generoso para que el label completo siempre se vea. */
+.actions-row-save Button {
+    width: 28;
+}
+
+#status-bar {
+    color: $accent;
+    padding-top: 2;
+    content-align: center middle;
+    height: 1;          /* 1 linea de texto (excepción) */
+}
+
+/* ----------------------------------------------------------------------------
+ * Componentes Textual ajustados al theme
+ * -------------------------------------------------------------------------- */
+
+OptionList {
+    height: auto;
+    background: $surface;
+    border: none;
+    padding: 2 4;
+}
+
+/* Cursor del menu principal: background sutil + acento. */
+OptionList:focus > .option-list--option-highlighted {
+    background: $boost-lighten-1;
+    color: $accent;
+    text-style: bold;
+}
+
+DataTable {
+    background: $primary-background;
+    color: $text;
+}
+
+DataTable > .datatable--header {
+    background: $primary-background-lighten-1;
+    color: $accent;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary;
+    color: $text;
+}
+
+DataTable > .datatable--hover {
+    background: $boost;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 2 4;
+}
+
+Tabs {
+    background: transparent;
+}
+
+Collapsible {
+    border: none;
+    padding: 2;
+}
+
+CollapsibleTitle {
+    color: $accent;
+    text-style: bold;
+}
+
+/* ============================================================================
+ * Main menu
+ * ============================================================================ */
+
+#menu-box {
+    width: 80%;
+    min-width: 60;
+    max-width: 80;
+    height: auto;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#title {
+    content-align: center middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+}
+
+#hint {
+    color: $text-muted;
+    content-align: center middle;
+    padding-top: 2;
+}
+
+/* ============================================================================
+ * Settings screen
+ * ============================================================================ */
+
+SettingsScreen {
+    align: center top;
+}
+
+#settings-box {
+    width: 90%;
+    max-width: 112;
+    height: 90%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#settings-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#keys-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+/* ============================================================================
+ * Images screen
+ * ============================================================================ */
+
+ImagesScreen {
+    align: center top;
+}
+
+#images-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#images-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#images-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#images-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}
+
+#images-credits {
+    height: auto;       /* deja crecer con padding sin recortar el texto */
+    content-align: right middle;
+    padding: 0 4;
+    margin-top: 1;
+}
+
+/* ============================================================================
+ * UploadImage modal
+ * ============================================================================ */
+
+UploadImageFormScreen {
+    align: center middle;
+}
+
+#image-form-dialog {
+    width: 80;
+    max-width: 95%;
+    height: auto;
+    /* Sin borde: el contraste de `$surface` contra el fondo del
+     * MainScreen ya marca el modal. Coherente con `#audio-form-dialog`
+     * y `#video-form-dialog`. */
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#image-form-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+}
+
+#image-path-row {
+    height: auto;
+    align: left middle;
+}
+
+#image-path-row Input {
+    width: 1fr;
+}
+
+#image-path-row Button {
+    margin-left: 2;
+    min-width: 16;
+}
+
+#image-form-error {
+    color: $error;
+    padding-top: 2;
+    height: auto;
+}
+
+/* ============================================================================
+ * File picker modal
+ * ============================================================================ */
+
+ImageFilePickerScreen {
+    align: center middle;
+}
+
+#file-picker-dialog {
+    width: 92;
+    max-width: 95%;
+    height: 90%;
+    border: solid $accent;
+    background: $surface;
+    padding: 2 4;
+}
+
+#file-picker-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#file-picker-tree {
+    height: 1fr;
+    background: $surface;
+    border: none;
+}
+
+#file-picker-status {
+    color: $text-muted;
+    padding-top: 2;
+    height: 1;
+}
+
+/* ============================================================================
+ * Logs screen
+ * ============================================================================ */
+
+LogsScreen {
+    align: center top;
+}
+
+#logs-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#logs-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+}
+
+#logs-view {
+    height: 1fr;
+    background: $primary-background;
+    border: none;
+}
+
+/* ============================================================================
+ * Audios screen
+ * ============================================================================ */
+
+AudiosScreen {
+    align: center top;
+}
+
+#audios-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#audios-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#audios-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#audios-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}
+
+#audios-credits {
+    height: auto;       /* deja crecer con padding sin recortar el texto */
+    content-align: right middle;
+    padding: 0 4;
+    margin-top: 1;
+}
+
+/* Panel de contadores en vivo de la cola de audios (Etapa 4).
+ * Una sola línea con [🔄 generando · ⏳ en cola · ✓ listos · ✖ fallidos].
+ * Padding lateral consistente con el resto del box para que las cuentas
+ * queden alineadas con la tabla de abajo. */
+#audios-counters {
+    height: 1;
+    content-align: center middle;
+    padding: 0 4;
+    margin-bottom: 1;
+}
+
+/* ============================================================================
+ * History screen (vista unificada video + audio)
+ * ============================================================================ */
+
+HistoryScreen {
+    align: center top;
+}
+
+#history-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#history-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#history-summary {
+    height: 1;
+    content-align: center middle;
+    padding: 0 4;
+    margin-bottom: 1;
+}
+
+#history-filters {
+    margin-bottom: 1;
+}
+
+/* Toggle filter buttons: fondo sutil con `panel-lighten-1` para indicar
+ * que son botones interactivos sin competir con el primary del filtro
+ * activo. Hover en cyan (`accent`) para feedback inmediato. Cuando el
+ * filtro está activo el handler les pone `variant=primary` y el
+ * Button.-primary del CSS base sobreescribe estos estilos (más
+ * específico por la pseudo-clase). */
+Button.btn-filter {
+    background: $panel-lighten-1;
+    color: $text;
+}
+
+Button.btn-filter:hover {
+    background: $accent;
+    color: $text;
+}
+
+Button.btn-filter:focus {
+    text-style: bold;
+}
+
+Button.btn-filter.-active {
+    background: $accent-darken-1;
+}
+
+#history-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#history-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}
+
+/* ============================================================================
+ * Queue screen (vista operativa de jobs no-completados)
+ * ============================================================================ */
+
+QueueScreen {
+    align: center top;
+}
+
+#queue-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#queue-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#queue-summary {
+    height: 1;
+    content-align: center middle;
+    padding: 0 4;
+    margin-bottom: 1;
+}
+
+#queue-filters {
+    margin-bottom: 1;
+}
+
+/* Las dos rows de acciones: la primera para acciones por fila
+ * (cancel/retry del seleccionado), la segunda para bulk (todos
+ * los queued / todos los failed). Aire entre ellas y aire del
+ * hint debajo. */
+#queue-actions {
+    margin-top: 1;
+}
+
+#queue-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#queue-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}
+
+/* ============================================================================
+ * GenerateAudio modal
+ * ============================================================================ */
+
+GenerateAudioFormScreen {
+    align: center middle;
+}
+
+#audio-form-dialog {
+    width: 100;
+    max-width: 95%;
+    height: auto;
+    border: none;
+    background: $surface;
+    /* Padding generoso para que el contenido no toque los bordes
+     * del modal. Antes era `0 1` (casi nada): los Labels quedaban
+     * pegados al borde izquierdo y los botones tocaban el borde
+     * derecho. `1 3` da 3 cols de aire lateral y 1 línea arriba/
+     * abajo. */
+    padding: 1 3;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#audio-form-body {
+    /* `height: auto` sin max-height para que se contraiga al contenido. */
+    height: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* Padding interno del body adicional al padding del dialog para
+     * tener doble aire (más cómodo visualmente que un único margen
+     * grande en el dialog). */
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#audio-form-footer {
+    height: 3;
+    align: center middle;
+    /* Padding lateral mínimo: la separación visual la dan el
+     * `margin: 0 2` entre botones + el padding del dialog. */
+    padding: 0 1;
+    /* Margin-top más generoso para separar claramente la zona de
+     * acciones del cuerpo del form. */
+    margin-top: 2;
+}
+
+#audio-form-footer Button {
+    margin: 0 2;
+    height: 3;
+    width: 22;
+    min-width: 16;
+}
+
+#audio-form-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    /* padding-bottom: 1 para separar el título del primer Label.
+     * Sin esto, "Generar audio TTS..." quedaba pegado a "Label
+     * legible" sin línea de aire en medio. */
+    padding-bottom: 1;
+}
+
+#audio-script {
+    height: 8;
+    /* margin-top: 0 — el Label inmediatamente arriba ya separa. */
+}
+
+#audio-script-counter {
+    color: $text-muted;
+    content-align: right middle;
+    height: 1;
+    /* Margin-bottom para separar el contador del Label "Voz" siguiente. */
+    margin-bottom: 1;
+}
+
+#audio-voice-row {
+    height: auto;
+    align: left middle;
+    /* Margin-bottom para separar de "Avanzado". */
+    margin-bottom: 1;
+}
+
+#audio-voice-row Select {
+    width: 1fr;
+}
+
+#audio-voice-row Button {
+    margin-left: 2;
+    min-width: 16;
+}
+
+/* Botón "⏹" de stop: compacto, fuera de la escala porque su rol es glyph. */
+#audio-preview-stop {
+    min-width: 4;
+    width: 4;
+}
+
+#audio-advanced {
+    margin-top: 0;
+    /* Override del DEFAULT_CSS de Collapsible: quitamos border-top y
+     * padding-bottom para que cuando esté COLAPSADO ocupe solo la
+     * línea del título. Cuando se expanda, el content tiene su
+     * propio padding y queda bien. */
+    border-top: none;
+    padding: 0;
+}
+
+/* Espacio entre Label y el widget siguiente — todos los Label dentro
+ * del body. Hace que la jerarquía sea visualmente clara: cada Label
+ * "etiqueta" el campo de abajo, separado del bloque anterior. */
+#audio-form-body Label {
+    margin-top: 1;
+}
+
+#audio-form-error {
+    color: $error;
+    padding: 0;
+    height: auto;
+    margin-top: 1;
+}
+
+/* ============================================================================
+ * KeyForm modal
+ * ============================================================================ */
+
+KeyFormScreen {
+    align: center middle;
+}
+
+#key-form-dialog {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    border: solid $accent;
+    background: $surface;
+    padding: 2 4;
+}
+
+#key-form-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+}
+
+#key-form-error {
+    color: $error;
+    padding-top: 2;
+    height: auto;
+}
+
+/* ============================================================================
+ * Videos screen (cola de VideoJob — Kling AI Avatar Pro)
+ * ============================================================================ */
+
+VideosScreen {
+    align: center top;
+}
+
+#videos-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#videos-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 2;
+    height: 3;
+}
+
+#videos-counters {
+    height: 1;
+    content-align: center middle;
+    padding: 0 4;
+    margin-bottom: 1;
+}
+
+#videos-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#videos-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}
+
+/* ============================================================================
+ * NewVideo modal (mismo patrón sticky-footer que GenerateAudio)
+ * ============================================================================ */
+
+NewVideoFormScreen {
+    align: center middle;
+}
+
+#video-form-dialog {
+    width: 100;
+    max-width: 95%;
+    height: auto;
+    border: none;
+    background: $surface;
+    /* Padding generoso — coherente con #audio-form-dialog. */
+    padding: 1 3;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#video-form-body {
+    height: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#video-form-footer {
+    height: 3;
+    align: center middle;
+    padding: 0 1;
+    margin-top: 2;
+}
+
+#video-form-footer Button {
+    margin: 0 2;
+    height: 3;
+    width: 22;
+    min-width: 16;
+}
+
+#video-form-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+#video-prompt {
+    height: 10;
+}
+
+#video-prompt-counter {
+    color: $text-muted;
+    content-align: right middle;
+    height: 1;
+    margin-bottom: 1;
+}
+
+#video-audio-row {
+    height: auto;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#video-audio-row Select {
+    width: 1fr;
+}
+
+#video-audio-row Button {
+    margin-left: 2;
+    min-width: 16;
+}
+
+#video-audio-stop {
+    min-width: 4;
+    width: 4;
+}
+
+/* Labels dentro del body: separados del contenido anterior con
+ * margin-top, igual que el modal de audio. */
+#video-form-body Label {
+    margin-top: 1;
+}
+
+.form-warning {
+    color: $warning;
+    padding: 0;
+    height: auto;
+    margin-top: 1;
+}
+
+#video-form-error {
+    color: $error;
+    padding: 0;
+    height: auto;
+    margin-top: 1;
+}
+
+/* ============================================================================
+ * Presets screen (CRUD de voice presets)
+ * ============================================================================ */
+
+PresetsScreen {
+    align: center top;
+}
+
+#presets-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#presets-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#presets-subtitle {
+    height: auto;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#presets-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#presets-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}
+
+/* ============================================================================
+ * PresetForm modal
+ * ============================================================================ */
+
+PresetFormScreen {
+    align: center middle;
+}
+
+#preset-form-dialog {
+    width: 100;
+    max-width: 95%;
+    height: auto;
+    border: none;
+    background: $surface;
+    padding: 1 3;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#preset-form-body {
+    height: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#preset-form-footer {
+    height: 3;
+    align: center middle;
+    padding: 0 1;
+    margin-top: 2;
+}
+
+#preset-form-footer Button {
+    margin: 0 2;
+    height: 3;
+    min-width: 16;
+}
+
+#preset-form-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+#preset-form-body Label {
+    margin-top: 1;
+}
+
+#preset-description {
+    height: 4;
+}
+
+#preset-advanced {
+    margin-top: 0;
+    border-top: none;
+    padding: 0;
+}
+
+#preset-form-error {
+    color: $error;
+    padding: 0;
+    height: auto;
+    margin-top: 1;
+}
+
+/* ============================================================================
+ * BatchScreen — procesar lote desde batch_jobs/
+ * ============================================================================ */
+
+BatchScreen {
+    align: center top;
+}
+
+#batch-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#batch-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#batch-subtitle {
+    height: auto;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#batch-counters {
+    height: 1;
+    content-align: left middle;
+    padding: 0;
+    margin-bottom: 1;
+}
+
+#batch-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#batch-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 2;
+    content-align: center middle;
+}

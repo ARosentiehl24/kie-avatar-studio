@@ -1,0 +1,110 @@
+# Workflow de release: en cada push de tag `vX.Y.Z`, buildea Windows
+# `.exe` + installer Inno Setup + sube ambos a GitHub Releases.
+#
+# Trigger manual: `gh workflow run release.yml -f tag=v1.2.3` (no recomendado,
+# preferí pushear el tag).
+#
+# Requiere:
+# - Repo público (releases sin auth para usuarios).
+# - GITHUB_TOKEN (built-in en Actions): permiso write a releases.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build .exe with PyInstaller
+        run: |
+          pyinstaller packaging/kie_avatar_studio.spec --noconfirm
+
+      - name: Extract version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          $version = $ref -replace "^v", ""
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build Inno Setup installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+              /DAppVersion=${{ steps.ver.outputs.version }} `
+              packaging/inno_setup.iss
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/KieAvatarStudio.exe
+            dist/KieAvatarStudio-Setup-v*.exe
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for CHANGELOG)
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extrae la sección [X.Y.Z] del CHANGELOG hasta la próxima sección
+          # o EOF. Si no encuentra, deja notas vacías (lo cual GitHub
+          # Release reemplaza con un placeholder genérico).
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (in_section) exit
+              if (index($0, "[" ver "]")) in_section = 1
+              else next
+            }
+            in_section { print }
+          ' CHANGELOG.md > release_notes.md || true
+          if [ ! -s release_notes.md ]; then
+            echo "Sin notas en CHANGELOG.md para $VERSION." > release_notes.md
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Kie Avatar Studio ${{ github.ref_name }}"
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/KieAvatarStudio.exe
+            dist/KieAvatarStudio-Setup-v*.exe
