@@ -6,6 +6,16 @@ MINOR, **S** → PATCH.
 
 ## [Unreleased]
 
+_Nada todavía. Próximos cambios se anotan acá antes del release._
+
+---
+
+## [1.0.1] — 2026-06-05
+
+Hotfix del .exe de v1.0.0, que no arrancaba en ningún caso (ni standalone
+ni instalado vía Inno Setup). Sin cambios funcionales user-visible: la
+TUI corre exactamente igual en modo dev.
+
 ### Fixed (S)
 
 - **Build de Windows .exe**: `dist/KieAvatarStudio.exe` fallaba al
@@ -15,8 +25,11 @@ MINOR, **S** → PATCH.
   imports relativos del paquete. Se introdujo `packaging/entry.py` como
   wrapper con import absoluto y se actualizó `packaging/kie_avatar_studio.spec`
   para apuntar al wrapper (más paths absolutos derivados de `SPECPATH`
-  para que la build sea independiente del CWD). Test guardrail nuevo en
-  `tests/test_main_entry.py`.
+  para que la build sea independiente del CWD). También se agregó
+  `collect_all('textual')` + `collect_submodules('pydantic'/'pydantic_settings')`
+  porque `textual.widgets` lazy-loadea sus submódulos (`_tab_pane`, etc.)
+  vía `__getattr__` y el analizador estático de PyInstaller no los veía.
+  Test guardrail nuevo en `tests/test_main_entry.py`.
 - **`.exe` instalado en Program Files**: `Settings.ensure_dirs()` usaba
   paths relativos al CWD (`./data`, `./logs`, ...). Al lanzar el shortcut
   generado por Inno Setup, el CWD era `C:\Program Files\Kie Avatar Studio\`
@@ -111,5 +124,6 @@ notificaciones del SO cross-platform; suite de 474 tests verdes.
 
 ---
 
-[Unreleased]: https://github.com/_/_/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/_/_/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/_/_/releases/tag/v1.0.1
 [1.0.0]: https://github.com/_/_/releases/tag/v1.0.0
