@@ -11,9 +11,18 @@ import httpx
 import pytest
 
 from kie_avatar_studio.app_layer.queue_manager import QueueManager
+from kie_avatar_studio.app_layer.runner_factories import (
+    AudioRunnerDeps,
+    ImageRunnerDeps,
+    WorkflowRunnerFactory,
+)
+from kie_avatar_studio.app_layer.workflow_base_resolver import WorkflowBaseResolver
 from kie_avatar_studio.app_layer.workflow_controller import WorkflowController
 from kie_avatar_studio.app_layer.workflow_lifecycle import WorkflowLifecycle
-from kie_avatar_studio.app_layer.workflow_runner import WorkflowRunner
+from kie_avatar_studio.app_layer.workflow_runner import (
+    WorkflowRunner,
+    WorkflowRunnerDeps,
+)
 from kie_avatar_studio.app_layer.workflow_step_runner import WorkflowStepRunner
 from kie_avatar_studio.config import Settings
 from kie_avatar_studio.domain.events import WorkflowJobUpdated
@@ -187,30 +196,49 @@ async def e2e_setup(tmp_settings: Settings):
     )
 
     capacity_limiter = asyncio.Semaphore(4)
+    runner_factory = WorkflowRunnerFactory(
+        image_deps=ImageRunnerDeps(
+            settings=settings,
+            client=kie,
+            image_jobs_repo=image_jobs_db,
+            generated_images_store=generated_db,
+            uploaded_images_store=images_db,
+        ),
+        audio_deps=AudioRunnerDeps(
+            settings=settings,
+            client=kie,
+            audio_jobs_repo=audio_jobs_db,
+            audios_store=audios_db,
+        ),
+    )
     step_runner = WorkflowStepRunner(
         settings,
         kie,
         capacity_limiter,
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
-        uploaded_images_store=images_db,
-        audio_jobs_repo=audio_jobs_db,
-        audios_store=audios_db,
+        runner_factory=runner_factory,
     )
     manifest_writer = AtomicWorkflowManifestWriter()
-    workflow_runner = WorkflowRunner(
+    base_resolver = WorkflowBaseResolver(
         settings,
         kie,
-        workflow_db,
-        manifest_writer,
-        step_runner,
         presets,
         images_db,
         generated_db,
         image_jobs_db,
-        audio_jobs_db,
-        audios_db,
         capacity_limiter,
+        runner_factory,
+    )
+    workflow_runner = WorkflowRunner(
+        settings,
+        kie,
+        WorkflowRunnerDeps(
+            repository=workflow_db,
+            manifest_writer=manifest_writer,
+            step_runner=step_runner,
+            base_resolver=base_resolver,
+        ),
     )
     lifecycle = WorkflowLifecycle(workflow_db)
     workflow_limiter = asyncio.Semaphore(1)
@@ -449,30 +477,49 @@ async def test_e2e_partially_failed_when_some_steps_fail(
     )
 
     capacity_limiter = asyncio.Semaphore(4)
+    runner_factory = WorkflowRunnerFactory(
+        image_deps=ImageRunnerDeps(
+            settings=settings,
+            client=kie,
+            image_jobs_repo=image_jobs_db,
+            generated_images_store=generated_db,
+            uploaded_images_store=images_db,
+        ),
+        audio_deps=AudioRunnerDeps(
+            settings=settings,
+            client=kie,
+            audio_jobs_repo=audio_jobs_db,
+            audios_store=audios_db,
+        ),
+    )
     step_runner = WorkflowStepRunner(
         settings,
         kie,
         capacity_limiter,
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
-        uploaded_images_store=images_db,
-        audio_jobs_repo=audio_jobs_db,
-        audios_store=audios_db,
+        runner_factory=runner_factory,
     )
     manifest_writer = AtomicWorkflowManifestWriter()
-    workflow_runner = WorkflowRunner(
+    base_resolver = WorkflowBaseResolver(
         settings,
         kie,
-        workflow_db,
-        manifest_writer,
-        step_runner,
         presets,
         images_db,
         generated_db,
         image_jobs_db,
-        audio_jobs_db,
-        audios_db,
         capacity_limiter,
+        runner_factory,
+    )
+    workflow_runner = WorkflowRunner(
+        settings,
+        kie,
+        WorkflowRunnerDeps(
+            repository=workflow_db,
+            manifest_writer=manifest_writer,
+            step_runner=step_runner,
+            base_resolver=base_resolver,
+        ),
     )
     lifecycle = WorkflowLifecycle(workflow_db)
     queue: QueueManager[WorkflowJob, WorkflowJobUpdated] = QueueManager(

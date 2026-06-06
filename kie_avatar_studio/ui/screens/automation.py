@@ -20,17 +20,26 @@ from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from ...app_layer.workflow_controller import WorkflowController
+from ...domain.errors import (
+    KieError,
+    WorkflowStepError,
+    WorkflowValidationError,
+)
 from ...domain.events import WorkflowJobUpdated
 from ...domain.models import (
     WorkflowEntry,
     WorkflowJob,
     WorkflowStatus,
-    WorkflowStepStatus,
 )
 from .._counters import format_full_counters
 from .._icons import ERROR, OK
 from .._table_helpers import get_selected_row_key, select_row_by_key
 from .._text_format import truncate
+from ._workflow_format import (
+    build_workflow_run_summary,
+    format_warnings,
+    format_workflow_status_cell,
+)
 from .configure_workflow import ConfigureWorkflowScreen
 from .workflow_detail import WorkflowDetailScreen
 
@@ -171,7 +180,7 @@ class AutomationScreen(Screen[None]):
                     voice_preset_id=voice_preset_id,
                     audio_language=audio_language,
                 )
-            except Exception as exc:
+            except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
                 self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
                 return
             self._set_status(
@@ -245,7 +254,7 @@ class AutomationScreen(Screen[None]):
             steps = len(payload.get("run", []) if isinstance(payload.get("run"), list) else [])
             if entry.valid:
                 status_cell = f"[green]{OK} listo[/green]"
-                detail_cell = _format_warnings(entry.warnings)
+                detail_cell = format_warnings(entry.warnings)
             else:
                 status_cell = f"[red]{ERROR} error[/red]"
                 detail_cell = (
@@ -267,8 +276,8 @@ class AutomationScreen(Screen[None]):
         previous = get_selected_row_key(table)
         table.clear()
         for workflow in workflows:
-            status_cell = _format_status_cell(workflow.status)
-            summary = _build_summary(workflow)
+            status_cell = format_workflow_status_cell(workflow.status)
+            summary = build_workflow_run_summary(workflow)
             table.add_row(
                 truncate(workflow.id, 22),
                 truncate(workflow.name, _NAME_PREVIEW_LEN),
@@ -338,40 +347,6 @@ class AutomationScreen(Screen[None]):
         bar.update(f"[red]{message}[/red]" if error else message)
         timeout = _LONG_NOTIFICATION_TIMEOUT if error else _NOTIFICATION_TIMEOUT
         self.notify(message, severity="error" if error else "information", timeout=timeout)
-
-
-def _format_warnings(warnings: list[str]) -> str:
-    if not warnings:
-        return "—"
-    preview = truncate("; ".join(warnings), 60)
-    return f"[yellow]{preview}[/yellow]"
-
-
-def _format_status_cell(status: WorkflowStatus) -> str:
-    if status == WorkflowStatus.COMPLETED:
-        return f"[green]{OK} {status.value}[/green]"
-    if status in {WorkflowStatus.FAILED, WorkflowStatus.PARTIALLY_FAILED}:
-        return f"[red]{ERROR} {status.value}[/red]"
-    if status == WorkflowStatus.CANCELLED:
-        return f"[dim]{status.value}[/dim]"
-    if status in {WorkflowStatus.RUNNING, WorkflowStatus.PREPARING_BASE}:
-        return f"[cyan]{status.value}[/cyan]"
-    return f"[yellow]{status.value}[/yellow]"
-
-
-def _build_summary(workflow: WorkflowJob) -> str:
-    if workflow.error:
-        return f"[red]{truncate(workflow.error, 60)}[/red]"
-    completed = sum(1 for s in workflow.steps if s.status == WorkflowStepStatus.COMPLETED)
-    failed = sum(1 for s in workflow.steps if s.status == WorkflowStepStatus.FAILED)
-    parts: list[str] = []
-    if completed:
-        parts.append(f"{completed} ok")
-    if failed:
-        parts.append(f"{failed} fail")
-    if not parts:
-        return "—"
-    return " · ".join(parts)
 
 
 _BUTTON_HANDLERS: dict[str, Callable[[AutomationScreen], Awaitable[None]]] = {

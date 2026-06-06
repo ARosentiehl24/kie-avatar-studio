@@ -32,14 +32,20 @@ from .app_layer.log_reader import LogReader
 from .app_layer.notification_bridge import JobNotificationBridge
 from .app_layer.presets_controller import VoicePresetsController
 from .app_layer.queue_manager import QueueManager
+from .app_layer.runner_factories import (
+    AudioRunnerDeps,
+    ImageRunnerDeps,
+    WorkflowRunnerFactory,
+)
 from .app_layer.settings_controller import SettingsController
 from .app_layer.system_opener import open_local_path, open_url
 from .app_layer.update_checker import UpdateChecker
 from .app_layer.video_job_lifecycle import VideoJobLifecycle
 from .app_layer.videos_controller import VideosController
+from .app_layer.workflow_base_resolver import WorkflowBaseResolver
 from .app_layer.workflow_controller import WorkflowController
 from .app_layer.workflow_lifecycle import WorkflowLifecycle
-from .app_layer.workflow_runner import WorkflowRunner
+from .app_layer.workflow_runner import WorkflowRunner, WorkflowRunnerDeps
 from .app_layer.workflow_step_runner import WorkflowStepRunner
 from .config import Settings, load_settings
 from .domain.events import (
@@ -228,29 +234,48 @@ class KieAvatarStudioApp(App[None]):
         # que sus sub-jobs (que también compiten por el global) terminen.
         self.workflow_db = WorkflowDB(self.settings.db_path)
         self.workflow_manifest_writer = AtomicWorkflowManifestWriter()
+        self.workflow_runner_factory = WorkflowRunnerFactory(
+            image_deps=ImageRunnerDeps(
+                settings=self.settings,
+                client=self.kie,
+                image_jobs_repo=self.image_jobs_db,
+                generated_images_store=self.generated_images_db,
+                uploaded_images_store=self.images_db,
+            ),
+            audio_deps=AudioRunnerDeps(
+                settings=self.settings,
+                client=self.kie,
+                audio_jobs_repo=self.audio_jobs_db,
+                audios_store=self.audios_db,
+            ),
+        )
         self.workflow_step_runner = WorkflowStepRunner(
             self.settings,
             self.kie,
             self._capacity_limiter,
             image_jobs_repo=self.image_jobs_db,
             generated_images_store=self.generated_images_db,
-            uploaded_images_store=self.images_db,
-            audio_jobs_repo=self.audio_jobs_db,
-            audios_store=self.audios_db,
+            runner_factory=self.workflow_runner_factory,
         )
-        self.workflow_runner = WorkflowRunner(
+        self.workflow_base_resolver = WorkflowBaseResolver(
             self.settings,
             self.kie,
-            self.workflow_db,
-            self.workflow_manifest_writer,
-            self.workflow_step_runner,
             self.presets_store,
             self.images_db,
             self.generated_images_db,
             self.image_jobs_db,
-            self.audio_jobs_db,
-            self.audios_db,
             self._capacity_limiter,
+            self.workflow_runner_factory,
+        )
+        self.workflow_runner = WorkflowRunner(
+            self.settings,
+            self.kie,
+            WorkflowRunnerDeps(
+                repository=self.workflow_db,
+                manifest_writer=self.workflow_manifest_writer,
+                step_runner=self.workflow_step_runner,
+                base_resolver=self.workflow_base_resolver,
+            ),
         )
         self.workflow_lifecycle = WorkflowLifecycle(self.workflow_db)
         self._workflows_limiter = asyncio.Semaphore(

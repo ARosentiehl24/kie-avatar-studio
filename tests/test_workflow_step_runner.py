@@ -10,12 +10,20 @@ from pathlib import Path
 import httpx
 import pytest
 
+from kie_avatar_studio.app_layer.runner_factories import (
+    AudioRunnerDeps,
+    ImageRunnerDeps,
+    WorkflowRunnerFactory,
+)
+from kie_avatar_studio.app_layer.workflow_execution_context import (
+    DEFAULT_TURBO_MODEL,
+    WorkflowExecutionContext,
+)
 from kie_avatar_studio.app_layer.workflow_step_runner import (
     A_ROLL_VIDEO_FILENAME,
     AUDIO_FILENAME,
     B_ROLL_VIDEO_FILENAME,
     SCENE_IMAGE_FILENAME,
-    WorkflowExecutionContext,
     WorkflowStepRunner,
 )
 from kie_avatar_studio.config import Settings
@@ -162,15 +170,28 @@ async def step_runner_setup(
         )
     )
     limiter = asyncio.Semaphore(2)
+    runner_factory = WorkflowRunnerFactory(
+        image_deps=ImageRunnerDeps(
+            settings=tmp_settings,
+            client=kie_with_handler,
+            image_jobs_repo=image_jobs,
+            generated_images_store=generated,
+            uploaded_images_store=images_db,
+        ),
+        audio_deps=AudioRunnerDeps(
+            settings=tmp_settings,
+            client=kie_with_handler,
+            audio_jobs_repo=audio_jobs,
+            audios_store=audios_db,
+        ),
+    )
     runner = WorkflowStepRunner(
         tmp_settings,
         kie_with_handler,
         limiter,
         image_jobs_repo=image_jobs,
         generated_images_store=generated,
-        uploaded_images_store=images_db,
-        audio_jobs_repo=audio_jobs,
-        audios_store=audios_db,
+        runner_factory=runner_factory,
     )
     return runner, limiter, tmp_settings.outputs_dir / "wf_test_001"
 
@@ -389,15 +410,28 @@ async def test_failed_step_marks_remaining_progress_as_failed(
     await image_jobs.init()
     generated = GeneratedImagesDB(settings.db_path)
     await generated.init()
+    runner_factory = WorkflowRunnerFactory(
+        image_deps=ImageRunnerDeps(
+            settings=settings,
+            client=client,
+            image_jobs_repo=image_jobs,
+            generated_images_store=generated,
+            uploaded_images_store=images_db,
+        ),
+        audio_deps=AudioRunnerDeps(
+            settings=settings,
+            client=client,
+            audio_jobs_repo=audio_jobs,
+            audios_store=audios_db,
+        ),
+    )
     runner = WorkflowStepRunner(
         settings,
         client,
         asyncio.Semaphore(2),
         image_jobs_repo=image_jobs,
         generated_images_store=generated,
-        uploaded_images_store=images_db,
-        audio_jobs_repo=audio_jobs,
-        audios_store=audios_db,
+        runner_factory=runner_factory,
     )
     step = _b_roll_with_text_step()
     context = _make_context(settings.outputs_dir / "wf_fail")
@@ -436,7 +470,7 @@ async def test_resolved_voice_settings_injects_language_code() -> None:
     assert settings.language_code == "es-419"
     assert settings.stability == 0.5
     # tts_model es turbo cuando audio_language está seteado.
-    assert ctx.tts_model == "elevenlabs/text-to-speech-turbo-v2-5"
+    assert ctx.tts_model == DEFAULT_TURBO_MODEL
 
 
 async def test_tts_model_none_when_no_audio_language() -> None:

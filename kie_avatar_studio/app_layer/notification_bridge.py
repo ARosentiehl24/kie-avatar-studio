@@ -115,6 +115,17 @@ _WORKFLOW_SPEC: Final[_NotifySpec] = _NotifySpec(
     success_hint="Mirá los outputs en la carpeta del workflow",
 )
 
+_WORKFLOW_PARTIAL_SPEC: Final[_NotifySpec] = _NotifySpec(
+    # Tratamos PARTIALLY_FAILED como un "completed with warnings": el usuario
+    # tiene algunos outputs útiles pero también algún step que falló.
+    completed_status=WorkflowStatus.PARTIALLY_FAILED,
+    failed_status=WorkflowStatus.FAILED,
+    label_extractor=_workflow_label,
+    title_ok="⚠️ Workflow parcialmente completado",
+    title_fail="❌ Workflow falló",
+    success_hint="Mirá los outputs (algunos steps fallaron, revisá el detalle)",
+)
+
 
 class JobNotificationBridge:
     """Listener de queues que dispara notificaciones del SO al terminar un job.
@@ -131,7 +142,13 @@ class JobNotificationBridge:
         # nuevos kinds sin tocar el __init__ (CR-2.2 OCP).
         self._notified: dict[int, set[str]] = {
             id(spec): set()
-            for spec in (_VIDEO_SPEC, _AUDIO_SPEC, _IMAGE_SPEC, _WORKFLOW_SPEC)
+            for spec in (
+                _VIDEO_SPEC,
+                _AUDIO_SPEC,
+                _IMAGE_SPEC,
+                _WORKFLOW_SPEC,
+                _WORKFLOW_PARTIAL_SPEC,
+            )
         }
         # Mantenemos referencia fuerte a las tasks fire-and-forget para
         # que el GC no las recoja antes de que el subprocess termine.
@@ -149,7 +166,11 @@ class JobNotificationBridge:
         self._handle_event(_IMAGE_SPEC, event.job)
 
     def on_workflow_event(self, event: WorkflowJobUpdated) -> None:
+        # Despachamos contra dos specs: uno cubre COMPLETED/FAILED, el otro
+        # cubre PARTIALLY_FAILED como "completed con warnings". El dedup
+        # por (spec, id) garantiza que se notifica una vez por kind.
         self._handle_event(_WORKFLOW_SPEC, event.job)
+        self._handle_event(_WORKFLOW_PARTIAL_SPEC, event.job)
 
     # --- internals -----------------------------------------------------
 

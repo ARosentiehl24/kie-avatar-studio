@@ -17,13 +17,14 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from ...app_layer.workflow_controller import WorkflowController
 from ...domain.events import WorkflowJobUpdated
-from ...domain.models import (
-    WorkflowJob,
-    WorkflowStep,
-    WorkflowStepStatus,
-)
-from .._icons import ERROR, OK
+from ...domain.models import WorkflowJob
 from .._text_format import truncate
+from ._workflow_format import (
+    format_outputs,
+    format_progress,
+    format_step_status,
+    format_workflow_status_label,
+)
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 
@@ -95,7 +96,9 @@ class WorkflowDetailScreen(Screen[None]):
     async def _refresh(self) -> None:
         workflow = await self._controller.get_workflow(self._workflow_id)
         if workflow is None:
-            self._set_status(f"workflow '{self._workflow_id}' no existe en la DB", error=True)
+            self._set_status(
+                f"workflow '{self._workflow_id}' no existe en la DB", error=True
+            )
             return
         self._update_header(workflow)
         self._refresh_steps_table(workflow)
@@ -108,7 +111,7 @@ class WorkflowDetailScreen(Screen[None]):
         if workflow.manifest_write_failed:
             manifest_note = "  ·  [yellow]manifest write FAILED (revisar logs)[/yellow]"
         self.query_one("#workflow-detail-meta", Static).update(
-            f"[b]Status:[/b] {_format_workflow_status(workflow)}  ·  "
+            f"[b]Status:[/b] {format_workflow_status_label(workflow)}  ·  "
             f"[b]Output:[/b] [dim]{workflow.output_dir}[/dim]{manifest_note}"
         )
 
@@ -120,9 +123,9 @@ class WorkflowDetailScreen(Screen[None]):
                 str(step.step),
                 truncate(step.scene_name, 28),
                 step.type.value,
-                _format_step_status(step),
-                _format_progress(step),
-                _format_outputs(step),
+                format_step_status(step),
+                format_progress(step),
+                format_outputs(step),
                 truncate(step.error or "—", 40),
                 key=str(step.step),
             )
@@ -138,63 +141,3 @@ class WorkflowDetailScreen(Screen[None]):
             severity="error" if error else "information",
             timeout=_NOTIFICATION_TIMEOUT,
         )
-
-
-# --- formatters ---------------------------------------------------------
-
-
-def _format_workflow_status(workflow: WorkflowJob) -> str:
-    status = workflow.status.value
-    if workflow.error:
-        return f"[red]{status}[/red] — {truncate(workflow.error, 60)}"
-    return f"[cyan]{status}[/cyan]"
-
-
-def _format_step_status(step: WorkflowStep) -> str:
-    status = step.status.value
-    if step.status == WorkflowStepStatus.COMPLETED:
-        return f"[green]{OK} {status}[/green]"
-    if step.status == WorkflowStepStatus.FAILED:
-        return f"[red]{ERROR} {status}[/red]"
-    if step.status == WorkflowStepStatus.CANCELLED:
-        return f"[dim]{status}[/dim]"
-    if step.status in {
-        WorkflowStepStatus.PREPARING,
-        WorkflowStepStatus.RENDERING,
-        WorkflowStepStatus.DOWNLOADING,
-    }:
-        return f"[cyan]{status}[/cyan]"
-    return f"[yellow]{status}[/yellow]"
-
-
-def _format_progress(step: WorkflowStep) -> str:
-    if not step.progress:
-        return "[dim]—[/dim]"
-    parts: list[str] = []
-    for key, status in sorted(step.progress.items(), key=lambda kv: kv[0].value):
-        color = _color_for_progress_status(status.value)
-        parts.append(f"{key.value}={color}")
-    return " · ".join(parts)
-
-
-def _color_for_progress_status(value: str) -> str:
-    if value == "completed":
-        return f"[green]{value}[/green]"
-    if value == "running":
-        return f"[cyan]{value}[/cyan]"
-    if value == "failed":
-        return f"[red]{value}[/red]"
-    if value == "skipped":
-        return f"[dim]{value}[/dim]"
-    return f"[yellow]{value}[/yellow]"
-
-
-def _format_outputs(step: WorkflowStep) -> str:
-    parts: list[str] = []
-    if step.scene_image_path:
-        parts.append("scene.png")
-    if step.audio_path:
-        parts.append("audio.mp3")
-    if step.video_path:
-        parts.append(step.video_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
-    return ", ".join(parts) if parts else "[dim]—[/dim]"

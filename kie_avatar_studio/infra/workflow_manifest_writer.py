@@ -23,10 +23,11 @@ próximo `_transition()` se regenera limpio.
 
 `os.replace` en Windows puede fallar con `PermissionError` si el target
 tiene un handle abierto por antivirus, OneDrive, indexador o un consumer
-externo. Mitigación: retry exponencial (50ms → 150ms → 500ms) ante
-`PermissionError`. Tras 3 intentos fallidos se devuelve `False` y el
-runner marca `workflow.manifest_write_failed=True` (NO bloquea el
-workflow: la DB sigue siendo la fuente de verdad).
+externo. Mitigación: hasta 4 intentos en total (1 inicial sin delay + 3
+con backoff exponencial 50ms → 150ms → 500ms). Tras agotar todos los
+intentos se devuelve `False` y el runner marca
+`workflow.manifest_write_failed=True` (NO bloquea el workflow: la DB es
+la fuente de verdad).
 
 ### No-locks
 

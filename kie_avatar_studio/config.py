@@ -89,6 +89,7 @@ class Settings(BaseSettings):
 
     default_voice: str = "EkK5I93UQWFDigLMpZcX"
     default_prompt: str = "Mirada a cámara, expresión natural, gestos suaves, tono confiado."
+    default_i2v_duration_seconds: int = 5
 
     notifications_enabled: bool = True
     update_check_enabled: bool = True
