@@ -103,9 +103,12 @@ class Settings(BaseSettings):
     inputs_dir: Path = Field(default_factory=lambda: _app_data_root() / "inputs")
     presets_dir: Path = Field(default_factory=lambda: _app_data_root() / "presets")
     batch_jobs_dir: Path = Field(default_factory=lambda: _app_data_root() / "batch_jobs")
+    workflows_dir: Path = Field(default_factory=lambda: _app_data_root() / "workflows")
     logs_dir: Path = Field(default_factory=lambda: _app_data_root() / "logs")
 
     log_level: str = "INFO"
+
+    max_parallel_workflows: int = 1
 
     def __init__(self, **data: Any) -> None:
         # Resolvemos `env_file` en cada instanciación (no al import time
@@ -128,6 +131,7 @@ class Settings(BaseSettings):
             self.inputs_dir,
             self.presets_dir,
             self.batch_jobs_dir,
+            self.workflows_dir,
             self.logs_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)

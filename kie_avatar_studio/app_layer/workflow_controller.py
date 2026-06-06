@@ -45,7 +45,7 @@ from .ids import sanitize_filename
 from .queue_manager import QueueManager
 
 WorkflowScanLoader = Callable[[], Awaitable[list[WorkflowEntry]]]
-WorkflowEntryBuilder = Callable[[WorkflowEntry, str, Path], WorkflowJob]
+WorkflowEntryBuilder = Callable[..., WorkflowJob]
 
 WorkflowEventListener = (
     Callable[[WorkflowJobUpdated], None] | Callable[[WorkflowJobUpdated], Awaitable[None]]
@@ -119,7 +119,7 @@ class WorkflowController:
             )
         workflow_id = self._new_workflow_id()
         output_dir = self._build_output_dir(workflow_id)
-        workflow = self._entry_builder(entry, workflow_id, output_dir)
+        workflow = self._entry_builder(entry, workflow_id=workflow_id, output_dir=output_dir)
         if voice_preset_id is not None:
             workflow.pre_settings.voice_preset_id = voice_preset_id
         if audio_language is not None:

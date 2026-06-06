@@ -31,6 +31,7 @@ class MenuItem:
 MAIN_MENU: Final[tuple[MenuItem, ...]] = (
     MenuItem(id="new_job", hotkey="N", label="Nuevo video", icon=_icons.MENU_VIDEO),
     MenuItem(id="batch", hotkey="B", label="Procesar lote", icon=_icons.MENU_BATCH),
+    MenuItem(id="automation", hotkey="F", label="Automatización", icon=_icons.MENU_AUTOMATION),
     MenuItem(id="queue", hotkey="G", label="Cola de trabajos", icon=_icons.MENU_QUEUE),
     MenuItem(id="history", hotkey="H", label="Historial", icon=_icons.MENU_HISTORY),
     MenuItem(id="presets", hotkey="P", label="Presets", icon=_icons.MENU_PRESETS),

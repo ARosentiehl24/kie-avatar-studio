@@ -211,7 +211,44 @@ La validación de enums + prompt + refs vive en `domain/policies.py`
 (`validate_image_prompt`, `validate_image_settings`, `validate_image_refs`);
 el cliente HTTP no valida nada (CR-2.1).
 
-## 6. Consultar task
+## 6. Crear task Kling 2.6 image-to-video (b-roll silencioso)
+
+Mismo endpoint `createTask`, modelo `kling-2.6/image-to-video`. Genera un
+video silencioso a partir de una imagen estática + prompt. Usado en el
+subsistema de **automatización** para los steps `type=b-roll`: el video
+no lleva audio sincronizado (a diferencia de Avatar Pro), así que si el
+step trae `text` no vacío, el audio TTS se descarga aparte para que el
+usuario lo monte en post-producción.
+
+```json
+{
+  "model": "kling-2.6/image-to-video",
+  "input": {
+    "image_url": "https://tempfile.redpandaai.co/.../scene.png",
+    "prompt": "Hands struggling to button jeans, cinematic close-up, raw natural light",
+    "duration": 5
+  }
+}
+```
+
+Restricciones del input:
+
+| Campo | Tipo | Rango | Default Kie | Notas |
+|---|---|---|---|---|
+| `image_url` | string URL | http(s) público | required | URL de imagen estática hosteada en Kie (típicamente `kie_url` de un `GeneratedImage` o de un `UploadedImage`) |
+| `prompt` | string | max **2500 chars** | required | Describe la acción a animar |
+| `duration` | int enum | `5` o `10` | `5` | Duración del clip en segundos |
+
+Respuesta y polling: idénticos al resto (`{ "data": { "taskId": "..." } }` + `recordInfo`).
+
+Costos (referencia, sujetos a cambio): ~$0.28 por video de 5s, ~$0.56
+por 10s. Validá en https://kie.ai/billing.
+
+Implementado en `KieClient.create_image_to_video_task(...)` (`infra/kie_client.py`).
+La validación de `duration` vive en `domain/policies.py:validate_i2v_duration`.
+El cliente HTTP no valida nada (CR-2.1).
+
+## 7. Consultar task
 
 ```http
 GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<TASK_ID>

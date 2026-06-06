@@ -6,6 +6,76 @@ MINOR, **S** → PATCH.
 
 ## [Unreleased]
 
+### Added (L)
+
+- **Subsistema de Automatización: workflows JSON declarativos end-to-end**.
+  Nueva pantalla `AutomationScreen` (hotkey `F`) que escanea
+  `workflows/*.json`, valida cada archivo y orquesta la ejecución
+  paralela de todos sus steps:
+  - Modelo de dominio: `WorkflowJob` + `WorkflowStep` + `ModelCreation`
+    + `WorkflowPreSettings` + enums `StepType` (`a-roll` / `b-roll`),
+    `WorkflowStatus`, `WorkflowStepStatus`, `WorkflowProgressKey` y
+    `WorkflowProgressStatus` (progreso granular tipado por
+    sub-componente).
+  - State machine por step según su tipo:
+    - **a-roll**: scene_image (opcional) + audio TTS + Avatar Pro →
+      `final.mp4` con audio embebido (NO se descarga audio aparte).
+    - **b-roll con `text`**: scene_image + audio TTS + Kling 2.6 i2v
+      (silencioso) → `video.mp4` + `audio.mp3` separados.
+    - **b-roll sin `text`**: scene_image + Kling 2.6 i2v → solo
+      `video.mp4`.
+  - Output por workflow:
+    `outputs/<wf_id>/{base.png, workflow.json, step_NN_<slug>/…}`.
+  - `WorkflowDB` con tablas `workflow_jobs` + `workflow_steps` y
+    `upsert_step` granular para evitar lost updates con steps
+    corriendo en paralelo.
+  - `AtomicWorkflowManifestWriter`: regenera `output_dir/workflow.json`
+    atómicamente en cada transición (tmp único por escritura + retry
+    exponencial ante `PermissionError` para mitigar antivirus/OneDrive
+    en Windows). Fallo permanente NO bloquea el workflow (se setea
+    `manifest_write_failed=True` y se sigue ejecutando — la DB es la
+    fuente de verdad).
+  - `WorkflowStepRunner` con 3 métodos separados por tipo de step
+    (CR-3.1 SRP) + `WorkflowRunner` orquestador con `asyncio.Lock` por
+    `workflow_id` (serializa transiciones de steps paralelos).
+  - **Dos limitadores distintos**: `_capacity_limiter` global (sub-jobs
+    Kie hoja: image/audio/video) compartido entre las 4 colas, y
+    `_workflows_limiter` exclusivo del workflow_queue (default
+    `max_parallel_workflows=1`). Evita el deadlock que ocurriría si un
+    workflow consumiera un slot global esperando a sus propios sub-jobs.
+  - `CapacityLimitedExecutor`: wrapper que adquiere el limiter global
+    antes de delegar al runner hoja. Permite al `WorkflowStepRunner`
+    invocar los runners directos (no via queue) sin perder el límite
+    compartido.
+  - Validación cruzada del preset de voz al encolar (existe en
+    `VoicePresetStore`) + revalidación del path local en
+    `method=local` justo antes del upload (mitiga la race del archivo
+    movido entre validación y ejecución).
+  - Política TTS automática: `audio_language` no `None` fuerza el
+    modelo turbo (`elevenlabs/text-to-speech-turbo-v2-5`, acepta
+    `language_code`); `None` usa el multilingual default.
+  - Nueva pantalla `WorkflowDetailScreen` con tabla de steps + status
+    + progress granular por sub-componente.
+  - Modal `ConfigureWorkflowScreen`: pre-llena `voice_preset` +
+    `audio_language` del JSON; permite editarlos antes de encolar sin
+    tocar el archivo.
+  - Soporte de `voice_preset` (alias) ↔ `voice_preset_id` (atributo
+    Python) para que el JSON del usuario use el nombre legible mientras
+    el código interno mantiene el sufijo `_id`.
+  - Schema validators que distinguen errores estructurales
+    (excepciones) de warnings no bloqueantes (b-roll con
+    `change_background=False`, p.ej.).
+  - Restore al arrancar: workflows en estado no-terminal se marcan
+    FAILED y el manifest se regenera inmediatamente para que un
+    consumer externo no vea snapshot stale post-crash.
+- **Endpoint Kie nuevo**: `kling-2.6/image-to-video` (b-roll silencioso).
+  Implementado en `KieClient.create_image_to_video_task`. Documentado
+  en `docs/API_KIE.md` §6.
+- Nuevo hotkey global `F` (Automatización) + icono `🤖` en `_icons.py`.
+- `Settings.workflows_dir` (default `./workflows/`) y
+  `Settings.max_parallel_workflows` (default 1).
+- Carpeta `workflows/` con README + ejemplo del JSON canónico.
+
 ### Added (M)
 
 - **Generación de imágenes con Nano Banana 2 (Google) vía Kie**. Nuevo

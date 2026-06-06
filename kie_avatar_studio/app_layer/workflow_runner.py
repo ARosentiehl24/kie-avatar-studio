@@ -110,6 +110,14 @@ class WorkflowRunner:
         # transicionando contra el mismo workflow object).
         self._locks: dict[str, asyncio.Lock] = {}
 
+    def set_notify(self, notify: WorkflowNotify | None) -> None:
+        """Permite cablear el callback de eventos después del __init__.
+
+        Útil para el composition root cuando el queue se construye después
+        del runner pero ambos se referencian mutuamente.
+        """
+        self._notify = notify
+
     async def run(self, job: WorkflowJob) -> WorkflowJob:
         try:
             validate_workflow(job)

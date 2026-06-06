@@ -101,7 +101,7 @@ paralelismo lo limita `asyncio.Semaphore(settings.max_parallel_jobs)`.
 
 ### Subsistemas paralelos al de video
 
-Hay **dos subsistemas independientes** al lado del de video, ambos con el mismo
+Hay **tres subsistemas independientes** al lado del de video, todos con el mismo
 patrón (job + runner + lifecycle + DBs + queue + controller + pantalla). No
 mezclar lógica con `JobRunner` (CR-2.1).
 
@@ -128,6 +128,62 @@ dentro de `Imágenes` (I)):
 - `infra/generated_images_db.py` — persiste `GeneratedImage`.
 - `domain/models.py` define `ImageJob`, `ImageJobStatus`, `GeneratedImage`,
   `ImageGenerationSettings`, `ImageAssetKind`, `ImageAssetRef`.
+
+**Automatización** (workflows JSON end-to-end, pantalla `AutomationScreen`
+con hotkey **F**):
+
+- `app_layer/workflow_runner.py` — `WorkflowRunner` orquesta UN
+  `WorkflowJob` con `asyncio.Lock` por workflow_id (serializa transiciones
+  de steps paralelos).
+- `app_layer/workflow_step_runner.py` — `WorkflowStepRunner` con 3
+  métodos separados por tipo (`_run_a_roll`, `_run_b_roll_with_audio`,
+  `_run_b_roll_silent`). Reusa `ImageJobRunner` + `AudioJobRunner` para
+  sub-jobs y llama `KieGateway` directo para Avatar Pro / i2v.
+- `app_layer/workflow_lifecycle.py` — cancel/retry rules.
+- `app_layer/workflow_controller.py` — casos de uso UI (enqueue, list,
+  cancel, retry, subscribe).
+- `app_layer/workflow_kie_helpers.py` — helpers `render_avatar_video`,
+  `render_i2v_video`, `download_kie_asset` compartidos por los 3 paths.
+- `app_layer/job_executor.py` — `CapacityLimitedExecutor` wrapper que
+  adquiere el limiter global antes de delegar al runner hoja
+  (permite invocar runners directos respetando el límite compartido).
+- `infra/workflow_db.py` — `WorkflowDB` con tablas `workflow_jobs` +
+  `workflow_steps`. `upsert_step(workflow_id, step)` granular evita
+  lost updates entre steps paralelos.
+- `infra/workflow_loader.py` — escanea `workflows/*.json`, parsea,
+  valida, devuelve `WorkflowEntry`s con `errors` / `warnings` poblados.
+- `infra/workflow_manifest_writer.py` — `AtomicWorkflowManifestWriter`
+  regenera `output_dir/workflow.json` atómicamente en cada transición
+  (tmp único por escritura + retry exponencial ante `PermissionError`
+  para mitigar antivirus en Windows; fallo no bloquea ejecución —
+  setea `manifest_write_failed=True` y sigue).
+- `domain/models.py` define `WorkflowJob`, `WorkflowStep`,
+  `ModelCreation`, `WorkflowPreSettings`, `WorkflowStatus`,
+  `WorkflowStepStatus`, `WorkflowProgressKey`, `WorkflowProgressStatus`,
+  `WorkflowEntry`, `StepType`.
+- `domain/ports.py` declara `WorkflowRepository` y `WorkflowManifestWriter`
+  como Protocols (DIP: app_layer no importa infra).
+
+**Dos limitadores distintos** en `app.py`:
+
+- `_capacity_limiter = Semaphore(max_parallel_jobs)` compartido entre
+  las 4 colas (video / audio / image / workflow-sub-jobs).
+- `_workflows_limiter = Semaphore(max_parallel_workflows)` exclusivo del
+  `workflow_queue`. Evita el deadlock que ocurriría si un workflow
+  ocupara un slot global esperando a sus propios sub-jobs.
+
+**Manifest atómico**: SQLite es la fuente de verdad runtime; el
+`workflow.json` es snapshot derivado regenerado en cada transición.
+Para consumir desde scripts externos: leer el JSON (NO la DB). Para la
+lógica de la app: leer la DB. Al restart, los workflows en estado
+no-terminal se marcan FAILED y los manifests se regeneran inmediatamente
+para que un consumer externo no vea snapshot stale post-crash.
+
+**Política TTS del workflow**: si `pre_settings.audio_language` no es
+`None`, el `WorkflowStepRunner` fuerza el modelo turbo
+(`elevenlabs/text-to-speech-turbo-v2-5`, acepta `language_code`); si es
+`None`, usa el multilingual default. Evita el 422 que el multilingual
+devuelve cuando se le manda `language_code`.
 
 **Reuso de imagen entre subsistemas**: el `kie_url` de un `GeneratedImage`
 es válido como `image_url` del `VideoJob`. `VideosController.enqueue_from_assets()`

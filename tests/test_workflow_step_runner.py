@@ -128,7 +128,7 @@ async def kie_with_handler(
     await client._client.aclose()
     client._client = httpx.AsyncClient(
         transport=httpx.MockTransport(mock_handler.handle),
-        headers={"Authorization": f"Bearer test"},
+        headers={"Authorization": "Bearer test"},
     )
     yield client
     await client.aclose()

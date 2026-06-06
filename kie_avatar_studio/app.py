@@ -37,12 +37,22 @@ from .app_layer.system_opener import open_local_path, open_url
 from .app_layer.update_checker import UpdateChecker
 from .app_layer.video_job_lifecycle import VideoJobLifecycle
 from .app_layer.videos_controller import VideosController
+from .app_layer.workflow_controller import WorkflowController
+from .app_layer.workflow_lifecycle import WorkflowLifecycle
+from .app_layer.workflow_runner import WorkflowRunner
+from .app_layer.workflow_step_runner import WorkflowStepRunner
 from .config import Settings, load_settings
-from .domain.events import AudioJobUpdated, ImageJobUpdated, JobUpdated
+from .domain.events import (
+    AudioJobUpdated,
+    ImageJobUpdated,
+    JobUpdated,
+    WorkflowJobUpdated,
+)
 from .domain.models import (
     AUDIO_RESUMABLE_STATUSES,
     IMAGE_RESUMABLE_STATUSES,
     RESUMABLE_STATUSES,
+    WORKFLOW_RESUMABLE_STATUSES,
     AudioJob,
     AudioJobStatus,
     BatchEntry,
@@ -53,6 +63,9 @@ from .domain.models import (
     ImageJobStatus,
     UploadedImage,
     VideoJob,
+    WorkflowEntry,
+    WorkflowJob,
+    WorkflowStatus,
 )
 from .domain.ports import DesktopNotifier
 from .infra.audio_downloader import download_audio
@@ -74,8 +87,12 @@ from .infra.logging import (
 )
 from .infra.notifier import NullNotifier, SystemNotifier
 from .infra.presets_store import VoicePresetsStore
+from .infra.workflow_db import WorkflowDB
+from .infra.workflow_loader import build_workflow_from_entry, scan_workflows_dir
+from .infra.workflow_manifest_writer import AtomicWorkflowManifestWriter
 from .ui.menu import MENU_BY_ID, MenuItem
 from .ui.screens.audios import AudiosScreen
+from .ui.screens.automation import AutomationScreen
 from .ui.screens.batch import BatchScreen
 from .ui.screens.history import HistoryScreen
 from .ui.screens.images import ImagesScreen
@@ -104,6 +121,7 @@ _NEW_JOB_ITEM_ID: Final[str] = "new_job"
 _QUEUE_ITEM_ID: Final[str] = "queue"
 _PRESETS_ITEM_ID: Final[str] = "presets"
 _BATCH_ITEM_ID: Final[str] = "batch"
+_AUTOMATION_ITEM_ID: Final[str] = "automation"
 
 _ENV_FILE_NAME: Final[str] = ".env"
 
@@ -129,6 +147,7 @@ class KieAvatarStudioApp(App[None]):
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("n", "select('new_job')", "Nuevo"),
         Binding("b", "select('batch')", "Lote"),
+        Binding("f", "select('automation')", "Auto"),
         Binding("g", "select('queue')", "Cola"),
         Binding("h", "select('history')", "Historial"),
         Binding("p", "select('presets')", "Presets"),
@@ -204,6 +223,50 @@ class KieAvatarStudioApp(App[None]):
             lifecycle=self.image_lifecycle,
             capacity_limiter=self._capacity_limiter,
         )
+        # Workflow subsystem: limiter PROPIO (no comparte el global de Kie)
+        # para evitar deadlock cuando el orquestador toma un slot esperando
+        # que sus sub-jobs (que también compiten por el global) terminen.
+        self.workflow_db = WorkflowDB(self.settings.db_path)
+        self.workflow_manifest_writer = AtomicWorkflowManifestWriter()
+        self.workflow_step_runner = WorkflowStepRunner(
+            self.settings,
+            self.kie,
+            self._capacity_limiter,
+            image_jobs_repo=self.image_jobs_db,
+            generated_images_store=self.generated_images_db,
+            uploaded_images_store=self.images_db,
+            audio_jobs_repo=self.audio_jobs_db,
+            audios_store=self.audios_db,
+        )
+        self.workflow_runner = WorkflowRunner(
+            self.settings,
+            self.kie,
+            self.workflow_db,
+            self.workflow_manifest_writer,
+            self.workflow_step_runner,
+            self.presets_store,
+            self.images_db,
+            self.generated_images_db,
+            self.image_jobs_db,
+            self.audio_jobs_db,
+            self.audios_db,
+            self._capacity_limiter,
+        )
+        self.workflow_lifecycle = WorkflowLifecycle(self.workflow_db)
+        self._workflows_limiter = asyncio.Semaphore(
+            max(1, self.settings.max_parallel_workflows)
+        )
+        self.workflow_queue: QueueManager[WorkflowJob, WorkflowJobUpdated] = QueueManager(
+            self.settings,
+            self.workflow_runner,
+            event_factory=WorkflowJobUpdated,
+            lifecycle=self.workflow_lifecycle,
+            capacity_limiter=self._workflows_limiter,
+        )
+        # El runner emite eventos via callback (porque cada transición de
+        # step necesita reescribir el manifest + notificar). Conectamos
+        # ese callback al queue:
+        self.workflow_runner.set_notify(self._dispatch_workflow_event)
         self.keys_controller = KeysController(self.keys_store, self._gateway_factory)
         self.settings_controller = SettingsController(self.settings, self.env_writer)
         self.images_controller = ImagesController(self.images_db, self.kie)
@@ -236,6 +299,17 @@ class KieAvatarStudioApp(App[None]):
         self.batch_controller = BatchController(
             scan_loader=self._scan_batch_dir,
             videos_controller=self.videos_controller,
+        )
+        self.workflow_controller = WorkflowController(
+            self.settings,
+            self.workflow_db,
+            self.workflow_manifest_writer,
+            self.workflow_queue,
+            scan_loader=self._scan_workflows_dir,
+            entry_builder=build_workflow_from_entry,
+            presets_store=self.presets_store,
+            uploaded_images=self.images_db,
+            generated_images=self.generated_images_db,
         )
         self.notifier: DesktopNotifier = (
             SystemNotifier() if self.settings.notifications_enabled else NullNotifier()
@@ -299,6 +373,17 @@ class KieAvatarStudioApp(App[None]):
 
         recovered_image = await self.image_queue.restore_pending(load_resumable_image_jobs)
 
+        # Workflows: por simplicidad/seguridad, los workflows en estados
+        # no terminales al arrancar se marcan FAILED. Cada sub-job hoja
+        # tiene su propio mecanismo de recovery (image_jobs, audio_jobs),
+        # pero el orquestador del workflow es stateful (locks, paralelismo)
+        # y reanudarlo a mitad sin haber persistido el step en ejecución
+        # podría duplicar trabajo. El usuario reintenta manualmente.
+        recovered_workflow = await self._mark_running_workflows_as_failed()
+        # Regeneramos el manifest de cada workflow tocado para que un
+        # consumer externo NO vea snapshot stale del crash anterior.
+        await self._regenerate_workflow_manifests()
+
         screen = MainMenuScreen(on_select=self._handle_menu_selection)
         await self.push_screen(screen)
         self._notify_startup_summary(
@@ -308,6 +393,7 @@ class KieAvatarStudioApp(App[None]):
             recovered=recovered,
             recovered_audio=recovered_audio,
             recovered_image=recovered_image,
+            recovered_workflow=recovered_workflow,
         )
 
     async def _init_stores(self) -> None:
@@ -318,6 +404,7 @@ class KieAvatarStudioApp(App[None]):
         await self.audio_jobs_db.init()
         await self.image_jobs_db.init()
         await self.generated_images_db.init()
+        await self.workflow_db.init()
         await self.presets_store.init()
         await self.keys_store.init()
 
@@ -338,8 +425,18 @@ class KieAvatarStudioApp(App[None]):
         self.queue.add_listener(self.notification_bridge.on_video_event)
         self.audio_queue.add_listener(self.notification_bridge.on_audio_event)
         self.image_queue.add_listener(self.notification_bridge.on_image_event)
+        self.workflow_queue.add_listener(self.notification_bridge.on_workflow_event)
         if self.settings.update_check_enabled:
             self.run_worker(self._check_for_update(), exclusive=True)
+
+    def _dispatch_workflow_event(self, workflow: WorkflowJob) -> None:
+        """Callback que el WorkflowRunner invoca tras cada transición.
+
+        Lo propagamos a los listeners del `workflow_queue` así las
+        pantallas UI reaccionan a las transiciones de los steps
+        individuales (no solo al final del run).
+        """
+        self.workflow_queue.notify_external(workflow)
 
     def _notify_startup_summary(
         self,
@@ -350,6 +447,7 @@ class KieAvatarStudioApp(App[None]):
         recovered: int,
         recovered_audio: int,
         recovered_image: int,
+        recovered_workflow: int = 0,
     ) -> None:
         if expired_images:
             self.notify(
@@ -387,6 +485,13 @@ class KieAvatarStudioApp(App[None]):
         if recovered_image:
             self.notify(
                 f"Se reanudaron {recovered_image} image jobs pendientes.",
+                title="Recuperación",
+                timeout=_NOTIFY_RECOVERY_TIMEOUT,
+            )
+        if recovered_workflow:
+            self.notify(
+                f"Se marcaron {recovered_workflow} workflows como FAILED tras el "
+                "reinicio (estado indeterminado, reintentalos manualmente).",
                 title="Recuperación",
                 timeout=_NOTIFY_RECOVERY_TIMEOUT,
             )
@@ -436,11 +541,59 @@ class KieAvatarStudioApp(App[None]):
             )
             await self.image_jobs_db.upsert(job)
 
+    async def _mark_running_workflows_as_failed(self) -> int:
+        """Marca como FAILED los workflows que quedaron en estado no terminal.
+
+        Los workflows son stateful (locks por workflow, paralelismo entre
+        steps, manifest derivado) y reanudarlos a mitad sin perder
+        consistencia es complejo. Política conservadora: el usuario los
+        reintenta manualmente. Cada sub-job hoja (image/audio) tiene su
+        propio mecanismo de recovery o se marcó FAILED arriba.
+        """
+        count = 0
+        for status in WORKFLOW_RESUMABLE_STATUSES:
+            stuck = await self.workflow_db.list_by_status(status)
+            for workflow in stuck:
+                logger.warning(
+                    "WorkflowJob {} ('{}') estaba en {} al arrancar; marcando FAILED "
+                    "(reintentar manualmente — sub-jobs hoja pudieron quedar a medias)",
+                    workflow.id,
+                    workflow.name,
+                    workflow.status.value,
+                )
+                workflow.status = WorkflowStatus.FAILED
+                workflow.error = (
+                    "App reiniciada con el workflow en ejecución. Reintentá "
+                    "manualmente. Revisá los outputs ya generados antes de "
+                    "re-ejecutar para no duplicar créditos."
+                )
+                await self.workflow_db.update_workflow_header(workflow)
+                count += 1
+        return count
+
+    async def _regenerate_workflow_manifests(self) -> None:
+        """Re-escribe `workflow.json` de todos los workflows persistidos.
+
+        Garantiza que el snapshot en disco refleje el estado de la DB
+        tras el restart (sino quedaría stale de antes del crash).
+        Best-effort: si una escritura falla, se loguea y se sigue.
+        """
+        recent = await self.workflow_db.list_recent(limit=100)
+        for workflow in recent:
+            ok = await self.workflow_manifest_writer.write(workflow)
+            if not ok:
+                logger.debug(
+                    "No se pudo regenerar manifest de workflow {} ({})",
+                    workflow.id,
+                    workflow.name,
+                )
+
     async def on_unmount(self) -> None:
         await self.audio_player.stop()
         await self.queue.drain()
         await self.audio_queue.drain()
         await self.image_queue.drain()
+        await self.workflow_queue.drain()
         await self.kie.aclose()
         logger.info("Kie Avatar Studio cerrado limpiamente")
 
@@ -468,7 +621,7 @@ class KieAvatarStudioApp(App[None]):
 
     # --- handler único de selección ---------------------------------------
 
-    def _handle_menu_selection(self, item_id: str) -> None:  # noqa: PLR0911, C901 — dispatch
+    def _handle_menu_selection(self, item_id: str) -> None:  # noqa: PLR0911, PLR0912, C901 — dispatch
         item: MenuItem | None = MENU_BY_ID.get(item_id)
         if item is None:
             return
@@ -547,6 +700,14 @@ class KieAvatarStudioApp(App[None]):
                 )
             )
             return
+        if item.id == _AUTOMATION_ITEM_ID:
+            self.push_screen(
+                AutomationScreen(
+                    controller=self.workflow_controller,
+                    workflows_dir=str(self.settings.workflows_dir),
+                )
+            )
+            return
         if item.pending_message:
             self.notify(
                 item.pending_message,
@@ -583,6 +744,10 @@ class KieAvatarStudioApp(App[None]):
             default_prompt=self.settings.default_prompt,
             default_voice=self.settings.default_voice,
         )
+
+    async def _scan_workflows_dir(self) -> list[WorkflowEntry]:
+        """Closure cableada al `WorkflowController`: escanea `workflows/`."""
+        return await scan_workflows_dir(self.settings.workflows_dir)
 
     # --- updater ----------------------------------------------------------
 

@@ -1,0 +1,1 @@
+{"workflow": "New", "pre_settings": {"audio_language": "es-419", "voice_preset": "warm", "model_creation": {"method": "prompt", "prompt": "A woman"}}, "run": [{"step": 1, "scene_name": "Hook", "type": "a-roll", "prompt": "Una persona habla a c\u00e1mara", "text": "Hola mundo"}]}

@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
-from ..domain.events import AudioJobUpdated, ImageJobUpdated, JobUpdated
+from ..domain.events import (
+    AudioJobUpdated,
+    ImageJobUpdated,
+    JobUpdated,
+    WorkflowJobUpdated,
+)
 from ..domain.models import (
     AudioJob,
     AudioJobStatus,
@@ -31,6 +36,8 @@ from ..domain.models import (
     ImageJobStatus,
     JobStatus,
     VideoJob,
+    WorkflowJob,
+    WorkflowStatus,
 )
 from ..domain.ports import DesktopNotifier
 
@@ -95,6 +102,20 @@ _IMAGE_SPEC: Final[_NotifySpec] = _NotifySpec(
 )
 
 
+def _workflow_label(workflow: WorkflowJob) -> str:
+    return workflow.name or workflow.id
+
+
+_WORKFLOW_SPEC: Final[_NotifySpec] = _NotifySpec(
+    completed_status=WorkflowStatus.COMPLETED,
+    failed_status=WorkflowStatus.FAILED,
+    label_extractor=_workflow_label,
+    title_ok="✅ Workflow completado",
+    title_fail="❌ Workflow falló",
+    success_hint="Mirá los outputs en la carpeta del workflow",
+)
+
+
 class JobNotificationBridge:
     """Listener de queues que dispara notificaciones del SO al terminar un job.
 
@@ -109,7 +130,8 @@ class JobNotificationBridge:
         # por id(spec) evita tres atributos paralelos y permite agregar
         # nuevos kinds sin tocar el __init__ (CR-2.2 OCP).
         self._notified: dict[int, set[str]] = {
-            id(spec): set() for spec in (_VIDEO_SPEC, _AUDIO_SPEC, _IMAGE_SPEC)
+            id(spec): set()
+            for spec in (_VIDEO_SPEC, _AUDIO_SPEC, _IMAGE_SPEC, _WORKFLOW_SPEC)
         }
         # Mantenemos referencia fuerte a las tasks fire-and-forget para
         # que el GC no las recoja antes de que el subprocess termine.
@@ -126,9 +148,16 @@ class JobNotificationBridge:
     def on_image_event(self, event: ImageJobUpdated) -> None:
         self._handle_event(_IMAGE_SPEC, event.job)
 
+    def on_workflow_event(self, event: WorkflowJobUpdated) -> None:
+        self._handle_event(_WORKFLOW_SPEC, event.job)
+
     # --- internals -----------------------------------------------------
 
-    def _handle_event(self, spec: _NotifySpec, job: VideoJob | AudioJob | ImageJob) -> None:
+    def _handle_event(
+        self,
+        spec: _NotifySpec,
+        job: VideoJob | AudioJob | ImageJob | WorkflowJob,
+    ) -> None:
         if job.status not in (spec.completed_status, spec.failed_status):
             return
         seen = self._notified[id(spec)]
@@ -137,13 +166,18 @@ class JobNotificationBridge:
         seen.add(job.id)
         self._schedule(self._notify(spec, job))
 
-    async def _notify(self, spec: _NotifySpec, job: VideoJob | AudioJob | ImageJob) -> None:
+    async def _notify(
+        self,
+        spec: _NotifySpec,
+        job: VideoJob | AudioJob | ImageJob | WorkflowJob,
+    ) -> None:
         success = job.status == spec.completed_status
         label = _short_label(spec.label_extractor(job))
         if success:
             # Para video usamos el output_path concreto si está; para los
-            # otros el hint genérico del spec.
-            output = getattr(job, "output_path", None)
+            # otros el hint genérico del spec. WorkflowJob.output_dir
+            # apunta al directorio con los outputs por step.
+            output = getattr(job, "output_path", None) or getattr(job, "output_dir", None)
             hint = output if output else spec.success_hint
             message = f"{label}\n→ {hint}"
             title = spec.title_ok
