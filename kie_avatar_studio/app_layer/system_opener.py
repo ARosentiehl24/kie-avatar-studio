@@ -74,11 +74,14 @@ def _launch(target: str) -> None:
     platform = sys.platform
     if platform == "win32":
         # `os.startfile` solo existe en Windows; importamos local para que
-        # mypy en plataformas no-Windows no marque el módulo. Ya lanza
-        # `OSError` por sí solo cuando falla, no hace falta envolver.
+        # mypy en plataformas no-Windows no marque el módulo. Combinamos
+        # `attr-defined` (necesario en Linux/Mac donde `os.startfile` no
+        # existe) con `unused-ignore` (necesario en Windows donde sí
+        # existe y warn_unused_ignores reportaría el ignore como muerto).
+        # El resultado es portable cross-platform sin tocar config global.
         import os
 
-        os.startfile(target)  # type: ignore[attr-defined] # noqa: S606
+        os.startfile(target)  # type: ignore[attr-defined, unused-ignore]  # noqa: S606
         return
     opener = _MACOS_OPENER if platform == "darwin" else _LINUX_OPENER
     if shutil.which(opener) is None:
