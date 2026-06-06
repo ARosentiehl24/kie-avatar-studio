@@ -468,7 +468,7 @@ async def test_resolved_voice_settings_injects_language_code() -> None:
 
 
 async def test_tts_model_none_when_no_audio_language() -> None:
-    """Sin `audio_language`, no se fuerza turbo (usa default multilingual)."""
+    """Sin `audio_language` y sin language_code en preset, no se fuerza turbo."""
     ctx = WorkflowExecutionContext(
         audio_language=None,
         voice_id="voice_x",
@@ -483,3 +483,48 @@ async def test_tts_model_none_when_no_audio_language() -> None:
         output_dir=Path("/tmp"),
     )
     assert ctx.tts_model is None
+
+
+async def test_tts_model_uses_turbo_when_preset_has_language_code() -> None:
+    """Si el preset tiene `language_code`, fuerza turbo aunque `audio_language` sea None.
+
+    Esto cubre el caso real del usuario: el preset trae `language_code='es'`
+    configurado desde `PresetFormScreen`, y el JSON NO trae `audio_language`.
+    Si usáramos el multilingual default, Kie devolvería 422 porque ese
+    modelo no acepta `language_code`.
+    """
+    ctx = WorkflowExecutionContext(
+        audio_language=None,
+        voice_id="voice_x",
+        voice_settings=VoiceSettings(language_code="es-419", stability=0.5),
+        base_image_ref=ImageAssetRef(
+            kind=ImageAssetKind.GENERATED,
+            id="x",
+            label="x",
+            kie_url="https://x",
+            expires_at=datetime.now(UTC),
+        ),
+        output_dir=Path("/tmp"),
+    )
+    assert ctx.tts_model == DEFAULT_TURBO_MODEL
+
+
+async def test_resolved_voice_settings_respects_preset_language_code() -> None:
+    """El `language_code` del preset tiene prioridad sobre `audio_language` del JSON."""
+    ctx = WorkflowExecutionContext(
+        audio_language="pt-BR",  # del JSON
+        voice_id="voice_x",
+        voice_settings=VoiceSettings(language_code="es-419"),  # del preset
+        base_image_ref=ImageAssetRef(
+            kind=ImageAssetKind.GENERATED,
+            id="x",
+            label="x",
+            kie_url="https://x",
+            expires_at=datetime.now(UTC),
+        ),
+        output_dir=Path("/tmp"),
+    )
+    settings = ctx.resolved_voice_settings()
+    assert settings is not None
+    # El preset gana: language_code='es-419' (no 'pt-BR' del JSON).
+    assert settings.language_code == "es-419"

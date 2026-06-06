@@ -173,6 +173,62 @@ async def test_enqueue_rejects_unknown_voice_preset(
         await controller.enqueue_entry(entries[0], voice_preset_id="nope")
 
 
+async def test_enqueue_resolves_preset_by_label(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    """El JSON puede usar el label legible y el controller lo normaliza al id real."""
+    controller, _, _, presets = workflow_controller_setup
+    # Borramos "warm" y creamos uno con label distinto al id slug.
+    await presets.delete("warm")
+    await presets.upsert(
+        VoicePreset(
+            id="locutora_calmada",
+            label="Locutora Calmada",
+            voice_id="N2lVS1w4EtoT3dr4eOWO",
+        )
+    )
+    entries = await controller.list_entries(refresh=True)
+    # El JSON dice voice_preset = "Locutora Calmada" (label exacto).
+    workflow = await controller.enqueue_entry(entries[0], voice_preset_id="Locutora Calmada")
+    # El controller normaliza al id real, no al label.
+    assert workflow.pre_settings.voice_preset_id == "locutora_calmada"
+
+
+async def test_enqueue_resolves_preset_by_label_case_insensitive(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    """El match por label es case-insensitive."""
+    controller, _, _, presets = workflow_controller_setup
+    await presets.delete("warm")
+    await presets.upsert(
+        VoicePreset(
+            id="narrador",
+            label="Narrador Documental",
+            voice_id="N2lVS1w4EtoT3dr4eOWO",
+        )
+    )
+    entries = await controller.list_entries(refresh=True)
+    workflow = await controller.enqueue_entry(entries[0], voice_preset_id="narrador documental")
+    assert workflow.pre_settings.voice_preset_id == "narrador"
+
+
+async def test_enqueue_prefers_id_over_label_match(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    """Si hay un id que matchea exacto, tiene prioridad sobre el label."""
+    controller, _, _, presets = workflow_controller_setup
+    await presets.delete("warm")
+    # Creamos uno con id == "alpha" y otro con label == "alpha" (id distinto).
+    await presets.upsert(
+        VoicePreset(id="alpha", label="Alpha (canonical)", voice_id="N2lVS1w4EtoT3dr4eOWO")
+    )
+    await presets.upsert(VoicePreset(id="beta", label="alpha", voice_id="N2lVS1w4EtoT3dr4eOWO"))
+    entries = await controller.list_entries(refresh=True)
+    # Buscamos "alpha": debe matchear por id ("alpha"), no por label.
+    workflow = await controller.enqueue_entry(entries[0], voice_preset_id="alpha")
+    assert workflow.pre_settings.voice_preset_id == "alpha"
+
+
 async def test_cancel_returns_false_for_unknown_id(
     workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:

@@ -55,11 +55,21 @@ class WorkflowExecutionContext:
     def tts_model(self) -> str | None:
         """Devuelve el modelo TTS apropiado para esta ejecución.
 
-        Si `audio_language` no es `None`, fuerza turbo (acepta `language_code`).
-        Si es `None`, deja `None` para que `KieClient` use el multilingual
-        default (que NO acepta `language_code` y respondería 422).
+        Fuerza el modelo turbo (que acepta `language_code`) si:
+        - El JSON trae `audio_language`, O
+        - El preset trae `voice_settings.language_code`.
+
+        Esto es importante: si el preset tiene `language_code` pero
+        usamos el modelo multilingual default, Kie responde 422
+        ("language_code no soportado en este modelo"). Si ninguno
+        tiene language_code, dejamos `None` para que `KieClient` use
+        el multilingual default.
         """
-        return DEFAULT_TURBO_MODEL if self.audio_language else None
+        if self.audio_language:
+            return DEFAULT_TURBO_MODEL
+        if self.voice_settings is not None and self.voice_settings.language_code:
+            return DEFAULT_TURBO_MODEL
+        return None
 
     def step_dir(self, step: WorkflowStep) -> Path:
         """`output_dir / step_NN_<slug>/` para un step dado."""
@@ -67,12 +77,19 @@ class WorkflowExecutionContext:
         return self.output_dir / folder
 
     def resolved_voice_settings(self) -> VoiceSettings | None:
-        """Devuelve voice_settings con `language_code` ajustado al `audio_language`."""
+        """Devuelve voice_settings con `language_code` ajustado.
+
+        Precedencia: `voice_settings.language_code` del preset > el
+        `audio_language` del JSON. Si el preset ya tiene language_code,
+        respetamos al preset (que el usuario configuró explícitamente).
+        Si no, y el JSON trae `audio_language`, lo inyectamos como
+        fallback.
+        """
+        if self.voice_settings is not None and self.voice_settings.language_code:
+            return self.voice_settings
         if self.audio_language is None:
             return self.voice_settings
         base = self.voice_settings or VoiceSettings()
-        if base.language_code:
-            return base
         return base.model_copy(update={"language_code": self.audio_language})
 
 

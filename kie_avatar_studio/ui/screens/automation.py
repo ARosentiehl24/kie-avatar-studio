@@ -19,6 +19,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
+from ...app_layer.audio_player import AudioPlayer
+from ...app_layer.presets_controller import VoicePresetsController
 from ...app_layer.workflow_controller import WorkflowController
 from ...domain.errors import (
     KieError,
@@ -80,11 +82,15 @@ class AutomationScreen(Screen[None]):
         *,
         workflows_dir: str,
         check_credits: CreditsLoader,
+        presets_controller: VoicePresetsController,
+        audio_player: AudioPlayer,
     ) -> None:
         super().__init__()
         self._controller = controller
         self._workflows_dir = workflows_dir
         self._check_credits = check_credits
+        self._presets_controller = presets_controller
+        self._audio_player = audio_player
         self._unsubscribe: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
@@ -208,6 +214,8 @@ class AutomationScreen(Screen[None]):
         await self.app.push_screen(
             ConfigureWorkflowScreen(
                 entry=entry,
+                presets_controller=self._presets_controller,
+                audio_player=self._audio_player,
                 on_confirm=_after_configure,
             )
         )

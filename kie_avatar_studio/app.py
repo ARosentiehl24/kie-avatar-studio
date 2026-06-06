@@ -713,7 +713,12 @@ class KieAvatarStudioApp(App[None]):
             )
             return
         if item.id == _PRESETS_ITEM_ID:
-            self.push_screen(PresetsScreen(controller=self.presets_controller))
+            self.push_screen(
+                PresetsScreen(
+                    controller=self.presets_controller,
+                    audio_player=self.audio_player,
+                )
+            )
             return
         if item.id == _BATCH_ITEM_ID:
             self.push_screen(
@@ -729,6 +734,8 @@ class KieAvatarStudioApp(App[None]):
                     controller=self.workflow_controller,
                     workflows_dir=str(self.settings.workflows_dir),
                     check_credits=self._check_credits,
+                    presets_controller=self.presets_controller,
+                    audio_player=self.audio_player,
                 )
             )
             return

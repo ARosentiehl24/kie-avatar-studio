@@ -130,16 +130,42 @@ class WorkflowController:
         return workflow
 
     async def _validate_voice_preset(self, workflow: WorkflowJob) -> VoicePreset | None:
-        preset_id = workflow.pre_settings.voice_preset_id
-        if not preset_id:
+        """Resuelve el `voice_preset` del workflow contra `VoicePresetStore`.
+
+        Acepta tanto el `id` (slug) como el `label` (nombre humano) del
+        preset. Si encuentra match por label, **normaliza el campo del
+        workflow al id real** antes de persistir, así la DB siempre tiene
+        el id canónico (y el runner no tiene que volver a hacer fuzzy
+        matching al ejecutar).
+        """
+        preset_ref = workflow.pre_settings.voice_preset_id
+        if not preset_ref:
             return None
-        preset = await self._presets_store.get(preset_id)
+        preset = await self._resolve_preset(preset_ref)
         if preset is None:
             raise WorkflowValidationError(
-                f"voice_preset '{preset_id}' no existe en el catálogo. "
-                "Creá uno en la pantalla Presets antes de ejecutar este workflow."
+                f"voice_preset '{preset_ref}' no existe en el catálogo. "
+                "Creá uno en la pantalla Presets o desde el modal 'Configurar y ejecutar' "
+                "antes de ejecutar este workflow."
             )
+        # Normalizamos al id real (puede ser distinto si el JSON usaba el label).
+        workflow.pre_settings.voice_preset_id = preset.id
         return preset
+
+    async def _resolve_preset(self, preset_ref: str) -> VoicePreset | None:
+        """Match por id exacto > match por label exacto (case-insensitive)."""
+        target = preset_ref.strip()
+        if not target:
+            return None
+        direct = await self._presets_store.get(target)
+        if direct is not None:
+            return direct
+        all_presets = await self._presets_store.list_all()
+        target_lower = target.lower()
+        for preset in all_presets:
+            if preset.label.lower() == target_lower:
+                return preset
+        return None
 
     async def _validate_local_model_path(self, workflow: WorkflowJob) -> None:
         creation = workflow.pre_settings.model_creation

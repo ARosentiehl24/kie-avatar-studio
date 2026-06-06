@@ -4,7 +4,8 @@
     "audio_language": "es-419",
     "voice_preset": "latina_warm_authentic",
     "model_creation": {
-      "method": "prompt",
+      "method": "local",
+      "local_path": "models/latina_warm_authentic",
       "prompt": "Photorealistic medium shot of a 38-year-old Latina woman talking directly to the camera. Authentic, lived-in face with natural, imperfect skin texture and slightly tired eyes that convey credibility and real life. She has a realistic, slightly post-partum everyday body type. Her dark hair is natural and slightly undone. She is wearing a relaxed, unbranded oatmeal-colored long-sleeve tee. Her expression is composed, warm, and informed, showing controlled intensity and conviction, like she is explaining something important to her sister. The setting is a real, unstaged apartment kitchen. Background includes warm wood surfaces, cream walls, linen textures, a wooden cutting board, a houseplant, and a half-finished ceramic coffee mug. Soft, diffused natural window light. Documentary style, apothecary-adjacent warm neutral color palette, cinematic, shot on 35mm lens, highly detailed, raw, no makeup-influencer look, completely authentic. --ar 16:9 --style raw --v 6.0"
     }
   },

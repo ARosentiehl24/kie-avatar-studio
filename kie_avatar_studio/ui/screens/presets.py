@@ -22,6 +22,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
+from ...app_layer.audio_player import AudioPlayer
 from ...app_layer.presets_controller import VoicePresetsController
 from ...domain.errors import VoicePresetNotFoundError, VoicePresetValidationError
 from ...domain.kie_voice_catalog import get_builtin_voice
@@ -51,9 +52,15 @@ class PresetsScreen(Screen[None]):
         Binding("escape", "go_back", "Volver"),
     ]
 
-    def __init__(self, controller: VoicePresetsController) -> None:
+    def __init__(
+        self,
+        controller: VoicePresetsController,
+        *,
+        audio_player: AudioPlayer,
+    ) -> None:
         super().__init__()
         self._controller = controller
+        self._audio_player = audio_player
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -98,13 +105,19 @@ class PresetsScreen(Screen[None]):
     # --- handlers ---------------------------------------------------------
 
     async def _handle_new(self) -> None:
-        self.app.push_screen(PresetFormScreen(existing=None), self._on_form_dismissed)
+        self.app.push_screen(
+            PresetFormScreen(existing=None, audio_player=self._audio_player),
+            self._on_form_dismissed,
+        )
 
     async def _handle_edit(self) -> None:
         preset = await self._selected_preset()
         if preset is None:
             return
-        self.app.push_screen(PresetFormScreen(existing=preset), self._on_form_dismissed)
+        self.app.push_screen(
+            PresetFormScreen(existing=preset, audio_player=self._audio_player),
+            self._on_form_dismissed,
+        )
 
     async def _handle_delete(self) -> None:
         preset = await self._selected_preset()
