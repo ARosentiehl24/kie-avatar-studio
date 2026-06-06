@@ -1294,6 +1294,245 @@ GenerateImageFormScreen {
     margin-right: 2;
 }
 
+/* ============================================================================
+ * AutomationScreen + ConfigureWorkflow modal + WorkflowSummary modal +
+ * WorkflowDetail screen
+ *
+ * Misma estructura visual que BatchScreen para AutomationScreen
+ * (`width/height: 95%` + `padding: 2 4` para air alrededor del contenido,
+ * que sin esto queda pegado a los bordes del Header/Footer).
+ *
+ * El modal `ConfigureWorkflowScreen` y el nuevo `WorkflowSummaryScreen`
+ * siguen el patrón de `GenerateImageFormScreen`: dialog centrado con
+ * `width: 120 max-width: 95%`, body scrollable, footer fijo con los
+ * botones.
+ * ============================================================================ */
+
+AutomationScreen {
+    align: center top;
+}
+
+#automation-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#automation-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#automation-subtitle {
+    height: auto;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#automation-counters {
+    height: 1;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#automation-fs-table {
+    /* Tabla del filesystem: alturas chicas (≤5 filas visibles típicas).
+     * Si el usuario tiene muchos workflows en disco, scrollea dentro. */
+    height: 1fr;
+    min-height: 4;
+    max-height: 30%;
+    margin-bottom: 1;
+}
+
+#automation-db-table {
+    /* Tabla del historial DB: ocupa el resto del espacio disponible. */
+    height: 2fr;
+    min-height: 4;
+}
+
+#automation-hint {
+    color: $text-muted;
+    height: auto;
+    padding-top: 1;
+    content-align: center middle;
+}
+
+#automation-status-bar {
+    height: auto;
+    content-align: left middle;
+    padding-top: 1;
+}
+
+.section-title {
+    height: 1;
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    margin-top: 1;
+}
+
+/* --- ConfigureWorkflowScreen modal --- */
+
+ConfigureWorkflowScreen {
+    align: center middle;
+}
+
+#configure-workflow-box {
+    width: 100;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#configure-workflow-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#configure-workflow-subtitle {
+    height: auto;
+    content-align: left middle;
+    margin-bottom: 1;
+    color: $text-muted;
+}
+
+#configure-workflow-box Static {
+    height: auto;
+}
+
+#configure-workflow-box Input {
+    margin-bottom: 1;
+}
+
+#configure-hint {
+    color: $text-muted;
+    height: auto;
+    margin-top: 1;
+}
+
+#configure-warning {
+    color: $warning;
+    height: auto;
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+#configure-status-bar {
+    height: auto;
+    content-align: left middle;
+    padding-top: 1;
+}
+
+/* --- WorkflowSummaryScreen modal (resumen pre-encolar) --- */
+
+WorkflowSummaryScreen {
+    align: center middle;
+}
+
+#workflow-summary-box {
+    width: 110;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#workflow-summary-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#workflow-summary-body {
+    height: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+    max-height: 60%;
+}
+
+#workflow-summary-body Static {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#workflow-summary-credits {
+    color: $accent;
+    text-style: bold;
+    margin-top: 1;
+}
+
+#workflow-summary-warning {
+    color: $warning;
+    height: auto;
+    margin-top: 1;
+}
+
+#workflow-summary-status-bar {
+    height: auto;
+    content-align: left middle;
+    padding-top: 1;
+}
+
+/* --- WorkflowDetailScreen --- */
+
+WorkflowDetailScreen {
+    align: center top;
+}
+
+#workflow-detail-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#workflow-detail-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#workflow-detail-meta {
+    height: auto;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#workflow-detail-table {
+    height: 1fr;
+    min-height: 4;
+}
+
+#workflow-detail-status-bar {
+    height: auto;
+    content-align: left middle;
+    padding-top: 1;
+}
+
 #gen-image-settings-row Select {
     width: 1fr;
 }
@@ -1319,3 +1558,4 @@ GenerateImageFormScreen {
     height: auto;
     margin-top: 1;
 }
+

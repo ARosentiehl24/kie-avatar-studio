@@ -728,6 +728,7 @@ class KieAvatarStudioApp(App[None]):
                 AutomationScreen(
                     controller=self.workflow_controller,
                     workflows_dir=str(self.settings.workflows_dir),
+                    check_credits=self._check_credits,
                 )
             )
             return

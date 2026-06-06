@@ -29,6 +29,7 @@ from ...domain.events import WorkflowJobUpdated
 from ...domain.models import (
     WorkflowEntry,
     WorkflowJob,
+    WorkflowPreSettings,
     WorkflowStatus,
 )
 from .._counters import format_full_counters
@@ -42,6 +43,7 @@ from ._workflow_format import (
 )
 from .configure_workflow import ConfigureWorkflowScreen
 from .workflow_detail import WorkflowDetailScreen
+from .workflow_summary import CreditsLoader, WorkflowSummaryScreen
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
@@ -77,10 +79,12 @@ class AutomationScreen(Screen[None]):
         controller: WorkflowController,
         *,
         workflows_dir: str,
+        check_credits: CreditsLoader,
     ) -> None:
         super().__init__()
         self._controller = controller
         self._workflows_dir = workflows_dir
+        self._check_credits = check_credits
         self._unsubscribe: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
@@ -171,23 +175,40 @@ class AutomationScreen(Screen[None]):
             )
             return
 
-        async def _on_confirmed(voice_preset_id: str | None, audio_language: str | None) -> None:
-            try:
-                workflow = await self._controller.enqueue_entry(
-                    entry,
-                    voice_preset_id=voice_preset_id,
-                    audio_language=audio_language,
+        async def _after_configure(voice_preset_id: str | None, audio_language: str | None) -> None:
+            # Construimos los pre_settings finales (los del JSON con overrides)
+            # para mostrarlos en el resumen final.
+            pre_settings = _merge_pre_settings(entry, voice_preset_id, audio_language)
+
+            async def _on_summary_confirmed() -> bool:
+                try:
+                    workflow = await self._controller.enqueue_entry(
+                        entry,
+                        voice_preset_id=voice_preset_id,
+                        audio_language=audio_language,
+                    )
+                except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
+                    self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
+                    return False
+                self._set_status(
+                    f"{OK} workflow '{workflow.name}' encolado (id={workflow.id[:14]}…)"
                 )
-            except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
-                self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
-                return
-            self._set_status(f"{OK} workflow '{workflow.name}' encolado (id={workflow.id[:14]}…)")
-            await self._refresh_db_table()
+                await self._refresh_db_table()
+                return True
+
+            await self.app.push_screen(
+                WorkflowSummaryScreen(
+                    entry=entry,
+                    pre_settings=pre_settings,
+                    on_confirm=_on_summary_confirmed,
+                    check_credits=self._check_credits,
+                )
+            )
 
         await self.app.push_screen(
             ConfigureWorkflowScreen(
                 entry=entry,
-                on_confirm=_on_confirmed,
+                on_confirm=_after_configure,
             )
         )
 
@@ -346,3 +367,23 @@ _BUTTON_HANDLERS: dict[str, Callable[[AutomationScreen], Awaitable[None]]] = {
     "automation-cancel": AutomationScreen._handle_cancel,
     "automation-refresh": AutomationScreen._handle_refresh,
 }
+
+
+def _merge_pre_settings(
+    entry: WorkflowEntry,
+    voice_preset_id: str | None,
+    audio_language: str | None,
+) -> WorkflowPreSettings:
+    """Parsea `pre_settings` del JSON y aplica overrides del modal Configurar.
+
+    Pensada para construir el snapshot que muestra `WorkflowSummaryScreen`
+    al usuario antes de encolar — debe reflejar EXACTO lo que el runner
+    va a usar (incluyendo overrides).
+    """
+    payload = (entry.workflow_payload or {}).get("pre_settings", {})
+    pre = WorkflowPreSettings.model_validate(payload)
+    if voice_preset_id is not None:
+        pre.voice_preset_id = voice_preset_id
+    if audio_language is not None:
+        pre.audio_language = audio_language
+    return pre
