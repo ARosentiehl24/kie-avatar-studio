@@ -81,9 +81,7 @@ class AtomicWorkflowManifestWriter:
         try:
             await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
         except OSError as exc:
-            logger.warning(
-                "No se pudo crear output_dir '{}' para manifest: {}", output_dir, exc
-            )
+            logger.warning("No se pudo crear output_dir '{}' para manifest: {}", output_dir, exc)
             return False
 
         manifest = _build_manifest_payload(workflow)
@@ -101,9 +99,7 @@ class AtomicWorkflowManifestWriter:
         try:
             await _replace_with_retry(tmp, target)
         except OSError as exc:
-            logger.warning(
-                "Falló rename atómico de manifest '{}' → '{}': {}", tmp, target, exc
-            )
+            logger.warning("Falló rename atómico de manifest '{}' → '{}': {}", tmp, target, exc)
             await _best_effort_unlink(tmp)
             return False
 

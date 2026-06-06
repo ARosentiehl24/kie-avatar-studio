@@ -96,9 +96,7 @@ class WorkflowDetailScreen(Screen[None]):
     async def _refresh(self) -> None:
         workflow = await self._controller.get_workflow(self._workflow_id)
         if workflow is None:
-            self._set_status(
-                f"workflow '{self._workflow_id}' no existe en la DB", error=True
-            )
+            self._set_status(f"workflow '{self._workflow_id}' no existe en la DB", error=True)
             return
         self._update_header(workflow)
         self._refresh_steps_table(workflow)

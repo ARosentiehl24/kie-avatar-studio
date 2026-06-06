@@ -80,9 +80,7 @@ class WorkflowBaseResolver:
         self._capacity_limiter = capacity_limiter
         self._runner_factory = runner_factory
 
-    async def resolve_voice(
-        self, workflow: WorkflowJob
-    ) -> tuple[str, VoiceSettings | None]:
+    async def resolve_voice(self, workflow: WorkflowJob) -> tuple[str, VoiceSettings | None]:
         """Devuelve `(voice_id, voice_settings)` resueltos desde el preset.
 
         Si `voice_preset_id` está vacío, usa `settings.default_voice` como
@@ -109,9 +107,7 @@ class WorkflowBaseResolver:
             return await self._resolve_from_local(creation)
         return await self._resolve_from_catalog(creation)
 
-    async def download_base_locally(
-        self, ref: ImageAssetRef, output_dir: Path
-    ) -> None:
+    async def download_base_locally(self, ref: ImageAssetRef, output_dir: Path) -> None:
         """Descarga la imagen base a `output_dir/base.png` para uso del usuario."""
         target = output_dir / BASE_IMAGE_FILENAME
         await self._client.download_file(ref.kie_url, target)
@@ -122,9 +118,7 @@ class WorkflowBaseResolver:
         self, workflow: WorkflowJob, creation: ModelCreation
     ) -> ImageAssetRef:
         if not creation.prompt:
-            raise WorkflowValidationError(
-                "model_creation.method='prompt' requiere prompt"
-            )
+            raise WorkflowValidationError("model_creation.method='prompt' requiere prompt")
         image_job = self._build_base_image_job(workflow, creation.prompt)
         await self._image_jobs_repo.upsert(image_job)
         runner = self._runner_factory.make_image_runner()
@@ -132,8 +126,7 @@ class WorkflowBaseResolver:
             await runner.run(image_job)
         if image_job.status != ImageJobStatus.COMPLETED or not image_job.kie_url:
             raise WorkflowValidationError(
-                f"falló la generación de la imagen base "
-                f"({image_job.error or 'sin mensaje'})"
+                f"falló la generación de la imagen base ({image_job.error or 'sin mensaje'})"
             )
         return await self._make_ref_from_completed_job(image_job, creation)
 
@@ -152,9 +145,7 @@ class WorkflowBaseResolver:
     ) -> ImageAssetRef:
         generated = await self._generated_images.get(image_job.id)
         if generated is None:
-            raise WorkflowValidationError(
-                "la imagen base generada no apareció en el store local"
-            )
+            raise WorkflowValidationError("la imagen base generada no apareció en el store local")
         ref = ImageAssetRef(
             kind=ImageAssetKind.GENERATED,
             id=generated.id,
@@ -169,9 +160,7 @@ class WorkflowBaseResolver:
 
     async def _resolve_from_local(self, creation: ModelCreation) -> ImageAssetRef:
         if not creation.local_path:
-            raise WorkflowValidationError(
-                "model_creation.method='local' requiere local_path"
-            )
+            raise WorkflowValidationError("model_creation.method='local' requiere local_path")
         path = Path(creation.local_path)
         # Revalidación: el archivo puede haber sido movido/borrado entre
         # la validación inicial y el momento del upload.
@@ -201,9 +190,7 @@ class WorkflowBaseResolver:
 
     async def _resolve_uploaded(self, creation: ModelCreation) -> ImageAssetRef:
         if creation.asset_id is None:
-            raise WorkflowValidationError(
-                "model_creation.method='catalog' requiere asset_id"
-            )
+            raise WorkflowValidationError("model_creation.method='catalog' requiere asset_id")
         uploaded = await self._uploaded_images.get(creation.asset_id)
         if uploaded is None:
             raise WorkflowValidationError(
@@ -221,9 +208,7 @@ class WorkflowBaseResolver:
 
     async def _resolve_generated(self, creation: ModelCreation) -> ImageAssetRef:
         if creation.asset_id is None:
-            raise WorkflowValidationError(
-                "model_creation.method='catalog' requiere asset_id"
-            )
+            raise WorkflowValidationError("model_creation.method='catalog' requiere asset_id")
         generated = await self._generated_images.get(creation.asset_id)
         if generated is None:
             raise WorkflowValidationError(

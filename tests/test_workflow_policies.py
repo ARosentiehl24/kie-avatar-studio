@@ -150,7 +150,9 @@ class TestValidateWorkflowStep:
             validate_workflow_step(_make_step(text=""))
 
     def test_b_roll_without_text_is_valid(self) -> None:
-        warnings = validate_workflow_step(_make_step(type_=StepType.B_ROLL, text="", change_background=True))
+        warnings = validate_workflow_step(
+            _make_step(type_=StepType.B_ROLL, text="", change_background=True)
+        )
         # change_background=True + bg_desc="" emite warning de bg
         assert any("background_description vacío" in w for w in warnings)
 
@@ -189,7 +191,12 @@ class TestValidateWorkflowStep:
         # text con whitespace solo se rechaza como TTS
         with pytest.raises(WorkflowStepValidationError, match="text inválido"):
             validate_workflow_step(
-                _make_step(type_=StepType.B_ROLL, text="  ", change_background=True, background_description="x")
+                _make_step(
+                    type_=StepType.B_ROLL,
+                    text="  ",
+                    change_background=True,
+                    background_description="x",
+                )
             )
 
     def test_progress_with_invalid_key_for_type_raises(self) -> None:

@@ -120,9 +120,7 @@ class WorkflowRunner:
 
     # --- step orchestration -----------------------------------------------
 
-    async def _execute_steps(
-        self, job: WorkflowJob, context: WorkflowExecutionContext
-    ) -> None:
+    async def _execute_steps(self, job: WorkflowJob, context: WorkflowExecutionContext) -> None:
         """Lanza todos los steps en paralelo. Recolecta excepciones por step.
 
         El semáforo global vive en el `WorkflowStepRunner` (vía sus
@@ -135,14 +133,11 @@ class WorkflowRunner:
             await self._step_runner.run(step, context, self._build_step_transition(job))
 
         tasks = [
-            asyncio.create_task(_run_one(s), name=f"wf-{job.id}-step-{s.step}")
-            for s in job.steps
+            asyncio.create_task(_run_one(s), name=f"wf-{job.id}-step-{s.step}") for s in job.steps
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _build_step_transition(
-        self, job: WorkflowJob
-    ) -> Callable[[WorkflowStep], Awaitable[None]]:
+    def _build_step_transition(self, job: WorkflowJob) -> Callable[[WorkflowStep], Awaitable[None]]:
         """Crea el callback que el step runner llama tras cada transición.
 
         Serializa con el lock del workflow para evitar lost updates.

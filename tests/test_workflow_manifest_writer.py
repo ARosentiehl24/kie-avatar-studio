@@ -28,7 +28,9 @@ from kie_avatar_studio.infra.workflow_manifest_writer import (
 )
 
 
-def _make_workflow(output_dir: Path, *, status: WorkflowStatus = WorkflowStatus.QUEUED) -> WorkflowJob:
+def _make_workflow(
+    output_dir: Path, *, status: WorkflowStatus = WorkflowStatus.QUEUED
+) -> WorkflowJob:
     return WorkflowJob(
         id="wf_test_001",
         name="Sample",

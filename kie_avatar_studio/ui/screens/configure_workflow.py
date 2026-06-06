@@ -53,9 +53,7 @@ class ConfigureWorkflowScreen(ModalScreen[None]):
         try:
             self._initial = WorkflowPreSettings.model_validate(pre_payload)
         except Exception:
-            self._initial = WorkflowPreSettings(
-                model_creation=_fallback_model_creation()
-            )
+            self._initial = WorkflowPreSettings(model_creation=_fallback_model_creation())
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)

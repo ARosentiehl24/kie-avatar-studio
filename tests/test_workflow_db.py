@@ -103,8 +103,7 @@ async def test_upsert_step_only_updates_one_row(workflow_db: WorkflowDB) -> None
     assert loaded.steps[1].status == WorkflowStepStatus.PREPARING
     # Progress se persistió y deserializó como enum.
     assert (
-        loaded.steps[1].progress[WorkflowProgressKey.SCENE_IMAGE]
-        == WorkflowProgressStatus.RUNNING
+        loaded.steps[1].progress[WorkflowProgressKey.SCENE_IMAGE] == WorkflowProgressStatus.RUNNING
     )
 
 
@@ -143,9 +142,7 @@ async def test_progress_json_roundtrip_with_all_keys(workflow_db: WorkflowDB) ->
         loaded.steps[0].progress[WorkflowProgressKey.SCENE_IMAGE]
         == WorkflowProgressStatus.COMPLETED
     )
-    assert (
-        loaded.steps[0].progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.RUNNING
-    )
+    assert loaded.steps[0].progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.RUNNING
 
 
 async def test_list_by_status_filters_correctly(workflow_db: WorkflowDB) -> None:

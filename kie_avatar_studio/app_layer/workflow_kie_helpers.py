@@ -77,9 +77,7 @@ async def render_i2v_video(
     task_id = existing_task_id
     if task_id is None:
         async with limiter:
-            created = await client.create_image_to_video_task(
-                image_url, prompt, duration=duration
-            )
+            created = await client.create_image_to_video_task(image_url, prompt, duration=duration)
         task_id = created.task_id
 
     async with limiter:

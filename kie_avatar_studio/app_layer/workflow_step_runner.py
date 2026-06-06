@@ -328,9 +328,7 @@ class WorkflowStepRunner:
                 output_path=scene_path,
             )
             step.scene_image_path = str(scene_path)
-            set_progress(
-                step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED
-            )
+            set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
             return context.base_image_ref
         return await self._generate_scene_image(step, context, scene_path, on_transition)
 
@@ -371,9 +369,7 @@ class WorkflowStepRunner:
             status=ImageJobStatus.QUEUED,
         )
 
-    async def _make_scene_ref(
-        self, step: WorkflowStep, image_job: ImageJob
-    ) -> ImageAssetRef:
+    async def _make_scene_ref(self, step: WorkflowStep, image_job: ImageJob) -> ImageAssetRef:
         generated = await self._generated_images_store.get(image_job.id)
         if generated is None:
             raise WorkflowStepError(
@@ -387,9 +383,7 @@ class WorkflowStepRunner:
             expires_at=generated.expires_at(KIE_GENERATED_RETENTION_DAYS),
         )
 
-    def _build_audio_job(
-        self, step: WorkflowStep, context: WorkflowExecutionContext
-    ) -> AudioJob:
+    def _build_audio_job(self, step: WorkflowStep, context: WorkflowExecutionContext) -> AudioJob:
         voice_settings = context.resolved_voice_settings()
         settings_json: str | None = None
         if voice_settings is not None and not voice_settings.is_empty():

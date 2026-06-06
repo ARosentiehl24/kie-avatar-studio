@@ -278,9 +278,7 @@ class KieAvatarStudioApp(App[None]):
             ),
         )
         self.workflow_lifecycle = WorkflowLifecycle(self.workflow_db)
-        self._workflows_limiter = asyncio.Semaphore(
-            max(1, self.settings.max_parallel_workflows)
-        )
+        self._workflows_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_workflows))
         self.workflow_queue: QueueManager[WorkflowJob, WorkflowJobUpdated] = QueueManager(
             self.settings,
             self.workflow_runner,

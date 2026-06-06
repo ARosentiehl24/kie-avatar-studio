@@ -128,9 +128,7 @@ def mock_handler() -> _MockKieHandler:
 
 
 @pytest.fixture
-async def kie_with_handler(
-    tmp_settings: Settings, mock_handler: _MockKieHandler
-) -> KieClient:
+async def kie_with_handler(tmp_settings: Settings, mock_handler: _MockKieHandler) -> KieClient:
     settings = tmp_settings.model_copy(update={"poll_interval_seconds": 1})
     client = KieClient(settings)
     await client._client.aclose()
@@ -251,7 +249,7 @@ def _b_roll_silent_step() -> WorkflowStep:
 
 
 async def test_a_roll_path_creates_final_mp4_without_separate_audio(
-    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path]
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
     step = _a_roll_step()
@@ -284,7 +282,7 @@ async def test_a_roll_path_creates_final_mp4_without_separate_audio(
 
 
 async def test_b_roll_with_text_downloads_video_and_audio_separately(
-    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path]
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
     step = _b_roll_with_text_step()
@@ -312,7 +310,7 @@ async def test_b_roll_with_text_downloads_video_and_audio_separately(
 
 
 async def test_b_roll_silent_only_creates_video_no_audio(
-    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path]
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
     step = _b_roll_silent_step()
@@ -332,7 +330,7 @@ async def test_b_roll_silent_only_creates_video_no_audio(
 
 
 async def test_change_background_false_reuses_base_image(
-    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path]
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
     step = WorkflowStep(
@@ -357,7 +355,7 @@ async def test_change_background_false_reuses_base_image(
 
 
 async def test_change_background_true_creates_image_job(
-    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path]
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
     step = _b_roll_with_text_step()  # change_background=True
@@ -370,7 +368,7 @@ async def test_change_background_true_creates_image_job(
 
 
 async def test_transitions_callback_invoked_multiple_times(
-    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path]
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
     step = _a_roll_step()
@@ -387,9 +385,7 @@ async def test_transitions_callback_invoked_multiple_times(
     assert WorkflowStepStatus.COMPLETED in transitions
 
 
-async def test_failed_step_marks_remaining_progress_as_failed(
-    tmp_settings: Settings
-) -> None:
+async def test_failed_step_marks_remaining_progress_as_failed(tmp_settings: Settings) -> None:
     """Si el step falla a mitad, las keys de progress en RUNNING/PENDING
     se marcan FAILED para reflejar el estado real."""
     settings = tmp_settings
@@ -443,9 +439,7 @@ async def test_failed_step_marks_remaining_progress_as_failed(
     assert result.status == WorkflowStepStatus.FAILED
     assert result.error is not None
     # Las keys que estaban en PENDING/RUNNING se marcaron FAILED.
-    failed_count = sum(
-        1 for v in result.progress.values() if v == WorkflowProgressStatus.FAILED
-    )
+    failed_count = sum(1 for v in result.progress.values() if v == WorkflowProgressStatus.FAILED)
     assert failed_count >= 1
     await client.aclose()
 

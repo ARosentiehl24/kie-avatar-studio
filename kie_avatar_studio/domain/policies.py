@@ -598,9 +598,7 @@ def validate_workflow_step(step: WorkflowStep) -> list[str]:
     sin bloquear ejecución.
     """
     if step.step < 1:
-        raise WorkflowStepValidationError(
-            f"step.step debe ser >= 1 (recibí {step.step})"
-        )
+        raise WorkflowStepValidationError(f"step.step debe ser >= 1 (recibí {step.step})")
     if not step.scene_name.strip():
         raise WorkflowStepValidationError(f"step {step.step}: scene_name vacío")
     if not step.scene_slug.strip():
@@ -624,9 +622,7 @@ def _validate_step_prompt_length(step: WorkflowStep) -> None:
     """
     max_chars = MAX_PROMPT_CHARS if step.type == StepType.A_ROLL else MAX_I2V_PROMPT_CHARS
     if len(step.prompt) > max_chars:
-        raise WorkflowStepValidationError(
-            f"step {step.step}: prompt supera {max_chars} caracteres"
-        )
+        raise WorkflowStepValidationError(f"step {step.step}: prompt supera {max_chars} caracteres")
 
 
 def _validate_step_text_per_type(step: WorkflowStep) -> None:

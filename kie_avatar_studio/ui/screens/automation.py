@@ -112,9 +112,7 @@ class AutomationScreen(Screen[None]):
                 db_table.add_column(column, key=column)
             yield db_table
             with Horizontal(classes="actions-row actions-row-keys"):
-                yield Button(
-                    "Configurar y ejecutar", id="automation-configure", variant="primary"
-                )
+                yield Button("Configurar y ejecutar", id="automation-configure", variant="primary")
                 yield Button("Ver detalle", id="automation-detail", classes="btn-info")
                 yield Button("Reintentar", id="automation-retry", classes="btn-info")
                 yield Button("Cancelar", id="automation-cancel", classes="btn-info")
@@ -183,9 +181,7 @@ class AutomationScreen(Screen[None]):
             except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
                 self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
                 return
-            self._set_status(
-                f"{OK} workflow '{workflow.name}' encolado (id={workflow.id[:14]}…)"
-            )
+            self._set_status(f"{OK} workflow '{workflow.name}' encolado (id={workflow.id[:14]}…)")
             await self._refresh_db_table()
 
         await self.app.push_screen(
@@ -225,9 +221,7 @@ class AutomationScreen(Screen[None]):
         if ok:
             self._set_status(f"{OK} workflow '{workflow.name}' cancelado")
         else:
-            self._set_status(
-                f"{ERROR} workflow '{workflow.name}' no es cancelable", error=True
-            )
+            self._set_status(f"{ERROR} workflow '{workflow.name}' no es cancelable", error=True)
         await self._refresh_db_table()
 
     # --- table refresh ----------------------------------------------------
@@ -257,9 +251,7 @@ class AutomationScreen(Screen[None]):
                 detail_cell = format_warnings(entry.warnings)
             else:
                 status_cell = f"[red]{ERROR} error[/red]"
-                detail_cell = (
-                    f"[red]{truncate('; '.join(entry.errors), 60)}[/red]"
-                )
+                detail_cell = f"[red]{truncate('; '.join(entry.errors), 60)}[/red]"
             table.add_row(
                 truncate(entry.name, _NAME_PREVIEW_LEN),
                 status_cell,
@@ -330,9 +322,7 @@ class AutomationScreen(Screen[None]):
         table = self.query_one("#automation-db-table", DataTable)
         key = get_selected_row_key(table)
         if key is None:
-            self._set_status(
-                "Seleccioná una ejecución en la tabla inferior primero", error=True
-            )
+            self._set_status("Seleccioná una ejecución en la tabla inferior primero", error=True)
             return None
         workflow = await self._controller.get_workflow(key)
         if workflow is None:

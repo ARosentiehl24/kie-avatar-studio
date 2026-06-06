@@ -292,9 +292,7 @@ class WorkflowDB:
         }
 
     @staticmethod
-    def _row_to_workflow(
-        row: aiosqlite.Row, step_rows: list[aiosqlite.Row]
-    ) -> WorkflowJob:
+    def _row_to_workflow(row: aiosqlite.Row, step_rows: list[aiosqlite.Row]) -> WorkflowJob:
         return WorkflowJob(
             id=row["id"],
             name=row["name"],

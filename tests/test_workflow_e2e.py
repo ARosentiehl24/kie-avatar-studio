@@ -158,9 +158,7 @@ async def e2e_setup(tmp_settings: Settings):
     settings = tmp_settings.model_copy(update={"poll_interval_seconds": 1})
     # Workflow JSON en filesystem.
     workflows_dir = settings.workflows_dir
-    (workflows_dir / "e2e.json").write_text(
-        json.dumps(_workflow_json_3_steps()), encoding="utf-8"
-    )
+    (workflows_dir / "e2e.json").write_text(json.dumps(_workflow_json_3_steps()), encoding="utf-8")
 
     # Cliente Kie con MockTransport.
     handler = _MockKieAllSuccess()
@@ -471,9 +469,7 @@ async def test_e2e_partially_failed_when_some_steps_fail(
     presets = VoicePresetsStore(settings.presets_dir)
     await presets.init()
     await presets.upsert(
-        VoicePreset(
-            id="test_voice", label="Test", voice_id="N2lVS1w4EtoT3dr4eOWO"
-        )
+        VoicePreset(id="test_voice", label="Test", voice_id="N2lVS1w4EtoT3dr4eOWO")
     )
 
     capacity_limiter = asyncio.Semaphore(4)

@@ -143,9 +143,7 @@ async def test_build_workflow_from_entry_raises_on_invalid(tmp_path: Path) -> No
 
     bad_entry = WorkflowEntry(name="x", path=tmp_path / "x.json", errors=["fail"])
     with pytest.raises(WorkflowValidationError):
-        build_workflow_from_entry(
-            bad_entry, workflow_id="wf_x", output_dir=tmp_path / "outputs"
-        )
+        build_workflow_from_entry(bad_entry, workflow_id="wf_x", output_dir=tmp_path / "outputs")
 
 
 async def test_entries_ordered_alphabetically(tmp_path: Path) -> None:

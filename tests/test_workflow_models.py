@@ -19,7 +19,9 @@ from kie_avatar_studio.domain.models import (
 )
 
 
-def _make_pre_settings(method: ModelCreationMethod = ModelCreationMethod.PROMPT) -> WorkflowPreSettings:
+def _make_pre_settings(
+    method: ModelCreationMethod = ModelCreationMethod.PROMPT,
+) -> WorkflowPreSettings:
     """Helper para crear unos pre_settings mínimos válidos."""
     if method == ModelCreationMethod.PROMPT:
         creation = ModelCreation(method=method, prompt="A photorealistic woman")

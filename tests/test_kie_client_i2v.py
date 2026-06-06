@@ -21,7 +21,10 @@ async def test_create_image_to_video_task_posts_expected_body(
     # Override del handler para devolver un taskId fijo.
     captured.clear()
     client._client._transport = httpx.MockTransport(
-        lambda req: (captured.append(req), httpx.Response(200, json={"data": {"taskId": "tk_i2v_1"}}))[1]
+        lambda req: (
+            captured.append(req),
+            httpx.Response(200, json={"data": {"taskId": "tk_i2v_1"}}),
+        )[1]
     )
     result = await client.create_image_to_video_task(
         image_url="https://tempfile.kie.ai/scene.png",
@@ -48,7 +51,10 @@ async def test_create_image_to_video_task_accepts_custom_duration(
     client, captured = mock_kie_client
     captured.clear()
     client._client._transport = httpx.MockTransport(
-        lambda req: (captured.append(req), httpx.Response(200, json={"data": {"taskId": "tk_long"}}))[1]
+        lambda req: (
+            captured.append(req),
+            httpx.Response(200, json={"data": {"taskId": "tk_long"}}),
+        )[1]
     )
     await client.create_image_to_video_task(
         image_url="https://tempfile.kie.ai/x.png",
@@ -66,7 +72,9 @@ async def test_create_image_to_video_task_accepts_custom_model(
     client, captured = mock_kie_client
     captured.clear()
     client._client._transport = httpx.MockTransport(
-        lambda req: (captured.append(req), httpx.Response(200, json={"data": {"taskId": "tk_x"}}))[1]
+        lambda req: (captured.append(req), httpx.Response(200, json={"data": {"taskId": "tk_x"}}))[
+            1
+        ]
     )
     await client.create_image_to_video_task(
         image_url="https://tempfile.kie.ai/x.png",

@@ -108,7 +108,7 @@ async def workflow_controller_setup(
 
 
 async def test_list_entries_caches_until_refresh(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, _, workflows_dir, _ = workflow_controller_setup
     entries = await controller.list_entries(refresh=True)
@@ -123,7 +123,7 @@ async def test_list_entries_caches_until_refresh(
 
 
 async def test_enqueue_entry_persists_and_dispatches(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, fake_runner, _, _ = workflow_controller_setup
     entries = await controller.list_entries(refresh=True)
@@ -143,21 +143,17 @@ async def test_enqueue_entry_rejects_invalid(
     from kie_avatar_studio.domain.models import WorkflowEntry
 
     controller, _, _, _ = workflow_controller_setup
-    bad_entry = WorkflowEntry(
-        name="x", path=tmp_settings.workflows_dir / "x.json", errors=["fake"]
-    )
+    bad_entry = WorkflowEntry(name="x", path=tmp_settings.workflows_dir / "x.json", errors=["fake"])
     with pytest.raises(WorkflowValidationError, match="no es válido"):
         await controller.enqueue_entry(bad_entry)
 
 
 async def test_enqueue_entry_overrides_voice_and_language(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, _, _, presets = workflow_controller_setup
     # Agregamos un preset alternativo para el override.
-    await presets.upsert(
-        VoicePreset(id="alt", label="Alt", voice_id="N2lVS1w4EtoT3dr4eOWO")
-    )
+    await presets.upsert(VoicePreset(id="alt", label="Alt", voice_id="N2lVS1w4EtoT3dr4eOWO"))
     entries = await controller.list_entries(refresh=True)
     workflow = await controller.enqueue_entry(
         entries[0],
@@ -169,7 +165,7 @@ async def test_enqueue_entry_overrides_voice_and_language(
 
 
 async def test_enqueue_rejects_unknown_voice_preset(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, _, _, _ = workflow_controller_setup
     entries = await controller.list_entries(refresh=True)
@@ -178,7 +174,7 @@ async def test_enqueue_rejects_unknown_voice_preset(
 
 
 async def test_cancel_returns_false_for_unknown_id(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, _, _, _ = workflow_controller_setup
     ok = await controller.cancel("wf_does_not_exist")
@@ -186,14 +182,14 @@ async def test_cancel_returns_false_for_unknown_id(
 
 
 async def test_retry_returns_false_for_unknown_id(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, _, _, _ = workflow_controller_setup
     assert not await controller.retry("wf_does_not_exist")
 
 
 async def test_list_workflows_returns_persisted_in_db(
-    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore]
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
     controller, _, _, _ = workflow_controller_setup
     entries = await controller.list_entries(refresh=True)

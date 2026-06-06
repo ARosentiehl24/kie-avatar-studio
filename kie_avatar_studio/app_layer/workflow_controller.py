@@ -146,9 +146,7 @@ class WorkflowController:
         if creation.method != ModelCreationMethod.LOCAL:
             return
         if not creation.local_path:
-            raise WorkflowValidationError(
-                "model_creation.method='local' requiere local_path"
-            )
+            raise WorkflowValidationError("model_creation.method='local' requiere local_path")
         validate_image_path(Path(creation.local_path))
 
     async def _persist_and_enqueue(self, workflow: WorkflowJob) -> None:
