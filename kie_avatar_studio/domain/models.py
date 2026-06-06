@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _utcnow() -> datetime:
@@ -552,3 +552,260 @@ class GitHubRelease(BaseModel):
     html_url: str
     body: str = ""
     published_at: str = ""
+
+
+# --- Workflow automation models -------------------------------------------
+
+
+class ModelCreationMethod(StrEnum):
+    """Cómo se obtiene la imagen base de la modelo del workflow."""
+
+    PROMPT = "prompt"
+    LOCAL = "local"
+    CATALOG = "catalog"
+
+
+class ModelCreation(BaseModel):
+    """Configuración para resolver la imagen base de la modelo del workflow.
+
+    Solo uno de los campos es relevante según `method`:
+    - `PROMPT`: usa `prompt` para generar con Nano Banana 2.
+    - `LOCAL`: sube `local_path` con `KieGateway.upload_file`.
+    - `CATALOG`: resuelve `asset_kind` + `asset_id` contra los stores.
+
+    Los demás quedan `None`. La validación cruzada vive en
+    `policies.validate_model_creation` (no usa Pydantic discriminated
+    unions porque necesitamos mensajes en español).
+
+    `resolved_image_ref` lo rellena el `WorkflowRunner` en runtime tras
+    resolver la imagen base. Se serializa al manifest para que el usuario
+    vea la URL Kie + expiración + el path local descargado.
+    """
+
+    method: ModelCreationMethod
+    prompt: str | None = None
+    local_path: str | None = None
+    asset_kind: ImageAssetKind | None = None
+    asset_id: str | None = None
+    resolved_image_ref: ImageAssetRef | None = None
+
+
+class WorkflowPreSettings(BaseModel):
+    """Pre-configuración del workflow: idioma, voz preset, modelo base.
+
+    El JSON del usuario trae `voice_preset` (snake_case sin sufijo `_id`).
+    Mantenemos `voice_preset_id` como atributo Python para coherencia
+    interna y exponemos el alias `voice_preset` para parsear/serializar.
+
+    `audio_language` es un `language_code` ISO 639-1 (ej. `"es-419"`).
+    Si está seteado, el `WorkflowStepRunner` fuerza el modelo TTS turbo
+    (acepta `language_code`); si es `None`, usa el multilingual default
+    (que NO acepta `language_code` → Kie devuelve 422 si se manda).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    audio_language: str | None = None
+    voice_preset_id: str | None = Field(default=None, alias="voice_preset")
+    model_creation: ModelCreation
+
+
+class StepType(StrEnum):
+    """Tipo de escena del workflow.
+
+    `A_ROLL`: la modelo habla a cámara (lip-sync). Avatar Pro genera un
+    `final.mp4` con audio embebido. No se descarga el audio aparte.
+
+    `B_ROLL`: video auxiliar (objeto, ilustración, plano). Kling i2v
+    genera un video silencioso. Si `text` no es vacío, además se
+    genera un audio TTS aparte para post-producción.
+    """
+
+    A_ROLL = "a-roll"
+    B_ROLL = "b-roll"
+
+
+class WorkflowStepStatus(StrEnum):
+    """Estado del lifecycle de un `WorkflowStep`."""
+
+    QUEUED = "queued"
+    PREPARING = "preparing"
+    RENDERING = "rendering"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+WORKFLOW_STEP_TERMINAL_STATUSES: frozenset[WorkflowStepStatus] = frozenset(
+    {
+        WorkflowStepStatus.COMPLETED,
+        WorkflowStepStatus.FAILED,
+        WorkflowStepStatus.CANCELLED,
+    }
+)
+
+
+class WorkflowProgressKey(StrEnum):
+    """Sub-componentes del progreso granular de un step.
+
+    Las keys esperadas dependen del tipo del step:
+    - `A_ROLL`: SCENE_IMAGE, AUDIO, VIDEO, DOWNLOAD
+    - `B_ROLL` con `text`: SCENE_IMAGE, AUDIO, VIDEO, DOWNLOAD_VIDEO, DOWNLOAD_AUDIO
+    - `B_ROLL` sin `text`: SCENE_IMAGE, VIDEO, DOWNLOAD
+
+    La validación cruzada (key vs tipo) vive en
+    `policies.validate_workflow_step_progress`.
+    """
+
+    SCENE_IMAGE = "scene_image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    DOWNLOAD = "download"
+    DOWNLOAD_VIDEO = "download_video"
+    DOWNLOAD_AUDIO = "download_audio"
+
+
+class WorkflowProgressStatus(StrEnum):
+    """Estado de cada sub-componente del progreso de un step."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class WorkflowStep(BaseModel):
+    """Una escena del workflow (a-roll o b-roll).
+
+    Persistido en `workflow_steps`. `bg_image_job_id`, `audio_job_id` y
+    `video_task_id` se llenan en runtime para soportar restore tras
+    crash (reusar el task de Kie en vez de re-crearlo).
+
+    `progress` es un dict por sub-componente: keys del enum
+    `WorkflowProgressKey`, valores del enum `WorkflowProgressStatus`.
+    Persistido como JSON string en la columna `progress_json`.
+    """
+
+    step: int
+    scene_name: str
+    scene_slug: str
+    type: StepType
+    change_background: bool = True
+    background_description: str = ""
+    prompt: str
+    text: str = ""
+    bg_image_job_id: str | None = None
+    audio_job_id: str | None = None
+    video_task_id: str | None = None
+    scene_image_path: str | None = None
+    audio_path: str | None = None
+    video_path: str | None = None
+    status: WorkflowStepStatus = WorkflowStepStatus.QUEUED
+    progress: dict[WorkflowProgressKey, WorkflowProgressStatus] = Field(default_factory=dict)
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    def is_terminal(self) -> bool:
+        return self.status in WORKFLOW_STEP_TERMINAL_STATUSES
+
+
+class WorkflowStatus(StrEnum):
+    """Estado global del lifecycle de un `WorkflowJob`."""
+
+    QUEUED = "queued"
+    PREPARING_BASE = "preparing_base"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    PARTIALLY_FAILED = "partially_failed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+WORKFLOW_TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
+    {
+        WorkflowStatus.COMPLETED,
+        WorkflowStatus.PARTIALLY_FAILED,
+        WorkflowStatus.FAILED,
+        WorkflowStatus.CANCELLED,
+    }
+)
+
+WORKFLOW_RESUMABLE_STATUSES: frozenset[WorkflowStatus] = frozenset(
+    # QUEUED y RUNNING/PREPARING_BASE son retomables. Los steps internos
+    # tienen su propia matriz de restore (ver app.py).
+    {
+        WorkflowStatus.QUEUED,
+        WorkflowStatus.PREPARING_BASE,
+        WorkflowStatus.RUNNING,
+    }
+)
+
+
+class WorkflowJob(BaseModel):
+    """Job de automatización end-to-end.
+
+    Persistido en `workflow_jobs` + `workflow_steps`. El manifest
+    (`output_dir/workflow.json`) es un snapshot derivado regenerado
+    atómicamente tras cada transición (ver `infra.workflow_manifest_writer`).
+
+    `source_json_path` es el path original (relativo al cwd) del JSON
+    que disparó el workflow. Útil para debugging y para que el usuario
+    sepa qué archivo abrir.
+
+    `manifest_write_failed` se setea a `True` si el último intento de
+    escribir el manifest atómicamente falló de forma permanente. NO
+    bloquea la ejecución: el manifest es derivado, la DB es la fuente
+    de verdad. La UI puede mostrar un badge informativo.
+    """
+
+    id: str
+    name: str
+    slug: str
+    source_json_path: str
+    output_dir: str
+    pre_settings: WorkflowPreSettings
+    steps: list[WorkflowStep]
+    status: WorkflowStatus = WorkflowStatus.QUEUED
+    error: str | None = None
+    manifest_write_failed: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+    def is_terminal(self) -> bool:
+        return self.status in WORKFLOW_TERMINAL_STATUSES
+
+    def is_resumable(self) -> bool:
+        return self.status in WORKFLOW_RESUMABLE_STATUSES
+
+    def step_by_number(self, step_number: int) -> WorkflowStep | None:
+        """Devuelve el `WorkflowStep` con `step == step_number` o `None`."""
+        for step in self.steps:
+            if step.step == step_number:
+                return step
+        return None
+
+
+class WorkflowEntry(BaseModel):
+    """Una entrada del directorio `workflows/` listada por el loader.
+
+    Mirror de `BatchEntry`: representa un JSON detectado en el filesystem,
+    parseado y validado. Si `errors` está vacío, `workflow` está
+    correctamente parseado y se puede pasar a `WorkflowController.enqueue`.
+
+    `warnings` recoge mensajes informativos (no bloqueantes) — ej. b-roll
+    con `change_background=false` que normalmente es un error de usuario
+    pero técnicamente válido.
+    """
+
+    name: str
+    path: Path
+    workflow_payload: dict[str, Any] | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors

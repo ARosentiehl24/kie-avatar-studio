@@ -22,8 +22,11 @@ from ..domain.models import KieTaskCreated, KieUploadResult, VoiceSettings
 
 DEFAULT_UPLOAD_PATH: Final[str] = "images/avatar-models"
 DEFAULT_TTS_MODEL: Final[str] = "elevenlabs/text-to-speech-multilingual-v2"
+DEFAULT_TTS_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-v2-5"
 DEFAULT_AVATAR_MODEL: Final[str] = "kling/ai-avatar-pro"
 DEFAULT_NANO_BANANA_MODEL: Final[str] = "nano-banana-2"
+DEFAULT_I2V_MODEL: Final[str] = "kling-2.6/image-to-video"
+DEFAULT_I2V_DURATION: Final[int] = 5
 
 _DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
 _MAX_RETRIES: Final[int] = 3
@@ -163,6 +166,34 @@ class KieClient:
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution,
                 "output_format": output_format,
+            },
+        }
+        return await self._create_task(body)
+
+    async def create_image_to_video_task(
+        self,
+        image_url: str,
+        prompt: str,
+        *,
+        model: str = DEFAULT_I2V_MODEL,
+        duration: int = DEFAULT_I2V_DURATION,
+    ) -> KieTaskCreated:
+        """POST /api/v1/jobs/createTask — crea task de Kling 2.6 image-to-video.
+
+        Endpoint usado para los b-roll del workflow automation: convierte una
+        imagen estática en un video silencioso (no acepta audio_url, a
+        diferencia de `kling/ai-avatar-pro`). La duración estándar es 5s o
+        10s; validamos en `domain.policies.validate_i2v_duration`.
+
+        El cliente NO valida `duration` ni el formato de `image_url` (eso lo
+        hace el domain antes de llamar). Mantiene CR-2.1: KieClient = solo HTTP.
+        """
+        body = {
+            "model": model,
+            "input": {
+                "image_url": image_url,
+                "prompt": prompt,
+                "duration": duration,
             },
         }
         return await self._create_task(body)

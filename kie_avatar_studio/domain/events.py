@@ -6,7 +6,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from .models import AudioJob, AudioJobStatus, ImageJob, ImageJobStatus, JobStatus, VideoJob
+from .models import (
+    AudioJob,
+    AudioJobStatus,
+    ImageJob,
+    ImageJobStatus,
+    JobStatus,
+    VideoJob,
+    WorkflowJob,
+    WorkflowStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,17 +49,32 @@ class ImageJobUpdated:
     job: ImageJob
 
 
-JobKind = Literal["video", "audio", "image"]
+@dataclass(frozen=True, slots=True)
+class WorkflowJobUpdated:
+    """Notificación de que un `WorkflowJob` cambió de estado, error o steps.
+
+    Mismo patrón que los demás `*JobUpdated`: emitido por el
+    `WorkflowRunner` tras cada transición (workflow status, step status,
+    progress, paths de outputs). Las pantallas (`AutomationScreen`,
+    `WorkflowDetailScreen`) se suscriben al `workflow_queue` y refrescan
+    la vista cuando llega un evento de un workflow visible.
+    """
+
+    job: WorkflowJob
+
+
+JobKind = Literal["video", "audio", "image", "workflow"]
 
 
 @dataclass(frozen=True, slots=True)
 class HistoryEntry:
-    """Vista normalizada de un job (video, audio o image) para la pantalla Historial.
+    """Vista normalizada de un job (video, audio, image o workflow) para Historial.
 
     Permite que la `HistoryScreen` muestre una tabla unificada sin tener
-    que conocer la diferencia entre `VideoJob`, `AudioJob` e `ImageJob`.
-    El `raw` queda disponible si alguna fila necesita atributos específicos
-    (típicamente para abrir la pantalla nativa del job).
+    que conocer la diferencia entre `VideoJob`, `AudioJob`, `ImageJob` y
+    `WorkflowJob`. El `raw` queda disponible si alguna fila necesita
+    atributos específicos (típicamente para abrir la pantalla nativa del
+    job).
 
     Status se proyecta a su `value` para que la pantalla solo trabaje con
     strings — los enums concretos siguen vivos en los respectivos
@@ -62,9 +86,9 @@ class HistoryEntry:
     id: str
     label: str
     status_value: str
-    detail: str  # script (audio), prompt (video) o prompt (image) — preview para la tabla.
+    detail: str  # script (audio), prompt (video/image) o name (workflow) — preview.
     created_at: datetime
-    raw: VideoJob | AudioJob | ImageJob
+    raw: VideoJob | AudioJob | ImageJob | WorkflowJob
 
     @classmethod
     def from_video_job(cls, job: VideoJob) -> HistoryEntry:
@@ -102,6 +126,18 @@ class HistoryEntry:
             raw=job,
         )
 
+    @classmethod
+    def from_workflow_job(cls, job: WorkflowJob) -> HistoryEntry:
+        return cls(
+            kind="workflow",
+            id=job.id,
+            label=job.name,
+            status_value=job.status.value,
+            detail=f"{len(job.steps)} escenas · {job.slug}",
+            created_at=job.created_at,
+            raw=job,
+        )
+
 
 _VIDEO_LABEL_MAX_LEN: int = 40
 
@@ -134,8 +170,19 @@ _TERMINAL_IMAGE_STATUS_VALUES: frozenset[str] = frozenset(
         ImageJobStatus.CANCELLED.value,
     }
 )
+_TERMINAL_WORKFLOW_STATUS_VALUES: frozenset[str] = frozenset(
+    {
+        WorkflowStatus.COMPLETED.value,
+        WorkflowStatus.PARTIALLY_FAILED.value,
+        WorkflowStatus.FAILED.value,
+        WorkflowStatus.CANCELLED.value,
+    }
+)
 TERMINAL_HISTORY_STATUS_VALUES: frozenset[str] = (
-    _TERMINAL_VIDEO_STATUS_VALUES | _TERMINAL_AUDIO_STATUS_VALUES | _TERMINAL_IMAGE_STATUS_VALUES
+    _TERMINAL_VIDEO_STATUS_VALUES
+    | _TERMINAL_AUDIO_STATUS_VALUES
+    | _TERMINAL_IMAGE_STATUS_VALUES
+    | _TERMINAL_WORKFLOW_STATUS_VALUES
 )
 
 

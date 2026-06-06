@@ -121,3 +121,37 @@ class GeneratedImageExpiredError(ImageGenerationValidationError):
     creación (`KIE_GENERATED_RETENTION_DAYS`). El usuario debe
     regenerar la imagen o usar otra.
     """
+
+
+class WorkflowValidationError(JobValidationError):
+    """Un `WorkflowJob` (automatización) no cumple las restricciones del dominio.
+
+    Cubre shape inválido del JSON (steps faltantes, números no consecutivos,
+    `model_creation` inconsistente con `method`, `pre_settings` faltantes)
+    y la validación cruzada (preset_id que no existe en `VoicePresetStore`
+    en momento de encolar — chequeada por el controller, no por el dominio).
+    Ver `policies.validate_workflow`.
+    """
+
+
+class WorkflowStepValidationError(WorkflowValidationError):
+    """Un `WorkflowStep` individual no cumple las restricciones.
+
+    Cubre prompts vacíos/largos, `text` faltante en a-roll, `progress`
+    con keys inválidas para el tipo del step, etc. Ver
+    `policies.validate_workflow_step`.
+    """
+
+
+class WorkflowStepError(KieError):
+    """Un step de un workflow falló durante la ejecución.
+
+    Mensaje en español y opcionalmente referencia al `step.scene_name` para
+    que la UI pueda mostrar contexto. Usado por el `WorkflowStepRunner`
+    para distinguir fallas estructurales del workflow vs fallas Kie reales
+    en el step (que se propagan tipadas más abajo).
+    """
+
+
+class WorkflowNotFoundError(KieError):
+    """Se intentó operar sobre un `WorkflowJob` por id pero no existe en el store."""

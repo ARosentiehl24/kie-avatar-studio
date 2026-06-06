@@ -26,6 +26,9 @@ from .models import (
     VideoJob,
     VoicePreset,
     VoiceSettings,
+    WorkflowJob,
+    WorkflowStatus,
+    WorkflowStep,
 )
 
 StatusT = TypeVar("StatusT", bound=StrEnum)
@@ -117,6 +120,15 @@ class KieGateway(Protocol):
         aspect_ratio: str = ...,
         resolution: str = ...,
         output_format: str = ...,
+    ) -> KieTaskCreated: ...
+
+    async def create_image_to_video_task(
+        self,
+        image_url: str,
+        prompt: str,
+        *,
+        model: str = ...,
+        duration: int = ...,
     ) -> KieTaskCreated: ...
 
     async def get_task_detail(self, task_id: str) -> dict[str, Any]: ...
@@ -327,3 +339,60 @@ class DesktopNotifier(Protocol):
     """
 
     async def notify(self, *, title: str, message: str, success: bool) -> None: ...
+
+
+@runtime_checkable
+class WorkflowRepository(Protocol):
+    """Persistencia de `WorkflowJob` + `WorkflowStep`.
+
+    Implementado por `infra.workflow_db.WorkflowDB`. A diferencia de los
+    repos de jobs hoja (video/audio/image), este expone updates
+    granulares por step:
+    - `upsert_workflow(workflow)`: persiste header + lista completa de
+      steps (usado en enqueue y restore para inicialización).
+    - `upsert_step(workflow_id, step)`: persiste cambios de UN solo
+      step (usado en cada transición del step runner para evitar lost
+      updates con steps corriendo en paralelo).
+    - `update_workflow_header(workflow)`: persiste solo el status/error/
+      manifest_write_failed/updated_at del workflow (no toca steps).
+
+    `progress` se persiste como `progress_json TEXT` siguiendo el patrón
+    de `image_jobs.refs_json` / `audio_jobs.voice_settings_json`. El
+    runner serializa/deserializa con `WorkflowStep.model_dump_json`.
+    """
+
+    async def init(self) -> None: ...
+
+    async def upsert_workflow(self, workflow: WorkflowJob) -> None: ...
+
+    async def update_workflow_header(self, workflow: WorkflowJob) -> None: ...
+
+    async def upsert_step(self, workflow_id: str, step: WorkflowStep) -> None: ...
+
+    async def get(self, workflow_id: str) -> WorkflowJob | None: ...
+
+    async def list_recent(self, limit: int = 50) -> list[WorkflowJob]: ...
+
+    async def list_by_status(self, status: WorkflowStatus) -> list[WorkflowJob]: ...
+
+    async def delete(self, workflow_id: str) -> None: ...
+
+
+@runtime_checkable
+class WorkflowManifestWriter(Protocol):
+    """Puerto para escribir el manifest `workflow.json` atómicamente.
+
+    Implementado por `infra.workflow_manifest_writer.AtomicWorkflowManifestWriter`.
+    Desacopla la capa de aplicación de la concreta (CR-1: `app_layer/`
+    no importa de `infra/`). El `WorkflowRunner` recibe esto por
+    inyección desde el composition root.
+
+    `write` debe ser idempotente y no debe lanzar en caso de fallo
+    transitorio (best-effort: si falla permanentemente, lo registra en
+    el campo `manifest_write_failed` del workflow y el runner sigue
+    ejecutando). Esto es porque el manifest es derivado: la DB es la
+    fuente de verdad.
+    """
+
+    async def write(self, workflow: WorkflowJob) -> bool:
+        """Escribe el manifest atómicamente. Devuelve True si OK, False si falló."""

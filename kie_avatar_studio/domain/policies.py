@@ -20,9 +20,22 @@ from .errors import (
     KeyValidationError,
     UrlValidationError,
     VoiceSettingsValidationError,
+    WorkflowStepValidationError,
+    WorkflowValidationError,
 )
 from .kie_voice_catalog import is_builtin_voice
-from .models import ImageAssetRef, ImageGenerationSettings, VideoJob, VoiceSettings
+from .models import (
+    ImageAssetRef,
+    ImageGenerationSettings,
+    ModelCreation,
+    ModelCreationMethod,
+    StepType,
+    VideoJob,
+    VoiceSettings,
+    WorkflowJob,
+    WorkflowProgressKey,
+    WorkflowStep,
+)
 
 MAX_SCRIPT_CHARS: Final[int] = 5000
 MAX_PROMPT_CHARS: Final[int] = 5000
@@ -364,9 +377,9 @@ def validate_http_url(url: str) -> None:
 # que rechaza basura obvia sin bloquear casos legítimos.
 MIN_VOICE_ID_LENGTH: Final[int] = 3
 MAX_VOICE_ID_LENGTH: Final[int] = 64
-# Subset razonable de códigos ISO 639-1. Validamos solo formato (2 letras),
-# Kie/ElevenLabs valida el código real.
-_LANGUAGE_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z]{2}$")
+# Acepta tanto ISO 639-1 ("es", "en") como BCP 47 ("es-419", "pt-BR").
+# Validamos solo formato; Kie/ElevenLabs valida el código real.
+_LANGUAGE_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z]{2}(-[A-Za-z0-9]{2,8})?$")
 
 
 def validate_tts_script(text: str) -> None:
@@ -416,7 +429,8 @@ def validate_voice_settings(settings: VoiceSettings) -> None:
         code = settings.language_code.strip().lower()
         if code and not _LANGUAGE_CODE_PATTERN.match(code):
             raise VoiceSettingsValidationError(
-                "language_code debe ser un código ISO 639-1 de 2 letras (ej: 'es', 'en')"
+                "language_code debe ser un código ISO 639-1 ('es', 'en') o BCP 47 "
+                "('es-419', 'pt-BR')"
             )
 
 
@@ -487,3 +501,246 @@ def validate_image_refs(refs: list[ImageAssetRef]) -> None:
         if ref.kie_url in seen:
             raise ImageGenerationValidationError(f"ref '{ref.label}' está duplicada en la lista")
         seen.add(ref.kie_url)
+
+
+# --- Workflow automation validators ---------------------------------------
+
+# Restricciones del endpoint Kling 2.6 image-to-video (`kling-2.6/image-to-video`):
+# - prompt máximo 2500 chars en la doc oficial.
+# - duración aceptada: 5 o 10 segundos (`duration` int).
+# Ver `docs/API_KIE.md §6`.
+MAX_I2V_PROMPT_CHARS: Final[int] = 2500
+I2V_DURATIONS: Final[tuple[int, ...]] = (5, 10)
+
+# Mapping (key requerida según tipo de step) ⇒ keys que `progress` debe tener.
+# Las extras no son error (futuro-proof), las faltantes sí (incompletitud).
+_REQUIRED_PROGRESS_KEYS_A_ROLL: Final[frozenset[WorkflowProgressKey]] = frozenset(
+    {
+        WorkflowProgressKey.SCENE_IMAGE,
+        WorkflowProgressKey.AUDIO,
+        WorkflowProgressKey.VIDEO,
+        WorkflowProgressKey.DOWNLOAD,
+    }
+)
+_REQUIRED_PROGRESS_KEYS_B_ROLL_WITH_TEXT: Final[frozenset[WorkflowProgressKey]] = frozenset(
+    {
+        WorkflowProgressKey.SCENE_IMAGE,
+        WorkflowProgressKey.AUDIO,
+        WorkflowProgressKey.VIDEO,
+        WorkflowProgressKey.DOWNLOAD_VIDEO,
+        WorkflowProgressKey.DOWNLOAD_AUDIO,
+    }
+)
+_REQUIRED_PROGRESS_KEYS_B_ROLL_SILENT: Final[frozenset[WorkflowProgressKey]] = frozenset(
+    {
+        WorkflowProgressKey.SCENE_IMAGE,
+        WorkflowProgressKey.VIDEO,
+        WorkflowProgressKey.DOWNLOAD,
+    }
+)
+
+_WORKFLOW_SLUG_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
+_WORKFLOW_NAME_MAX_LEN: Final[int] = 120
+
+
+def slugify_workflow_name(name: str) -> str:
+    """Devuelve un slug filesystem-safe para usar en nombres de carpeta.
+
+    No es reversible: dos nombres con caracteres distintos pueden colapsar
+    al mismo slug. Eso está bien para el `WorkflowJob.slug` porque se
+    combina con `id = wf_<timestamp>_<short_uuid>` para garantizar
+    unicidad del `output_dir`. Si el nombre es vacío o solo símbolos,
+    devuelve `"workflow"`.
+    """
+    lowered = name.strip().lower()
+    cleaned = _WORKFLOW_SLUG_PATTERN.sub("_", lowered).strip("_")
+    if not cleaned:
+        return "workflow"
+    return cleaned[:_WORKFLOW_NAME_MAX_LEN]
+
+
+def validate_model_creation(model_creation: ModelCreation) -> None:
+    """Valida la configuración de creación de la modelo base.
+
+    Verifica que según `method` estén los campos requeridos. NO chequea
+    existencia del path local en disco (eso es responsabilidad del
+    `WorkflowRunner._resolve_base()` que revalida justo antes del upload
+    para evitar race window).
+    """
+    method = model_creation.method
+    if method == ModelCreationMethod.PROMPT:
+        if not model_creation.prompt:
+            raise WorkflowValidationError(
+                "model_creation.method='prompt' requiere 'prompt' no vacío"
+            )
+        # Reusamos el validator de Nano Banana 2 — mismo modelo de generación.
+        try:
+            validate_image_prompt(model_creation.prompt)
+        except ImageGenerationValidationError as exc:
+            raise WorkflowValidationError(f"model_creation.prompt inválido: {exc}") from exc
+    elif method == ModelCreationMethod.LOCAL:
+        if not model_creation.local_path:
+            raise WorkflowValidationError(
+                "model_creation.method='local' requiere 'local_path' no vacío"
+            )
+    elif method == ModelCreationMethod.CATALOG:
+        if model_creation.asset_kind is None or not model_creation.asset_id:
+            raise WorkflowValidationError(
+                "model_creation.method='catalog' requiere 'asset_kind' y 'asset_id' no vacíos"
+            )
+
+
+def validate_workflow_step(step: WorkflowStep) -> list[str]:
+    """Valida un step y devuelve la lista de warnings (no bloqueantes).
+
+    Errores estructurales se levantan como excepciones. Warnings se
+    devuelven en una lista para que el caller los muestre en UI/loader
+    sin bloquear ejecución.
+    """
+    if step.step < 1:
+        raise WorkflowStepValidationError(
+            f"step.step debe ser >= 1 (recibí {step.step})"
+        )
+    if not step.scene_name.strip():
+        raise WorkflowStepValidationError(f"step {step.step}: scene_name vacío")
+    if not step.scene_slug.strip():
+        raise WorkflowStepValidationError(f"step {step.step}: scene_slug vacío")
+    if not step.prompt.strip():
+        raise WorkflowStepValidationError(f"step {step.step}: prompt vacío")
+    _validate_step_prompt_length(step)
+    _validate_step_text_per_type(step)
+    _validate_workflow_step_progress(step)
+    return _collect_step_warnings(step)
+
+
+def _validate_step_prompt_length(step: WorkflowStep) -> None:
+    """Aplica los límites de chars del prompt según `step.type`.
+
+    A-roll usa Avatar Pro (límite del prompt = `MAX_PROMPT_CHARS=5000`).
+    B-roll usa Kling i2v (límite del prompt = `MAX_I2V_PROMPT_CHARS=2500`).
+    Si `change_background=True`, el prompt también alimenta al Nano Banana
+    refit con el `background_description`, pero ese pasa por su propia
+    validación en el runner.
+    """
+    max_chars = MAX_PROMPT_CHARS if step.type == StepType.A_ROLL else MAX_I2V_PROMPT_CHARS
+    if len(step.prompt) > max_chars:
+        raise WorkflowStepValidationError(
+            f"step {step.step}: prompt supera {max_chars} caracteres"
+        )
+
+
+def _validate_step_text_per_type(step: WorkflowStep) -> None:
+    """A-roll exige `text` no vacío (hay que sincronizar audio). B-roll lo permite vacío."""
+    if step.type == StepType.A_ROLL:
+        if not step.text.strip():
+            raise WorkflowStepValidationError(
+                f"step {step.step}: tipo a-roll requiere 'text' no vacío "
+                "(el audio se sincroniza con el video)"
+            )
+        try:
+            validate_tts_script(step.text)
+        except AudioValidationError as exc:
+            raise WorkflowStepValidationError(
+                f"step {step.step}: text inválido para TTS: {exc}"
+            ) from exc
+    elif step.text:
+        # B-roll: si hay text (incluso solo whitespace), validamos como TTS.
+        # Whitespace-only es error del JSON; "sin text" se expresa con "".
+        try:
+            validate_tts_script(step.text)
+        except AudioValidationError as exc:
+            raise WorkflowStepValidationError(
+                f"step {step.step}: text inválido para TTS: {exc}"
+            ) from exc
+
+
+def _validate_workflow_step_progress(step: WorkflowStep) -> None:
+    """Valida que `step.progress` tenga las keys correctas para `step.type`.
+
+    Si `progress` está vacío, no chequea nada (default freshly-created).
+    Si tiene keys, deben ser un subset de las esperadas para el tipo —
+    sino indica corrupción/inconsistencia.
+    """
+    if not step.progress:
+        return
+    expected_keys = _expected_progress_keys(step)
+    actual_keys = set(step.progress.keys())
+    unexpected = actual_keys - expected_keys
+    if unexpected:
+        raise WorkflowStepValidationError(
+            f"step {step.step}: progress tiene keys inválidas para tipo "
+            f"{step.type.value}: {sorted(k.value for k in unexpected)}"
+        )
+
+
+def _expected_progress_keys(step: WorkflowStep) -> frozenset[WorkflowProgressKey]:
+    """Devuelve el set de keys que `progress` debe (eventualmente) tener para este step."""
+    if step.type == StepType.A_ROLL:
+        return _REQUIRED_PROGRESS_KEYS_A_ROLL
+    if step.text.strip():
+        return _REQUIRED_PROGRESS_KEYS_B_ROLL_WITH_TEXT
+    return _REQUIRED_PROGRESS_KEYS_B_ROLL_SILENT
+
+
+def expected_progress_keys_for_step(step: WorkflowStep) -> frozenset[WorkflowProgressKey]:
+    """API pública del helper para que el runner inicialice `progress` con defaults."""
+    return _expected_progress_keys(step)
+
+
+def _collect_step_warnings(step: WorkflowStep) -> list[str]:
+    """Devuelve mensajes informativos no bloqueantes para el step."""
+    warnings: list[str] = []
+    if step.type == StepType.B_ROLL and not step.change_background:
+        warnings.append(
+            f"step {step.step}: b-roll con change_background=false usará la imagen base "
+            "de la modelo; normalmente querés change_background=true para escenas auxiliares"
+        )
+    if (
+        step.type == StepType.B_ROLL
+        and step.change_background
+        and not step.background_description.strip()
+    ):
+        warnings.append(
+            f"step {step.step}: change_background=true pero background_description vacío; "
+            "la imagen scene se generará solo con el prompt del step"
+        )
+    return warnings
+
+
+def validate_workflow(workflow: WorkflowJob) -> list[str]:
+    """Valida un `WorkflowJob` completo y devuelve la lista de warnings.
+
+    Errores estructurales (steps vacío, numeros no consecutivos,
+    model_creation inválido, step inválido) se levantan como excepciones.
+    Warnings de los steps se agregan a la lista devuelta para que la UI
+    los muestre.
+    """
+    if not workflow.name.strip():
+        raise WorkflowValidationError("workflow.name no puede estar vacío")
+    if not workflow.steps:
+        raise WorkflowValidationError("workflow debe tener al menos 1 step")
+    validate_model_creation(workflow.pre_settings.model_creation)
+    _validate_workflow_step_numbering(workflow)
+    warnings: list[str] = []
+    for step in workflow.steps:
+        warnings.extend(validate_workflow_step(step))
+    return warnings
+
+
+def _validate_workflow_step_numbering(workflow: WorkflowJob) -> None:
+    """Los steps deben numerarse consecutivamente desde 1 sin gaps ni duplicados."""
+    expected = list(range(1, len(workflow.steps) + 1))
+    actual = sorted(step.step for step in workflow.steps)
+    if actual != expected:
+        raise WorkflowValidationError(
+            f"workflow.steps deben numerarse de 1 a {len(workflow.steps)} "
+            f"consecutivos (recibí {actual})"
+        )
+
+
+def validate_i2v_duration(duration: int) -> None:
+    """Valida `duration` del endpoint Kling 2.6 image-to-video."""
+    if duration not in I2V_DURATIONS:
+        raise WorkflowStepValidationError(
+            f"duration i2v inválido: {duration} (válidos: {', '.join(map(str, I2V_DURATIONS))})"
+        )
