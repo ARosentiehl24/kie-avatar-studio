@@ -346,4 +346,3 @@ async def test_roundtrip_step_include_model(workflow_db: WorkflowDB) -> None:
     loaded = await workflow_db.get(workflow.id)
     assert loaded is not None
     assert loaded.steps[0].include_model is False
-

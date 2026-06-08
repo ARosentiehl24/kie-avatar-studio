@@ -886,4 +886,3 @@ def test_build_scene_image_job_retains_product_only_when_include_model_false(
     # Debe contener solo 1 elemento (el producto, id "prod_img")
     assert len(refs) == 1
     assert refs[0]["id"] == "prod_img"
-

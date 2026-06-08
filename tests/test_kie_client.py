@@ -377,6 +377,7 @@ async def test_200_with_code_200_does_not_trigger_credit_error(tmp_settings) -> 
 async def test_upload_file_sanitizes_spaces_in_download_url(tmp_settings, tmp_path) -> None:
     """Si el downloadUrl devuelto por Kie contiene espacios (ej. por nombre de archivo local),
     el cliente debe reemplazarlos por %20 para que sea una URL HTTP bien formada."""
+
     def handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path == "/api/file-stream-upload"
         return httpx.Response(

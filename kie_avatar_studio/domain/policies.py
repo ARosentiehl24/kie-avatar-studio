@@ -799,8 +799,7 @@ def _validate_workflow_step_progress(step: WorkflowStep) -> None:
         if unexpected:
             reasons.append(f"sobran: {sorted(k.value for k in unexpected)}")
         raise WorkflowStepValidationError(
-            f"step {step.step}: progress inválido para tipo {step.type.value}. "
-            f"{'; '.join(reasons)}"
+            f"step {step.step}: progress inválido para tipo {step.type.value}. {'; '.join(reasons)}"
         )
 
 
@@ -883,7 +882,10 @@ def validate_workflow(workflow: WorkflowJob) -> list[str]:
     validate_model_creation(workflow.pre_settings.model_creation)
     if workflow.pre_settings.i2v_duration_seconds is not None:
         validate_i2v_duration(workflow.pre_settings.i2v_duration_seconds)
-    if workflow.pre_settings.image_aspect_ratio is not None and workflow.pre_settings.image_aspect_ratio not in ASPECT_RATIOS:
+    if (
+        workflow.pre_settings.image_aspect_ratio is not None
+        and workflow.pre_settings.image_aspect_ratio not in ASPECT_RATIOS
+    ):
         raise WorkflowValidationError(
             f"image_aspect_ratio inválido: {workflow.pre_settings.image_aspect_ratio!r} "
             f"(válidos: {', '.join(ASPECT_RATIOS)})"
