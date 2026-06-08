@@ -137,9 +137,9 @@ Un workflow de N steps consume:
 El modal de confirmación muestra el desglose de operaciones + tu saldo
 actual de Kie antes de ejecutar.
 
-## Ejemplo completo
+## Escribe tu propio workflow
 
-Ver `workflows/example_product_promo.json` para un workflow realista que
-promociona un producto: un a-roll (la modelo hablando mientras sostiene el
-producto) + un b-roll (el producto en una escena nueva), con
-`promote_product: true` e `include_product: true` por step.
+Puedes crear tus propios archivos JSON en esta carpeta siguiendo la estructura
+descrita en `workflows/SCHEMA.json` o la guía de referencia detallada en
+`workflows/SCHEMA_REFERENCE.md`.
+
