@@ -211,7 +211,69 @@ La validación de enums + prompt + refs vive en `domain/policies.py`
 (`validate_image_prompt`, `validate_image_settings`, `validate_image_refs`);
 el cliente HTTP no valida nada (CR-2.1).
 
-## 6. Consultar task
+## 6. Crear task Kling 3.0 video (b-roll)
+
+Mismo endpoint `createTask`, modelo `kling-3.0/video`. Genera un video a
+partir de una imagen estática + prompt. Usado en el subsistema de
+**automatización** para los steps `type=b-roll`. Migramos de
+`kling-2.6/image-to-video` a `kling-3.0/video` (2026-06-06) porque 3.0
+ofrece duración 3-15s (vs solo 5/10), aspect ratio configurable, modos
+std/pro/4K y sound effects ambientales nativos.
+
+El b-roll no lleva voz sincronizada (a diferencia de Avatar Pro). El
+comportamiento del audio depende del flag `voiceover` del step:
+- `voiceover=true` (default) + `text` no vacío → se llama `sound=false`
+  (video silencioso) y el TTS se descarga aparte para montar en post.
+- `voiceover=false` → se llama `sound=true`: Kling genera sound effects
+  ambientales nativos basados en el prompt (no es voz hablada), embebidos
+  en el video; NO se llama a TTS.
+
+```json
+{
+  "model": "kling-3.0/video",
+  "input": {
+    "prompt": "Hands struggling to button jeans, cinematic close-up, raw natural light",
+    "image_urls": ["https://tempfile.redpandaai.co/.../scene.png"],
+    "sound": false,
+    "duration": "5",
+    "aspect_ratio": "16:9",
+    "mode": "pro",
+    "multi_shots": false,
+    "multi_prompt": [],
+    "kling_elements": []
+  }
+}
+```
+
+Restricciones del input (ver https://docs.kie.ai/market/kling/kling-3-0):
+
+| Campo | Tipo | Rango | Default | Notas |
+|---|---|---|---|---|
+| `image_urls` | array de URL | http(s) público | required | Array incluso para 1 imagen. La app pasa solo `[scene.png]` (típicamente `kie_url` de un `GeneratedImage` o `UploadedImage`) |
+| `prompt` | string | max **2500 chars** | required | Describe la acción a animar |
+| `sound` | bool | `true` / `false` | `false` | `true` = sound effects ambientales nativos embebidos. `false` = video silencioso |
+| `duration` | string enum | `"3"`..`"15"` | `"5"` | Duración del clip en segundos. **String, no int** |
+| `aspect_ratio` | string enum | `"16:9"` / `"9:16"` / `"1:1"` | `"16:9"` | Kling auto-adapta al ratio de la imagen ref |
+| `mode` | string enum | `"std"` (720p) / `"pro"` (1080p) / `"4K"` (2160p) | `"pro"` | Resolución y costo dependen del modo |
+| `multi_shots` | bool | `false` | `false` | Fijo: no exponemos multi-shot todavía |
+| `multi_prompt` | array | `[]` | `[]` | Fijo: solo aplica a multi_shots=true |
+| `kling_elements` | array | `[]` | `[]` | Fijo: no exponemos element references |
+
+> La app fija `mode=pro` y `aspect_ratio=16:9` (no son configurables desde
+> el JSON del workflow). `duration` se controla por step (`duration_seconds`)
+> o por el override global `pre_settings.i2v_duration_seconds`. `sound` se
+> deriva del flag `voiceover` del step.
+
+Respuesta y polling: idénticos al resto (`{ "data": { "taskId": "..." } }` + `recordInfo`).
+
+Costos (referencia, sujetos a cambio): varían según `mode` (std < pro < 4K)
+y duración. Validá en https://kie.ai/billing.
+
+Implementado en `KieClient.create_image_to_video_task(...)` (`infra/kie_client.py`).
+La validación de `duration` vive en `domain/policies.py:validate_i2v_duration`.
+El cliente HTTP no valida nada (CR-2.1).
+
+## 7. Consultar task
 
 ```http
 GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<TASK_ID>

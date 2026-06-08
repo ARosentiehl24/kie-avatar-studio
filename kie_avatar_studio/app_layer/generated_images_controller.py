@@ -20,14 +20,12 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Awaitable, Callable
-from typing import Final
 
 from loguru import logger
 
 from ..domain.errors import (
     GeneratedImageExpiredError,
     GeneratedImageNotFoundError,
-    ImageGenerationValidationError,
 )
 from ..domain.events import ImageJobUpdated
 from ..domain.models import (
@@ -37,12 +35,10 @@ from ..domain.models import (
     ImageJob,
     ImageJobStatus,
 )
-from ..domain.policies import KIE_GENERATED_RETENTION_DAYS
+from ..domain.policies import KIE_GENERATED_RETENTION_DAYS, validate_image_label
 from ..domain.ports import GeneratedImageStore, ImageJobRepository
 from .ids import new_image_job_id
 from .queue_manager import QueueManager
-
-_LABEL_MAX_LENGTH: Final[int] = 64
 
 ImageEventListener = (
     Callable[[ImageJobUpdated], None] | Callable[[ImageJobUpdated], Awaitable[None]]
@@ -114,7 +110,7 @@ class GeneratedImagesController:
         `ImageJobRunner._validate` (mismo patrón que audio). Acá
         solo limpiamos el label y serializamos settings/refs a JSON.
         """
-        clean_label = self._validate_label(label)
+        clean_label = validate_image_label(label)
         settings_json: str | None = None
         if settings is not None:
             settings_json = settings.model_dump_json(exclude_none=True)
@@ -201,16 +197,3 @@ class GeneratedImagesController:
                 -image.time_left(self._retention_days),
             )
         return expired
-
-    # --- internals ---------------------------------------------------------
-
-    @staticmethod
-    def _validate_label(label: str) -> str:
-        clean = label.strip()
-        if not clean:
-            raise ImageGenerationValidationError("el label de la imagen no puede estar vacío")
-        if len(clean) > _LABEL_MAX_LENGTH:
-            raise ImageGenerationValidationError(
-                f"el label de la imagen supera {_LABEL_MAX_LENGTH} caracteres"
-            )
-        return clean

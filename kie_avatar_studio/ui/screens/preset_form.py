@@ -4,6 +4,15 @@ Solo dispatch + render (CR-10.1). Reusa el patrón del modal Generate
 Audio: header + body scrollable + footer sticky con botones. El
 preset se guarda via callback (`on_save`) que el caller le pasa,
 así el modal queda independiente del controller concreto.
+
+### Preview de voces
+
+Igual que `GenerateAudioFormScreen`, este modal recibe un `AudioPlayer`
+inyectado y expone botones **Preview** / **Detener** al lado del
+Select de voz. Reproduce el `preview_url` del catálogo built-in
+(servido por ElevenLabs vía Kie). El stop se dispara también al
+dismiss del modal (cancelar/guardar) para que el usuario no quede
+con un audio sonando.
 """
 
 from __future__ import annotations
@@ -17,7 +26,9 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Input, Label, Select, Static, TextArea
 
-from ...domain.kie_voice_catalog import BUILTIN_VOICES
+from ...app_layer.audio_player import AudioPlayer
+from ...domain.errors import UrlValidationError
+from ...domain.kie_voice_catalog import BUILTIN_VOICES, get_builtin_voice
 from ...domain.models import VoicePreset, VoiceSettings
 from ...domain.policies import MAX_SCRIPT_CHARS
 
@@ -49,10 +60,16 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
         Binding("escape", "cancel", "Cancelar", show=False),
     ]
 
-    def __init__(self, existing: VoicePreset | None = None) -> None:
+    def __init__(
+        self,
+        existing: VoicePreset | None = None,
+        *,
+        audio_player: AudioPlayer | None = None,
+    ) -> None:
         super().__init__()
         self._existing = existing
         self._is_edit = existing is not None
+        self._audio_player = audio_player
 
     def compose(self) -> ComposeResult:
         title = _FORM_TITLE_EDIT if self._is_edit else _FORM_TITLE_NEW
@@ -68,12 +85,18 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
                 )
 
                 yield Label("Voz (catálogo built-in de Kie — 67 voces)")
-                yield Select(
-                    options=[(voice.display_name, voice.voice_id) for voice in BUILTIN_VOICES],
-                    value=self._initial_voice_id(),
-                    allow_blank=False,
-                    id="preset-voice",
-                )
+                with Horizontal(id="preset-voice-row"):
+                    yield Select(
+                        options=[(voice.display_name, voice.voice_id) for voice in BUILTIN_VOICES],
+                        value=self._initial_voice_id(),
+                        allow_blank=False,
+                        id="preset-voice",
+                    )
+                    # Solo mostramos los botones si tenemos un AudioPlayer
+                    # inyectado (compatibilidad con callers que no lo pasen).
+                    if self._audio_player is not None:
+                        yield Button("Preview", id="preset-preview", classes="btn-info")
+                        yield Button("Detener", id="preset-preview-stop", classes="btn-warning")
 
                 yield Label(f"Descripción opcional (máx {_DESCRIPTION_MAX} chars)")
                 yield TextArea(
@@ -125,9 +148,67 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
             self.action_cancel()
         elif bid == "save":
             await self._on_save()
+        elif bid == "preset-preview":
+            self._handle_preview()
+        elif bid == "preset-preview-stop":
+            self._handle_preview_stop()
 
     def action_cancel(self) -> None:
+        # Stop del preview antes de cerrar: el usuario que cancela espera
+        # silencio inmediato.
+        self._stop_preview_async()
         self.dismiss(None)
+
+    # --- preview handlers --------------------------------------------------
+
+    def _handle_preview(self) -> None:
+        """Reproduce el preview de la voz seleccionada (auto-cancela el anterior)."""
+        if self._audio_player is None:
+            self._set_error("preview no disponible (audio_player no inyectado)")
+            return
+        voice_id = self._selected_voice_id()
+        if voice_id is None:
+            self._set_error("Seleccioná una voz primero")
+            return
+        voice = get_builtin_voice(voice_id)
+        if voice is None:
+            self._set_error(f"voice_id {voice_id!r} no está en el catálogo built-in")
+            return
+        if not voice.preview_url:
+            self._set_error(f"la voz '{voice.label}' no tiene preview disponible")
+            return
+        self.app.run_worker(self._open_preview(voice.preview_url), exclusive=False)
+
+    def _handle_preview_stop(self) -> None:
+        """Detiene la reproducción del preview en curso. Idempotente."""
+        self._stop_preview_async()
+
+    def _stop_preview_async(self) -> None:
+        if self._audio_player is None:
+            return
+        self.app.run_worker(self._audio_player.stop(), exclusive=False)
+
+    async def _open_preview(self, url: str) -> None:
+        if self._audio_player is None:
+            return
+        try:
+            await self._audio_player.play_voice_preview(url)
+        except (OSError, UrlValidationError) as exc:
+            self._set_error(f"no pude reproducir el preview: {exc}")
+
+    def _selected_voice_id(self) -> str | None:
+        select = self.query_one("#preset-voice", Select)
+        value = select.value
+        if value is Select.BLANK or not isinstance(value, str):
+            return None
+        return value
+
+    def _set_error(self, message: str) -> None:
+        try:
+            error = self.query_one("#preset-form-error", Static)
+        except Exception:
+            return
+        error.update(f"[red]{message}[/red]")
 
     # --- internos ---------------------------------------------------------
 
@@ -149,6 +230,9 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
         # Si el usuario escribió algo raro en los settings avanzados,
         # `_collect_voice_settings` puede devolver None; capturamos
         # ValueError adentro para mostrar en el form.
+        # Stop del preview antes de cerrar: si el usuario guarda mientras
+        # un audio sonaba, esperaría silencio inmediato.
+        self._stop_preview_async()
         self.dismiss(
             PresetFormResult(
                 id_to_update=self._existing.id if self._existing else None,

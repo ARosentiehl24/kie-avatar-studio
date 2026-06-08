@@ -81,6 +81,7 @@
 - [ ] CHANGELOG.md.
 - [ ] Empaquetar 0.1.0 (`pipx install .`).
 - [ ] Capturas para README.
+- [ ] Workflow MANUAL: preservar `task_id` del AudioJob persistido en re-pause para evitar regeneración O(N²) de TTS por step b-roll. Ver `kie_avatar_studio/app_layer/workflow_step_runner.py::_build_audio_job`.
 
 ## Fase 5 – Opcionales
 

@@ -33,6 +33,8 @@ from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .domain.policies import DEFAULT_I2V_DURATION_SECONDS
+
 _APP_DIR_NAME = "KieAvatarStudio"
 
 
@@ -89,6 +91,8 @@ class Settings(BaseSettings):
 
     default_voice: str = "EkK5I93UQWFDigLMpZcX"
     default_prompt: str = "Mirada a cámara, expresión natural, gestos suaves, tono confiado."
+    # Duración default de los b-roll (Kling 3.0 acepta 3-15s)
+    default_i2v_duration_seconds: int = Field(default=DEFAULT_I2V_DURATION_SECONDS, ge=3, le=15)
 
     notifications_enabled: bool = True
     update_check_enabled: bool = True
@@ -103,9 +107,13 @@ class Settings(BaseSettings):
     inputs_dir: Path = Field(default_factory=lambda: _app_data_root() / "inputs")
     presets_dir: Path = Field(default_factory=lambda: _app_data_root() / "presets")
     batch_jobs_dir: Path = Field(default_factory=lambda: _app_data_root() / "batch_jobs")
+    workflows_dir: Path = Field(default_factory=lambda: _app_data_root() / "workflows")
     logs_dir: Path = Field(default_factory=lambda: _app_data_root() / "logs")
 
     log_level: str = "INFO"
+
+    # Máximo workflows paralelos (debe ser al menos 1 para poder ejecutar)
+    max_parallel_workflows: int = Field(default=1, ge=1)
 
     def __init__(self, **data: Any) -> None:
         # Resolvemos `env_file` en cada instanciación (no al import time
@@ -128,6 +136,7 @@ class Settings(BaseSettings):
             self.inputs_dir,
             self.presets_dir,
             self.batch_jobs_dir,
+            self.workflows_dir,
             self.logs_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)

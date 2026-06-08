@@ -1,0 +1,224 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ARosentiehl24/kie-avatar-studio/workflows/SCHEMA.json",
+  "title": "Kie Avatar Studio Workflow",
+  "description": "Schema declarativo del JSON de workflows de Kie Avatar Studio. Valida con `python -m jsonschema -i workflows/mi_workflow.json workflows/SCHEMA.json`. Documentación humana en SCHEMA_REFERENCE.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workflow", "pre_settings", "run"],
+  "properties": {
+    "workflow": {
+      "type": "string",
+      "description": "Nombre humano del workflow. Aparece en el header del summary y como title del manifest.",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "pre_settings": {
+      "$ref": "#/$defs/PreSettings"
+    },
+    "run": {
+      "type": "array",
+      "description": "Lista ordenada de steps. Los `step.step` deben ser consecutivos desde 1 sin gaps ni duplicados.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Step"
+      }
+    }
+  },
+  "$defs": {
+    "PreSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_creation"],
+      "properties": {
+        "audio_language": {
+          "description": "ISO 639-1 (`es`, `en`, `es-419`, `pt`, etc.) o null. Si seteado fuerza el modelo TTS turbo-2-5 (acepta language_code, a veces 'internal error' del backend). Si null usa multilingual-v2 (estable, recomendado).",
+          "oneOf": [
+            { "type": "string", "minLength": 2, "maxLength": 8 },
+            { "type": "null" }
+          ]
+        },
+        "voice_preset": {
+          "description": "ID (slug) o label de un VoicePreset registrado en la pantalla `Presets`. Lookup: id primero, después label case-insensitive. NO es un voice_id de Kie directo (el preset envuelve voice_id + voice_settings).",
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 100 },
+            { "type": "null" }
+          ]
+        },
+        "i2v_duration_seconds": {
+          "description": "Override global para la duración de TODOS los b-roll del workflow. Si seteado FORZA sobreescribiendo step.duration_seconds. Si null, cada step usa su propio valor o el default global (5s). Soportado por Kling 3.0 (3-15s).",
+          "oneOf": [
+            { "type": "integer", "enum": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
+            { "type": "null" }
+          ]
+        },
+        "scene_approval_mode": {
+          "description": "auto = continúa automáticamente. manual = pausa cuando un b-roll con change_scene=true O include_product=true genera la scene_image, esperando aprobación humana desde la UI (modal SceneImageApprovalScreen). Aprobar = continúa al render Kling 3.0. Regenerar = gasta otra Nano Banana. Cancelar step = saltar este step. Solo aplica a b-roll; los a-roll nunca pausan.",
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "default": "auto"
+        },
+        "promote_product": {
+          "description": "Si true, el workflow promociona UN producto global. Al encolar, la UI pide elegir una imagen de producto desde inputs/ y la sube a Kie. Los steps (a-roll o b-roll) con include_product=true componen ese producto sobre la modelo con Nano Banana 2 (refs = [base, producto]). El producto resuelto se persiste en product_image (lo llena la UI, no lo pongas a mano en el JSON).",
+          "type": "boolean",
+          "default": false
+        },
+        "image_aspect_ratio": {
+          "description": "Aspect ratio global para todas las imágenes generadas por Nano Banana 2 (tanto la base de la modelo como las escenas de cada step). Si se omite, usa 'auto' (adapta según las referencias).",
+          "type": "string",
+          "enum": ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1:4"],
+          "default": "auto"
+        },
+        "model_creation": {
+          "$ref": "#/$defs/ModelCreation"
+        }
+      }
+    },
+    "ModelCreation": {
+      "description": "Define cómo se obtiene la imagen base del modelo del workflow. 3 métodos mutuamente excluyentes según el discriminador `method`.",
+      "type": "object",
+      "required": ["method"],
+      "oneOf": [
+        { "$ref": "#/$defs/ModelCreationPrompt" },
+        { "$ref": "#/$defs/ModelCreationLocal" },
+        { "$ref": "#/$defs/ModelCreationCatalog" }
+      ]
+    },
+    "ModelCreationPrompt": {
+      "description": "Genera la imagen base con Nano Banana 2 (gasta 1 crédito Kie). La UI abre un PreviewBaseImageScreen para que apruebes antes de gastar.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "prompt"],
+      "properties": {
+        "method": { "const": "prompt" },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000,
+          "description": "Descripción de la modelo. Recomendado: estilo, edad, vestimenta, fondo, lighting, cámara. Máximo 5000 chars (siguiendo las directrices del proyecto)."
+        },
+        "reference_image": {
+          "description": "Reservado, no implementado todavía. Dejar null.",
+          "type": "null"
+        }
+      }
+    },
+    "ModelCreationLocal": {
+      "description": "Sube una foto desde tu disco a Kie (TTL 24h). Si local_path está vacío al encolar, la UI abre file picker.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method"],
+      "properties": {
+        "method": { "const": "local" },
+        "local_path": {
+          "description": "Path absoluto a un .jpg/.png ≤ 10MB. O cadena vacía '' para que la UI te abra file picker (recomendado).",
+          "type": "string"
+        }
+      }
+    },
+    "ModelCreationCatalog": {
+      "description": "Reusa una imagen YA registrada en tu DB local (0 generación). `asset_id` es un ID interno de la DB (no path), visible en la pantalla `Imágenes` o en `data/jobs.db`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "asset_kind", "asset_id"],
+      "properties": {
+        "method": { "const": "catalog" },
+        "asset_kind": {
+          "type": "string",
+          "enum": ["uploaded", "generated"],
+          "description": "uploaded = tabla uploaded_images (TTL 24h). generated = tabla generated_images (Nano Banana, TTL 14d)."
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ID interno de la fila en la DB. Ejemplo: 'img_20260606_233843_c1121e'."
+        }
+      }
+    },
+    "Step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "scene_name", "type", "prompt"],
+      "properties": {
+        "step": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Número secuencial empezando en 1. Debe ser consecutivo dentro del array `run`."
+        },
+        "scene_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Nombre humano de la escena. Se slugifica para el folder de outputs."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["a-roll", "b-roll"],
+          "description": "a-roll = modelo habla a cámara con lip-sync (Avatar Pro). b-roll = escena auxiliar animada sin lip-sync (Kling 3.0 video)."
+        },
+        "change_scene": {
+          "type": "boolean",
+          "default": true,
+          "description": "Default true. Si true, genera scene.png nueva con Nano Banana 2 (gasta 1 crédito) usando la base + scene_description. Si false, reusa la imagen base directamente. Alias legacy aceptado: change_background."
+        },
+        "scene_description": {
+          "type": "string",
+          "default": "",
+          "description": "Descripción del entorno para Nano Banana. Solo se usa si change_scene=true. Si vacío con change_scene=true, warning del validator (scene se genera solo con prompt). Alias legacy aceptado: background_description."
+        },
+        "change_background": {
+          "type": "boolean",
+          "description": "DEPRECADO — alias legacy de change_scene. Aceptado por compat con workflows viejos; en workflows nuevos usá change_scene. Si están ambos, gana change_scene."
+        },
+        "background_description": {
+          "type": "string",
+          "description": "DEPRECADO — alias legacy de scene_description. Aceptado por compat con workflows viejos; en workflows nuevos usá scene_description. Si están ambos, gana scene_description."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Acción/escena a animar. No vacío. Max chars depende de type: 5000 para a-roll (Avatar Pro), 2500 para b-roll (Kling 3.0)."
+        },
+        "text": {
+          "type": "string",
+          "default": "",
+          "maxLength": 5000,
+          "description": "Lo que la modelo dice. a-roll: OBLIGATORIO no vacío (audio embebido en video). b-roll: opcional (no vacío + voiceover=true genera audio.mp3 aparte para post; vacío = b-roll silencioso). Si se omite, default ''."
+        },
+        "duration_seconds": {
+          "description": "Solo aplica a b-roll (Kling 3.0 acepta 3-15s). a-roll lo ignora (duración = audio TTS). Si null u omitido, usa pre_settings.i2v_duration_seconds o 5 default.",
+          "oneOf": [
+            { "type": "integer", "enum": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
+            { "type": "null" }
+          ]
+        },
+        "voiceover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Solo aplica a b-roll. true (default) = se llama a TTS para generar audio.mp3 aparte si text!=''; el video.mp4 sale silencioso (Kling sound=false). false = Kling 3.0 genera sound effects ambient embebidos en el video (sound=true); NO se llama a TTS y el campo text se ignora. A-roll lo ignora (siempre tiene audio embebido por lip-sync)."
+        },
+        "include_product": {
+          "type": "boolean",
+          "default": false,
+          "description": "a-roll o b-roll. Si true, compone el producto global (pre_settings.promote_product debe ser true) sobre la modelo con Nano Banana 2. Dispara generación de scene aunque change_scene=false (en ese caso mantiene el mismo fondo de la base y solo añade el producto). Si promote_product=false, es error de validación."
+        },
+        "include_model": {
+          "type": "boolean",
+          "default": true,
+          "description": "Si true (default), incluye la foto de la modelo base como referencia a Nano Banana 2. Si false, no la incluye (útil para b-rolls que son ilustraciones o macro shots de objeto donde no debe mezclarse la cara/figura de la modelo)."
+        },
+        "product_prompt": {
+          "type": "string",
+          "default": "",
+          "description": "Solo se usa si include_product=true. Texto que se añade al prompt de la escena para indicarle a Nano Banana cómo/dónde colocar el producto (ej. 'la modelo sostiene el frasco ámbar en su mano derecha a la altura del pecho'). Vacío = warning (el producto se compone solo con el prompt de la escena)."
+        },
+        "image_aspect_ratio": {
+          "description": "Sobrescribe el image_aspect_ratio global de pre_settings para este step puntualmente. Útil para forzar una orientación específica (ej. '9:16' en el step 5).",
+          "type": "string",
+          "enum": ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1:4"],
+          "default": "auto"
+        }
+      }
+    }
+  }
+}

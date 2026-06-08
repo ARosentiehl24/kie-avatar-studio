@@ -182,3 +182,50 @@ async def test_on_mount_marks_creating_jobs_as_failed(
     assert sanitized.status == AudioJobStatus.FAILED
     assert sanitized.error is not None
     assert "indeterminado" in sanitized.error.lower()
+
+
+async def test_rebuild_kie_client_rebinds_workflow_subsystem(tmp_path: Path) -> None:
+    """Tras rebuild, todo el subsistema workflow apunta al cliente NUEVO.
+
+    Regresión del bug "Cannot send a request, as the client has been closed."
+    que aparecía al previsualizar la imagen base después de configurar una
+    nueva API key activa: el `WorkflowController`/`WorkflowBaseResolver`/
+    `WorkflowRunnerFactory` quedaban apuntando al `httpx.AsyncClient` viejo
+    cerrado, mientras que video/audio/image sí se rebindeaban.
+
+    También cubre la re-suscripción de los listeners del notification
+    bridge a las queues nuevas (hallazgo del code-quality-reviewer:
+    CR-2.1 / regresión latente).
+    """
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        old_kie = app.kie
+        old_workflow_queue = app.workflow_queue
+        old_workflow_controller = app.workflow_controller
+        old_workflow_base_resolver = app.workflow_base_resolver
+        old_workflow_factory = app.workflow_runner_factory
+
+        await app._rebuild_kie_client()
+
+        # Cliente nuevo + todas las referencias del subsistema renovadas.
+        assert app.kie is not old_kie
+        assert app.workflow_queue is not old_workflow_queue
+        assert app.workflow_controller is not old_workflow_controller
+        assert app.workflow_base_resolver is not old_workflow_base_resolver
+        assert app.workflow_runner_factory is not old_workflow_factory
+        # Base resolver y factory apuntan al cliente NUEVO (validamos por
+        # identidad del atributo interno donde guardan el cliente).
+        assert app.workflow_base_resolver._client is app.kie  # type: ignore[attr-defined]
+        assert (
+            app.workflow_runner_factory._image_deps.client is app.kie  # type: ignore[attr-defined]
+        )
+        assert (
+            app.workflow_runner_factory._audio_deps.client is app.kie  # type: ignore[attr-defined]
+        )
+        # El controller usa el queue NUEVO (no el viejo).
+        assert app.workflow_controller._queue is app.workflow_queue  # type: ignore[attr-defined]
+        # El notification bridge se re-suscribió a las queues nuevas.
+        assert (
+            app.notification_bridge.on_workflow_event in app.workflow_queue._listeners  # type: ignore[attr-defined]
+        )

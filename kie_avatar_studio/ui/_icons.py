@@ -92,6 +92,8 @@ MENU_HISTORY: Final[str] = "📜"  # U+1F4DC — scroll
 MENU_PRESETS: Final[str] = "🎤"  # U+1F3A4 — microphone
 MENU_IMAGES: Final[str] = IMAGE
 MENU_AUDIOS: Final[str] = AUDIO
+MENU_AUTOMATION: Final[str] = "🤖"  # U+1F916 — robot, Emoji_Presentation.
+# Workflows declarativos = el "agente automatico".
 MENU_SETTINGS: Final[str] = "🔧"  # U+1F527 — wrench, Emoji_Presentation (Wide
 # puro, no requiere VS16 a diferencia de 🛠️).
 MENU_LOGS: Final[str] = "📋"  # U+1F4CB — clipboard

@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 def _utcnow() -> datetime:
@@ -552,3 +552,430 @@ class GitHubRelease(BaseModel):
     html_url: str
     body: str = ""
     published_at: str = ""
+
+
+# --- Workflow automation models -------------------------------------------
+
+
+class ModelCreationMethod(StrEnum):
+    """Cómo se obtiene la imagen base de la modelo del workflow."""
+
+    PROMPT = "prompt"
+    LOCAL = "local"
+    CATALOG = "catalog"
+
+
+class ModelCreation(BaseModel):
+    """Configuración para resolver la imagen base de la modelo del workflow.
+
+    Solo uno de los campos es relevante según `method`:
+    - `PROMPT`: usa `prompt` para generar con Nano Banana 2.
+    - `LOCAL`: sube `local_path` con `KieGateway.upload_file`.
+    - `CATALOG`: resuelve `asset_kind` + `asset_id` contra los stores.
+
+    Los demás quedan `None`. La validación cruzada vive en
+    `policies.validate_model_creation` (no usa Pydantic discriminated
+    unions porque necesitamos mensajes en español).
+
+    `resolved_image_ref` lo rellena el `WorkflowRunner` en runtime, o el
+    `WorkflowController.enqueue_entry` cuando la UI lo pre-resolvió antes
+    de encolar (caso preview de prompt aprobado / foto subida con method=local).
+    Se serializa al manifest para que el usuario vea la URL Kie +
+    expiración + el path local descargado.
+    """
+
+    method: ModelCreationMethod
+    prompt: str | None = None
+    local_path: str | None = None
+    asset_kind: ImageAssetKind | None = None
+    asset_id: str | None = None
+    resolved_image_ref: ImageAssetRef | None = None
+
+
+class SceneApprovalMode(StrEnum):
+    """Modo de aprobación de scene_image generada por Nano Banana para b-rolls.
+
+    "Genera scene nueva" = `change_scene=true` **o** `include_product=true`
+    (ver `needs_scene_generation`): ambos componen una scene_image nueva con
+    Nano Banana que vale la pena revisar.
+
+    - `AUTO` (default): cuando un b-roll genera scene nueva, el workflow
+      continúa inmediatamente al render Kling i2v sin esperar revisión
+      humana. Comportamiento histórico.
+
+    - `MANUAL`: cuando un b-roll genera scene nueva, el workflow se pausa
+      en `AWAITING_APPROVAL` y el step queda con
+      `WorkflowStepStatus.AWAITING_APPROVAL`. El usuario revisa la imagen
+      en la UI y aprueba / regenera / cancela. Sin acción, el workflow
+      espera indefinidamente.
+
+    Pensado para evitar gastar créditos en Kling i2v animando una
+    scene_image que salió mal. NO aplica a b-rolls que reusan la base tal
+    cual (`change_scene=false` y `include_product=false`: no hay imagen
+    nueva que aprobar) ni a a-rolls (nunca pausan, aunque generen scene
+    con producto).
+    """
+
+    AUTO = "auto"
+    MANUAL = "manual"
+
+
+class ProductImage(BaseModel):
+    """Imagen de un producto a promocionar dentro de un workflow.
+
+    Un workflow promociona como mucho UN producto (global, elegido en
+    settings antes de encolar). Los steps con `include_product=True`
+    componen este producto sobre la imagen base usando Nano Banana 2
+    (que acepta varias imágenes de referencia, hasta `MAX_IMAGE_REFS`).
+
+    `local_path` es la foto elegida desde `inputs/` (para mostrar en el
+    summary). `resolved_image_ref` es la ref Kie tras subirla (TTL 24h,
+    como `method=local` de la imagen base). Ambos se serializan dentro
+    de `pre_settings_json` — no hay columnas dedicadas en la DB.
+    """
+
+    local_path: str | None = None
+    resolved_image_ref: ImageAssetRef | None = None
+
+
+class WorkflowPreSettings(BaseModel):
+    """Pre-configuración del workflow: idioma, voz preset, modelo base.
+
+    El JSON del usuario trae `voice_preset` (snake_case sin sufijo `_id`).
+    Mantenemos `voice_preset_id` como atributo Python para coherencia
+    interna y exponemos el alias `voice_preset` para parsear/serializar.
+
+    `audio_language` es un `language_code` ISO 639-1 (ej. `"es-419"`).
+    Si está seteado, el `WorkflowStepRunner` fuerza el modelo TTS turbo
+    (acepta `language_code`); si es `None`, usa el multilingual default
+    (que NO acepta `language_code` → Kie devuelve 422 si se manda).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    audio_language: str | None = None
+    voice_preset_id: str | None = Field(default=None, alias="voice_preset")
+    model_creation: ModelCreation
+    # Override global del workflow para la duración de los b-roll. Si es
+    # `None`, cada step usa su propio `duration_seconds` (si lo tiene) o
+    # cae al default global de `Settings.default_i2v_duration_seconds`.
+    # Si el usuario lo setea desde el modal de Configurar, FORZA esa
+    # duración para TODOS los b-roll del workflow (sobreescribe el del
+    # step si el step trae uno propio del JSON). Aceptable porque el
+    # modal es la última palabra antes de encolar.
+    i2v_duration_seconds: int | None = None
+    # Modo de aprobación de scene_image. Ver docstring de
+    # `SceneApprovalMode`. Default `AUTO` para no romper workflows
+    # existentes (comportamiento histórico).
+    scene_approval_mode: SceneApprovalMode = SceneApprovalMode.AUTO
+    # Promoción de producto: si `True`, el workflow promociona UN producto
+    # global (elegido en la UI antes de encolar, subido a Kie). Los steps
+    # con `include_product=True` lo componen sobre la base con Nano Banana.
+    # El producto resuelto vive en `product_image`. Default `False`.
+    promote_product: bool = False
+    product_image: ProductImage | None = None
+    # Aspect ratio global para todas las imágenes generadas/compuestas con
+    # Nano Banana 2 (base del modelo y scene_images de cada step). Si es
+    # `None`, se usa el aspect ratio por defecto del modelo (auto).
+    # Valores soportados: auto, 1:1, 9:16, 16:9, etc. (ver ASPECT_RATIOS).
+    image_aspect_ratio: str | None = None
+
+
+class StepType(StrEnum):
+    """Tipo de escena del workflow.
+
+    `A_ROLL`: la modelo habla a cámara (lip-sync). Avatar Pro genera un
+    `final.mp4` con audio embebido. No se descarga el audio aparte.
+
+    `B_ROLL`: video auxiliar (objeto, ilustración, plano). Kling i2v
+    genera un video silencioso. Si `text` no es vacío, además se
+    genera un audio TTS aparte para post-producción.
+    """
+
+    A_ROLL = "a-roll"
+    B_ROLL = "b-roll"
+
+
+class WorkflowStepStatus(StrEnum):
+    """Estado del lifecycle de un `WorkflowStep`."""
+
+    QUEUED = "queued"
+    PREPARING = "preparing"
+    AWAITING_APPROVAL = "awaiting_approval"
+    RENDERING = "rendering"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+WORKFLOW_STEP_TERMINAL_STATUSES: frozenset[WorkflowStepStatus] = frozenset(
+    {
+        WorkflowStepStatus.COMPLETED,
+        WorkflowStepStatus.FAILED,
+        WorkflowStepStatus.CANCELLED,
+    }
+)
+
+
+class WorkflowProgressKey(StrEnum):
+    """Sub-componentes del progreso granular de un step.
+
+    Las keys esperadas dependen del tipo del step:
+    - `A_ROLL`: SCENE_IMAGE, AUDIO, VIDEO, DOWNLOAD
+    - `B_ROLL` con `text`: SCENE_IMAGE, AUDIO, VIDEO, DOWNLOAD_VIDEO, DOWNLOAD_AUDIO
+    - `B_ROLL` sin `text`: SCENE_IMAGE, VIDEO, DOWNLOAD
+
+    La validación cruzada (key vs tipo) vive en
+    `policies.validate_workflow_step_progress`.
+    """
+
+    SCENE_IMAGE = "scene_image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    DOWNLOAD = "download"
+    DOWNLOAD_VIDEO = "download_video"
+    DOWNLOAD_AUDIO = "download_audio"
+
+
+class WorkflowProgressStatus(StrEnum):
+    """Estado de cada sub-componente del progreso de un step."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class WorkflowStep(BaseModel):
+    """Una escena del workflow (a-roll o b-roll).
+
+    Persistido en `workflow_steps`. `bg_image_job_id`, `audio_job_id` y
+    `video_task_id` se llenan en runtime para soportar restore tras
+    crash (reusar el task de Kie en vez de re-crearlo).
+
+    `progress` es un dict por sub-componente: keys del enum
+    `WorkflowProgressKey`, valores del enum `WorkflowProgressStatus`.
+    Persistido como JSON string en la columna `progress_json`.
+    """
+
+    # `populate_by_name=True` permite construir el modelo tanto con los
+    # nombres canónicos (`change_scene`, `scene_description`) como con los
+    # aliases legacy (`change_background`, `background_description`) que
+    # vienen del JSON viejo (ver AliasChoices en los Fields). Esto deja a
+    # `model_validate({...})` aceptar ambos shapes sin romper.
+    model_config = ConfigDict(populate_by_name=True)
+
+    step: int
+    scene_name: str
+    scene_slug: str
+    type: StepType
+    # `change_scene` (antes `change_background`): si True dispara una
+    # regeneración con Nano Banana 2 (refs=[base] + `scene_description` +
+    # `prompt`) y la imagen resultante se usa como `image_urls[0]` del
+    # Kling 3.0 video. Si False, el b-roll reusa la imagen base de la modelo
+    # directamente (sin gastar Nano Banana).
+    #
+    # AliasChoices acepta ambos nombres en JSON (new + legacy). Necesita
+    # `model_config = ConfigDict(populate_by_name=True)` (definido abajo).
+    change_scene: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("change_scene", "change_background"),
+        serialization_alias="change_scene",
+    )
+    # `scene_description` (antes `background_description`): texto que
+    # describe la nueva escena cuando `change_scene=True`. Solo se usa
+    # en ese caso. AliasChoices retrocompatible.
+    scene_description: str = Field(
+        default="",
+        validation_alias=AliasChoices("scene_description", "background_description"),
+        serialization_alias="scene_description",
+    )
+    prompt: str
+    text: str = ""
+    # Duración del video b-roll en segundos. Solo aplica a steps de tipo
+    # `b-roll` (Kling i2v acepta `duration: 5|10`). Si es `None`, el step
+    # usa el fallback: `WorkflowPreSettings.i2v_duration_seconds` → si
+    # también es None, `Settings.default_i2v_duration_seconds` (5 por
+    # default). Steps `a-roll` ignoran este campo (la duración del
+    # avatar la determina la longitud del audio TTS).
+    duration_seconds: int | None = None
+    # `voiceover` solo aplica a steps `b-roll`. Controla quién genera el audio:
+    # - `True` (default): comportamiento clásico. Si `text` no vacío → 1 TTS
+    #   ElevenLabs genera `audio.mp3` aparte; el `video.mp4` queda silencioso
+    #   (Kling con `sound=false`). El usuario monta en post.
+    # - `False`: NO se llama a TTS. Kling 3.0 genera sound effects ambientales
+    #   nativos basados en el prompt (`sound=true`), embebidos en el video.
+    #   El `text` se ignora si está seteado (warning del validator).
+    # A-roll ignora este flag (siempre tiene lip-sync; audio embebido por
+    # Avatar Pro).
+    voiceover: bool = True
+    # `include_product` (a-roll o b-roll): si `True`, este step compone el
+    # producto global del workflow (`pre_settings.product_image`) sobre la
+    # imagen base usando Nano Banana 2 (refs = [base, producto]). Requiere
+    # `pre_settings.promote_product=True`. La generación de scene se dispara
+    # si `change_scene` O `include_product` (ver `needs_scene_generation`).
+    # Si `include_product=True` y `change_scene=False`, Nano Banana mantiene
+    # el mismo fondo de la base y solo añade el producto.
+    include_product: bool = False
+    # `include_model`: si `True` (default), pasa la imagen de la modelo base
+    # como referencia a Nano Banana 2. Si `False`, no la pasa (útil para
+    # b-rolls que son ilustraciones o planos de objeto donde no debe aparecer
+    # la modelo, evitando que se mezcle su cara/cuerpo en la imagen).
+    include_model: bool = True
+    # `product_prompt`: texto que se añade al prompt de la escena para
+    # indicarle a Nano Banana cómo/dónde colocar el producto. Solo se usa
+    # si `include_product=True`. Vacío = Nano Banana lo compone solo con el
+    # prompt de la escena (warning del validator).
+    product_prompt: str = ""
+    bg_image_job_id: str | None = None
+    audio_job_id: str | None = None
+    video_task_id: str | None = None
+    scene_image_path: str | None = None
+    audio_path: str | None = None
+    video_path: str | None = None
+    # Timestamp de aprobación humana de la scene_image (solo aplica cuando
+    # `pre_settings.scene_approval_mode == MANUAL` y el step genera scene
+    # nueva: `change_scene=true` o `include_product=true`, ver
+    # `needs_scene_generation`). `None` = pendiente o no requerida. Cuando
+    # el usuario aprueba desde la UI, el controller setea
+    # `datetime.now(UTC)` y re-encola el workflow. El step runner reusa la
+    # scene_image existente (bg_image_job_id) sin regenerar con Nano Banana.
+    scene_image_approved_at: datetime | None = None
+    # Aspect ratio del step para la imagen generada/compuesta con Nano Banana.
+    # Si está configurado, sobrescribe el `image_aspect_ratio` global de
+    # `pre_settings`. Si ambos son `None`, usa el del modelo (auto).
+    image_aspect_ratio: str | None = None
+    status: WorkflowStepStatus = WorkflowStepStatus.QUEUED
+    progress: dict[WorkflowProgressKey, WorkflowProgressStatus] = Field(default_factory=dict)
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    def is_terminal(self) -> bool:
+        return self.status in WORKFLOW_STEP_TERMINAL_STATUSES
+
+    def is_awaiting_approval(self) -> bool:
+        return self.status == WorkflowStepStatus.AWAITING_APPROVAL
+
+
+class WorkflowStatus(StrEnum):
+    """Estado global del lifecycle de un `WorkflowJob`.
+
+    `AWAITING_APPROVAL` es un estado de pausa explícito (no es failed):
+    el workflow ya generó la scene_image de algún b-roll que genera scene
+    nueva (`change_scene=true` o `include_product=true`) Y
+    `pre_settings.scene_approval_mode == "manual"`, y ahora espera que el
+    usuario apruebe / regenere / cancele desde la UI antes de continuar al
+    render i2v. El step en cuestión queda con
+    `WorkflowStepStatus.AWAITING_APPROVAL` y el slot del semáforo de
+    workflows queda libre (el runner termina su tarea sin avanzar).
+    """
+
+    QUEUED = "queued"
+    PREPARING_BASE = "preparing_base"
+    RUNNING = "running"
+    AWAITING_APPROVAL = "awaiting_approval"
+    COMPLETED = "completed"
+    PARTIALLY_FAILED = "partially_failed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+WORKFLOW_TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
+    {
+        WorkflowStatus.COMPLETED,
+        WorkflowStatus.PARTIALLY_FAILED,
+        WorkflowStatus.FAILED,
+        WorkflowStatus.CANCELLED,
+    }
+)
+
+# AWAITING_APPROVAL NO está acá: requiere acción humana, no se auto-restart.
+# Cuando el usuario aprueba/regenera/cancela, el controller lo vuelve a
+# poner en QUEUED y el queue lo retoma normalmente.
+WORKFLOW_RESUMABLE_STATUSES: frozenset[WorkflowStatus] = frozenset(
+    {
+        WorkflowStatus.QUEUED,
+        WorkflowStatus.PREPARING_BASE,
+        WorkflowStatus.RUNNING,
+    }
+)
+
+
+class WorkflowJob(BaseModel):
+    """Job de automatización end-to-end.
+
+    Persistido en `workflow_jobs` + `workflow_steps`. El manifest
+    (`output_dir/workflow.json`) es un snapshot derivado regenerado
+    atómicamente tras cada transición (ver `infra.workflow_manifest_writer`).
+
+    `source_json_path` es el path original (relativo al cwd) del JSON
+    que disparó el workflow. Útil para debugging y para que el usuario
+    sepa qué archivo abrir.
+
+    `manifest_write_failed` se setea a `True` si el último intento de
+    escribir el manifest atómicamente falló de forma permanente. NO
+    bloquea la ejecución: el manifest es derivado, la DB es la fuente
+    de verdad. La UI puede mostrar un badge informativo.
+    """
+
+    id: str
+    name: str
+    slug: str
+    source_json_path: str
+    output_dir: str
+    pre_settings: WorkflowPreSettings
+    steps: list[WorkflowStep]
+    status: WorkflowStatus = WorkflowStatus.QUEUED
+    error: str | None = None
+    manifest_write_failed: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+    def is_terminal(self) -> bool:
+        return self.status in WORKFLOW_TERMINAL_STATUSES
+
+    def is_resumable(self) -> bool:
+        return self.status in WORKFLOW_RESUMABLE_STATUSES
+
+    def is_awaiting_approval(self) -> bool:
+        return self.status == WorkflowStatus.AWAITING_APPROVAL
+
+    def pending_approval_step(self) -> WorkflowStep | None:
+        """Devuelve el primer step en estado AWAITING_APPROVAL, si hay alguno."""
+        for step in self.steps:
+            if step.is_awaiting_approval():
+                return step
+        return None
+
+    def step_by_number(self, step_number: int) -> WorkflowStep | None:
+        """Devuelve el `WorkflowStep` con `step == step_number` o `None`."""
+        for step in self.steps:
+            if step.step == step_number:
+                return step
+        return None
+
+
+class WorkflowEntry(BaseModel):
+    """Una entrada del directorio `workflows/` listada por el loader.
+
+    Mirror de `BatchEntry`: representa un JSON detectado en el filesystem,
+    parseado y validado. Si `errors` está vacío, `workflow` está
+    correctamente parseado y se puede pasar a `WorkflowController.enqueue`.
+
+    `warnings` recoge mensajes informativos (no bloqueantes) — ej. b-roll
+    con `change_scene=false` que normalmente es un error de usuario
+    pero técnicamente válido.
+    """
+
+    name: str
+    path: Path
+    workflow_payload: dict[str, Any] | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors

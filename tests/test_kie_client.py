@@ -196,7 +196,8 @@ async def test_create_tts_task_with_full_voice_settings(tmp_settings) -> None:
     assert b'"similarity_boost":0.75' in body
     assert b'"style":0.0' in body
     assert b'"speed":1.0' in body
-    assert b'"language_code":"es"' in body
+    # El language_code se debe haber quitado porque el modelo es el multilingual-v2 default
+    assert b'"language_code"' not in body
 
 
 async def test_create_tts_task_custom_model(tmp_settings) -> None:
@@ -221,7 +222,8 @@ async def test_create_tts_task_custom_model(tmp_settings) -> None:
         )
     finally:
         await client.aclose()
-    assert b'"model":"elevenlabs/text-to-speech-turbo-2-5"' in captured[0]
+    # Debe haberse sobreescrito el modelo turbo por el multilingual-v2 default
+    assert b'"model":"elevenlabs/text-to-speech-multilingual-v2"' in captured[0]
 
 
 # --- get_account_credits + 402 handling (Fase 2.2c.fix créditos) -----------
@@ -365,5 +367,50 @@ async def test_200_with_code_200_does_not_trigger_credit_error(tmp_settings) -> 
     try:
         result = await client.create_tts_task("x", "voiceA")
         assert result.task_id == "t_ok"
+    finally:
+        await client.aclose()
+
+
+# --- upload_file: URL sanitization of space characters (Round 6) ------------
+
+
+async def test_upload_file_sanitizes_spaces_in_download_url(tmp_settings, tmp_path) -> None:
+    """Si el downloadUrl devuelto por Kie contiene espacios (ej. por nombre de archivo local),
+    el cliente debe reemplazarlos por %20 para que sea una URL HTTP bien formada."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/file-stream-upload"
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "msg": "success",
+                "data": {
+                    "fileName": "WhatsApp Image 2026-06-08 at 11.31.43.jpeg",
+                    "filePath": "uploads/WhatsApp Image 2026-06-08 at 11.31.43.jpeg",
+                    "downloadUrl": "https://tempfile.kie.ai/uploads/WhatsApp Image 2026-06-08 at 11.31.43.jpeg",
+                    "fileSize": 1234,
+                    "mimeType": "image/jpeg",
+                },
+            },
+        )
+
+    client = KieClient(tmp_settings)
+    await client.aclose()
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={"Authorization": f"Bearer {tmp_settings.kie_api_key}"},
+    )
+    local_file = tmp_path / "WhatsApp Image 2026-06-08 at 11.31.43.jpeg"
+    local_file.write_bytes(b"dummy")
+
+    try:
+        result = await client.upload_file(local_file)
+        # Los espacios internos en la download_url deben haberse reemplazado por %20.
+        assert " " not in result.download_url
+        assert (
+            result.download_url
+            == "https://tempfile.kie.ai/uploads/WhatsApp%20Image%202026-06-08%20at%2011.31.43.jpeg"
+        )
     finally:
         await client.aclose()

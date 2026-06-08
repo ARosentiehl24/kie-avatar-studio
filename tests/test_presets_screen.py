@@ -75,8 +75,13 @@ async def test_modal_nuevo_se_abre_y_persiste(tmp_path: Path) -> None:
         await pilot.pause()
         assert app.screen.__class__.__name__ == "PresetFormScreen"
 
-        # Llenar y guardar.
+        # Llenar y guardar. Hacemos scroll al footer para asegurar que
+        # `#save` quede en el viewport del pilot (el modal ahora trae
+        # botones de Preview/Detener que lo hacen más alto).
         app.screen.query_one("#preset-label", Input).value = "narrador test"
+        save_button = app.screen.query_one("#save", Button)
+        save_button.scroll_visible()
+        await pilot.pause()
         await pilot.click("#save")
         await pilot.pause()
         await pilot.pause()

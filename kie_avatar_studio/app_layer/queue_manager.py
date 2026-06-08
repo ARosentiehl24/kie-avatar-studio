@@ -108,6 +108,18 @@ class QueueManager(Generic[T, EventT]):
         self._notify(job)
         self._maybe_dispatch()
 
+    def notify_external(self, job: T) -> None:
+        """Emite un evento al stream sin re-encolar.
+
+        Pensado para runners que disparan transiciones internas (state
+        machine + persistencia) y necesitan que la UI reaccione sin pasar
+        por `enqueue`. Solo notifica — el runner es responsable de
+        mantener actualizado `self._jobs_by_id[job.id]` si quiere que la
+        UI vea el último estado al hacer lookup.
+        """
+        self._jobs_by_id[job.id] = job
+        self._notify(job)
+
     async def cancel(self, job_id: str) -> bool:
         """Cancela un job activo o lo retira de la cola.
 

@@ -6,6 +6,100 @@ MINOR, **S** → PATCH.
 
 ## [Unreleased]
 
+### Added (L)
+
+- **Subsistema de Automatización: workflows JSON declarativos end-to-end**.
+  Nueva pantalla `AutomationScreen` (hotkey `F`) que escanea
+  `workflows/*.json`, valida cada archivo y orquesta la ejecución
+  paralela de todos sus steps:
+  - Modelo de dominio: `WorkflowJob` + `WorkflowStep` + `ModelCreation`
+    + `WorkflowPreSettings` + enums `StepType` (`a-roll` / `b-roll`),
+    `WorkflowStatus`, `WorkflowStepStatus`, `WorkflowProgressKey` y
+    `WorkflowProgressStatus` (progreso granular tipado por
+    sub-componente).
+  - State machine por step según su tipo:
+    - **a-roll**: scene_image (opcional) + audio TTS + Avatar Pro →
+      `final.mp4` con audio embebido (NO se descarga audio aparte).
+    - **b-roll con `text`**: scene_image + audio TTS + Kling 2.6 i2v
+      (silencioso) → `video.mp4` + `audio.mp3` separados.
+    - **b-roll sin `text`**: scene_image + Kling 2.6 i2v → solo
+      `video.mp4`.
+  - Output por workflow:
+    `outputs/<wf_id>/{base.png, workflow.json, step_NN_<slug>/…}`.
+  - `WorkflowDB` con tablas `workflow_jobs` + `workflow_steps` y
+    `upsert_step` granular para evitar lost updates con steps
+    corriendo en paralelo.
+  - `AtomicWorkflowManifestWriter`: regenera `output_dir/workflow.json`
+    atómicamente en cada transición (tmp único por escritura + retry
+    exponencial ante `PermissionError` para mitigar antivirus/OneDrive
+    en Windows). Fallo permanente NO bloquea el workflow (se setea
+    `manifest_write_failed=True` y se sigue ejecutando — la DB es la
+    fuente de verdad).
+  - `WorkflowStepRunner` con 3 métodos separados por tipo de step
+    (CR-3.1 SRP) + `WorkflowRunner` orquestador con `asyncio.Lock` por
+    `workflow_id` (serializa transiciones de steps paralelos).
+  - **Dos limitadores distintos**: `_capacity_limiter` global (sub-jobs
+    Kie hoja: image/audio/video) compartido entre las 4 colas, y
+    `_workflows_limiter` exclusivo del workflow_queue (default
+    `max_parallel_workflows=1`). Evita el deadlock que ocurriría si un
+    workflow consumiera un slot global esperando a sus propios sub-jobs.
+  - `CapacityLimitedExecutor`: wrapper que adquiere el limiter global
+    antes de delegar al runner hoja. Permite al `WorkflowStepRunner`
+    invocar los runners directos (no via queue) sin perder el límite
+    compartido.
+  - Validación cruzada del preset de voz al encolar (existe en
+    `VoicePresetStore`) + revalidación del path local en
+    `method=local` justo antes del upload (mitiga la race del archivo
+    movido entre validación y ejecución).
+  - Política TTS automática: `audio_language` no `None` fuerza el
+    modelo turbo (`elevenlabs/text-to-speech-turbo-v2-5`, acepta
+    `language_code`); `None` usa el multilingual default.
+  - Nueva pantalla `WorkflowDetailScreen` con tabla de steps + status
+    + progress granular por sub-componente.
+  - Modal `ConfigureWorkflowScreen`: pre-llena `voice_preset` +
+    `audio_language` del JSON; permite editarlos antes de encolar sin
+    tocar el archivo.
+  - Soporte de `voice_preset` (alias) ↔ `voice_preset_id` (atributo
+    Python) para que el JSON del usuario use el nombre legible mientras
+    el código interno mantiene el sufijo `_id`.
+  - Schema validators que distinguen errores estructurales
+    (excepciones) de warnings no bloqueantes (b-roll con
+    `change_background=False`, p.ej.).
+  - Restore al arrancar: workflows en estado no-terminal se marcan
+    FAILED y el manifest se regenera inmediatamente para que un
+    consumer externo no vea snapshot stale post-crash.
+- **Aprobación humana de scene_image (modo `scene_approval_mode`)**. En
+  modo `manual`, los b-roll que generan scene nueva con Nano Banana pausan
+  el workflow en `awaiting_approval` esperando que el usuario apruebe /
+  regenere / cancele desde el modal `SceneImageApprovalScreen` (botón
+  "Revisar aprobación" + badge `⏳`). Evita gastar créditos en Kling
+  animando una scene que salió mal. `auto` (default) sigue sin pausa.
+- **Producto promocional en workflows** (`promote_product` +
+  `include_product` + `product_prompt`). Un workflow puede promocionar UN
+  producto global:
+  - `pre_settings.promote_product: true` activa el flujo; al encolar, la
+    UI pide elegir la foto del producto desde `inputs/` y la sube a Kie
+    (TTL 24h). La imagen NO va en el JSON.
+  - Cada step (a-roll o b-roll) con `include_product: true` + un
+    `product_prompt` compone el producto sobre la modelo con Nano Banana 2
+    (refs = `[base, producto]`). La scene resultante alimenta el render.
+  - Nano Banana se invoca si `change_scene` **o** `include_product`
+    (`needs_scene_generation`). Con `change_scene=false` +
+    `include_product=true`, mantiene el fondo de la base y solo añade el
+    producto.
+  - La aprobación humana `manual` (solo b-roll) se amplía a la condición
+    `change_scene OR include_product`; los a-roll con producto generan
+    scene pero nunca pausan.
+  - Validación cruzada: `include_product=true` exige
+    `promote_product=true`. Ejemplo en `workflows/example_product_promo.json`.
+- **Endpoint Kie nuevo**: `kling-2.6/image-to-video` (b-roll silencioso).
+  Implementado en `KieClient.create_image_to_video_task`. Documentado
+  en `docs/API_KIE.md` §6.
+- Nuevo hotkey global `F` (Automatización) + icono `🤖` en `_icons.py`.
+- `Settings.workflows_dir` (default `./workflows/`) y
+  `Settings.max_parallel_workflows` (default 1).
+- Carpeta `workflows/` con README + ejemplo del JSON canónico.
+
 ### Added (M)
 
 - **Generación de imágenes con Nano Banana 2 (Google) vía Kie**. Nuevo
@@ -47,6 +141,24 @@ MINOR, **S** → PATCH.
   acepta tanto `UploadedImage` como `GeneratedImage`, etiquetando cada
   opción como `[subida]` o `[generada]`. Devuelve `ImageAssetRef`
   (no `image_id`) para que `VideosController` resuelva sin asumir origen.
+
+### Changed (S) — UI polish
+
+- `ConfigureWorkflowScreen`: los campos del formulario ahora viven en un
+  `VerticalScroll`, con título/subtítulo fijos arriba y los botones de
+  acción fijos abajo. Antes, con muchos campos (preset + duración +
+  aprobación + producto), los de abajo —incluidos los botones— se
+  recortaban por overflow y eran inalcanzables. Además se corrigió un hueco
+  grande causado por la fila del Select de aprobación que se expandía a
+  `height: 1fr`, y los bloques de estado "Producto promocional" y "Próximo
+  paso" se muestran como cards con borde redondeado para destacar del muro
+  de hints.
+- Botones secundarios (`.btn-info` / `.btn-success` / `.btn-warning`)
+  rediseñados a estilo **ghost** (fondo tenue teñido + texto del color
+  semántico) en vez de fills saturados. Más sobrios contra el tema
+  tokyo-night; ahora solo el botón primary (lavanda sólido) y el destructive
+  (rojo sólido) dominan la jerarquía. Afecta todas las pantallas de forma
+  consistente.
 
 ---
 

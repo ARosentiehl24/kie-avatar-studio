@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
-from ..domain.events import AudioJobUpdated, ImageJobUpdated, JobUpdated
+from ..domain.events import (
+    AudioJobUpdated,
+    ImageJobUpdated,
+    JobUpdated,
+    WorkflowJobUpdated,
+)
 from ..domain.models import (
     AudioJob,
     AudioJobStatus,
@@ -31,6 +36,8 @@ from ..domain.models import (
     ImageJobStatus,
     JobStatus,
     VideoJob,
+    WorkflowJob,
+    WorkflowStatus,
 )
 from ..domain.ports import DesktopNotifier
 
@@ -95,6 +102,44 @@ _IMAGE_SPEC: Final[_NotifySpec] = _NotifySpec(
 )
 
 
+def _workflow_label(workflow: WorkflowJob) -> str:
+    return workflow.name or workflow.id
+
+
+_WORKFLOW_SPEC: Final[_NotifySpec] = _NotifySpec(
+    completed_status=WorkflowStatus.COMPLETED,
+    failed_status=WorkflowStatus.FAILED,
+    label_extractor=_workflow_label,
+    title_ok="✅ Workflow completado",
+    title_fail="❌ Workflow falló",
+    success_hint="Mirá los outputs en la carpeta del workflow",
+)
+
+_WORKFLOW_PARTIAL_SPEC: Final[_NotifySpec] = _NotifySpec(
+    # Tratamos PARTIALLY_FAILED como un "completed with warnings": el usuario
+    # tiene algunos outputs útiles pero también algún step que falló.
+    completed_status=WorkflowStatus.PARTIALLY_FAILED,
+    failed_status=WorkflowStatus.FAILED,
+    label_extractor=_workflow_label,
+    title_ok="⚠️ Workflow parcialmente completado",
+    title_fail="❌ Workflow falló",
+    success_hint="Mirá los outputs (algunos steps fallaron, revisá el detalle)",
+)
+
+# Spec especial para AWAITING_APPROVAL: solo dispara la notificación "ok"
+# (no hay caso "fail" para este estado). Reusamos la estructura pero con
+# un `failed_status` ficticio que nunca matchea (CANCELLED no aparece en
+# transiciones automáticas hacia este estado).
+_WORKFLOW_APPROVAL_SPEC: Final[_NotifySpec] = _NotifySpec(
+    completed_status=WorkflowStatus.AWAITING_APPROVAL,
+    failed_status=WorkflowStatus.CANCELLED,
+    label_extractor=_workflow_label,
+    title_ok="⏳ Workflow esperando tu aprobación",
+    title_fail="",  # no usado: la transición a CANCELLED desde awaiting es manual
+    success_hint="Abrí Automatización → Revisar aprobación para continuar",
+)
+
+
 class JobNotificationBridge:
     """Listener de queues que dispara notificaciones del SO al terminar un job.
 
@@ -109,7 +154,15 @@ class JobNotificationBridge:
         # por id(spec) evita tres atributos paralelos y permite agregar
         # nuevos kinds sin tocar el __init__ (CR-2.2 OCP).
         self._notified: dict[int, set[str]] = {
-            id(spec): set() for spec in (_VIDEO_SPEC, _AUDIO_SPEC, _IMAGE_SPEC)
+            id(spec): set()
+            for spec in (
+                _VIDEO_SPEC,
+                _AUDIO_SPEC,
+                _IMAGE_SPEC,
+                _WORKFLOW_SPEC,
+                _WORKFLOW_PARTIAL_SPEC,
+                _WORKFLOW_APPROVAL_SPEC,
+            )
         }
         # Mantenemos referencia fuerte a las tasks fire-and-forget para
         # que el GC no las recoja antes de que el subprocess termine.
@@ -126,24 +179,50 @@ class JobNotificationBridge:
     def on_image_event(self, event: ImageJobUpdated) -> None:
         self._handle_event(_IMAGE_SPEC, event.job)
 
+    def on_workflow_event(self, event: WorkflowJobUpdated) -> None:
+        # Despachamos contra tres specs:
+        # - _WORKFLOW_SPEC: COMPLETED / FAILED
+        # - _WORKFLOW_PARTIAL_SPEC: PARTIALLY_FAILED como "completed con warnings"
+        # - _WORKFLOW_APPROVAL_SPEC: AWAITING_APPROVAL (acción humana requerida)
+        # El dedup por (spec, id) garantiza una notificación por kind.
+        self._handle_event(_WORKFLOW_SPEC, event.job)
+        self._handle_event(_WORKFLOW_PARTIAL_SPEC, event.job)
+        self._handle_event(_WORKFLOW_APPROVAL_SPEC, event.job)
+
     # --- internals -----------------------------------------------------
 
-    def _handle_event(self, spec: _NotifySpec, job: VideoJob | AudioJob | ImageJob) -> None:
-        if job.status not in (spec.completed_status, spec.failed_status):
-            return
+    def _handle_event(
+        self,
+        spec: _NotifySpec,
+        job: VideoJob | AudioJob | ImageJob | WorkflowJob,
+    ) -> None:
         seen = self._notified[id(spec)]
+        # Dedup transient: para AWAITING_APPROVAL, si el workflow ya salió
+        # del estado pausado (porque el usuario aprobó/regeneró/canceló y
+        # volvió a QUEUED), liberamos el seen para poder volver a notificar
+        # si pausa de nuevo. Sin esto, multi-step MANUAL solo notifica una
+        # vez por workflow_id durante toda su vida.
+        if job.status not in (spec.completed_status, spec.failed_status):
+            if job.id in seen and spec is _WORKFLOW_APPROVAL_SPEC:
+                seen.discard(job.id)
+            return
         if job.id in seen:
             return
         seen.add(job.id)
         self._schedule(self._notify(spec, job))
 
-    async def _notify(self, spec: _NotifySpec, job: VideoJob | AudioJob | ImageJob) -> None:
+    async def _notify(
+        self,
+        spec: _NotifySpec,
+        job: VideoJob | AudioJob | ImageJob | WorkflowJob,
+    ) -> None:
         success = job.status == spec.completed_status
         label = _short_label(spec.label_extractor(job))
         if success:
             # Para video usamos el output_path concreto si está; para los
-            # otros el hint genérico del spec.
-            output = getattr(job, "output_path", None)
+            # otros el hint genérico del spec. WorkflowJob.output_dir
+            # apunta al directorio con los outputs por step.
+            output = getattr(job, "output_path", None) or getattr(job, "output_dir", None)
             hint = output if output else spec.success_hint
             message = f"{label}\n→ {hint}"
             title = spec.title_ok
