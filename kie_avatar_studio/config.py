@@ -91,7 +91,8 @@ class Settings(BaseSettings):
 
     default_voice: str = "EkK5I93UQWFDigLMpZcX"
     default_prompt: str = "Mirada a cámara, expresión natural, gestos suaves, tono confiado."
-    default_i2v_duration_seconds: int = DEFAULT_I2V_DURATION_SECONDS
+    # Duración default de los b-roll (Kling 3.0 acepta 3-15s)
+    default_i2v_duration_seconds: int = Field(default=DEFAULT_I2V_DURATION_SECONDS, ge=3, le=15)
 
     notifications_enabled: bool = True
     update_check_enabled: bool = True
@@ -111,7 +112,8 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    max_parallel_workflows: int = 1
+    # Máximo workflows paralelos (debe ser al menos 1 para poder ejecutar)
+    max_parallel_workflows: int = Field(default=1, ge=1)
 
     def __init__(self, **data: Any) -> None:
         # Resolvemos `env_file` en cada instanciación (no al import time

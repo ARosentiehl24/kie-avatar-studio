@@ -434,6 +434,24 @@ def validate_voice_settings(settings: VoiceSettings) -> None:
             )
 
 
+IMAGE_LABEL_MAX_LENGTH: Final[int] = 64
+
+
+def validate_image_label(label: str) -> str:
+    """Valida y limpia el label de una imagen generada.
+
+    Lanza `ImageGenerationValidationError` si el label es vacío o supera el límite.
+    """
+    clean = label.strip()
+    if not clean:
+        raise ImageGenerationValidationError("el label de la imagen no puede estar vacío")
+    if len(clean) > IMAGE_LABEL_MAX_LENGTH:
+        raise ImageGenerationValidationError(
+            f"el label de la imagen supera {IMAGE_LABEL_MAX_LENGTH} caracteres"
+        )
+    return clean
+
+
 def validate_image_prompt(prompt: str) -> None:
     """Valida el prompt de generación de imagen para Nano Banana 2.
 

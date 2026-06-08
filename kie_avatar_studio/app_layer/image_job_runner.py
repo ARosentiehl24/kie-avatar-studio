@@ -91,10 +91,22 @@ class ImageJobRunner:
 
     async def run(self, job: ImageJob) -> ImageJob:
         try:
-            refs, settings = await self._validate(job)
-            task_id = await self._create_task(job, refs=refs, settings=settings)
-            image_url = await self._poll_for_url(task_id)
-            await self._finalize(job, image_url, refs_count=len(refs), settings=settings)
+            if job.task_id:
+                # Reanudación tras crash/restart: el task ya existe en Kie.
+                # Evitamos re-validar refs expiradas (que darían error innecesario)
+                # y saltamos directo al polling y finalización.
+                logger.info("ImageJob {} reanudado con task existente {}", job.id, job.task_id)
+                await self._transition(job, ImageJobStatus.POLLING)
+                image_url = await self._poll_for_url(job.task_id)
+                refs = self._parse_refs(job)
+                settings = self._parse_settings(job)
+                await self._finalize(job, image_url, refs_count=len(refs), settings=settings)
+            else:
+                # Flujo normal para job nuevo
+                refs, settings = await self._validate(job)
+                task_id = await self._create_task(job, refs=refs, settings=settings)
+                image_url = await self._poll_for_url(task_id)
+                await self._finalize(job, image_url, refs_count=len(refs), settings=settings)
         except (KieError, JobValidationError) as exc:
             # KieError cubre los errores HTTP de Kie y los NotFound de
             # store local (ImageNotFoundError, GeneratedImageNotFoundError).
@@ -131,13 +143,6 @@ class ImageJobRunner:
         refs: list[ImageAssetRef],
         settings: ImageGenerationSettings,
     ) -> str:
-        # Si el job ya tenía `task_id` (resume desde POLLING), reusamos ese
-        # task en Kie en vez de crear uno nuevo. Evita doble cobro.
-        if job.task_id:
-            logger.info("ImageJob {} reanudado con task existente {}", job.id, job.task_id)
-            await self._transition(job, ImageJobStatus.POLLING)
-            return job.task_id
-
         await self._transition(job, ImageJobStatus.CREATING)
         created = await self._client.create_nano_banana_task(
             job.prompt,

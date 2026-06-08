@@ -11,7 +11,7 @@ from kie_avatar_studio.infra.kie_client import KieClient
 
 
 def _swap_transport(client: KieClient, transport: httpx.MockTransport, api_key: str) -> None:
-    """Replace KieClient's internal httpx client with one that uses MockTransport.
+    """Reemplaza el cliente httpx interno de KieClient con uno que use MockTransport.
 
     Patrón existente en `test_kie_client.py`: en lugar de inyectar el transport
     al construir, lo reemplazamos post-construcción. Mantiene el cliente real

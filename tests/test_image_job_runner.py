@@ -25,8 +25,9 @@ from kie_avatar_studio.infra.images_db import ImagesDB
 from kie_avatar_studio.infra.kie_client import KieClient
 
 
-def _client_with_handler(tmp_settings, handler) -> KieClient:
+async def _client_with_handler(tmp_settings, handler) -> KieClient:
     client = KieClient(tmp_settings)
+    await client.aclose()
     client._client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
         headers={"Authorization": f"Bearer {tmp_settings.kie_api_key}"},
@@ -97,7 +98,7 @@ async def test_run_happy_path_persists_completed(
     uploaded_store: ImagesDB,
 ) -> None:
     tmp_settings = tmp_settings.model_copy(update={"poll_interval_seconds": 0})
-    client = _client_with_handler(tmp_settings, _success_handler())
+    client = await _client_with_handler(tmp_settings, _success_handler())
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     job = _make_job()
     await jobs_repo.upsert(job)
@@ -142,7 +143,7 @@ async def test_run_sends_settings_in_payload(
         )
 
     tmp_settings = tmp_settings.model_copy(update={"poll_interval_seconds": 0})
-    client = _client_with_handler(tmp_settings, handler)
+    client = await _client_with_handler(tmp_settings, handler)
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     job = _make_job(
         settings_json=ImageGenerationSettings(
@@ -171,7 +172,7 @@ async def test_run_marks_failed_on_invalid_prompt(
     generated_store: GeneratedImagesDB,
     uploaded_store: ImagesDB,
 ) -> None:
-    client = _client_with_handler(tmp_settings, lambda req: httpx.Response(500))
+    client = await _client_with_handler(tmp_settings, lambda req: httpx.Response(500))
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     job = _make_job(prompt="")  # vacío → ImageGenerationValidationError
     await jobs_repo.upsert(job)
@@ -193,7 +194,7 @@ async def test_run_fails_when_uploaded_ref_no_longer_in_store(
 ) -> None:
     """Si una ref UPLOADED fue borrada del store después de encolar, el job debe fallar
     sin pegarle a Kie (evita 422 críptico)."""
-    client = _client_with_handler(tmp_settings, lambda req: httpx.Response(500))
+    client = await _client_with_handler(tmp_settings, lambda req: httpx.Response(500))
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     refs = [
         ImageAssetRef(
@@ -220,7 +221,7 @@ async def test_run_fails_when_uploaded_ref_expired_in_kie(
     uploaded_store: ImagesDB,
 ) -> None:
     """Si una ref UPLOADED venció su TTL de 24h, el job debe fallar antes de Kie."""
-    client = _client_with_handler(tmp_settings, lambda req: httpx.Response(500))
+    client = await _client_with_handler(tmp_settings, lambda req: httpx.Response(500))
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     # Ref en el store pero con uploaded_at en el pasado lejano → expirada.
     old_uploaded = UploadedImage(
@@ -277,7 +278,7 @@ async def test_run_succeeds_with_fresh_generated_ref(
         )
     ]
     tmp_settings = tmp_settings.model_copy(update={"poll_interval_seconds": 0})
-    client = _client_with_handler(tmp_settings, _success_handler())
+    client = await _client_with_handler(tmp_settings, _success_handler())
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     job = _make_job(refs_json=json.dumps([r.model_dump(mode="json") for r in refs]))
     await jobs_repo.upsert(job)
@@ -317,7 +318,7 @@ async def test_resume_with_existing_task_id_skips_create(
         )
 
     tmp_settings = tmp_settings.model_copy(update={"poll_interval_seconds": 0})
-    client = _client_with_handler(tmp_settings, handler)
+    client = await _client_with_handler(tmp_settings, handler)
     runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
     job = _make_job(status=ImageJobStatus.POLLING, task_id="nb_existing")
     await jobs_repo.upsert(job)
