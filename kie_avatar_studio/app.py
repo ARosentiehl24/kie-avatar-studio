@@ -328,6 +328,7 @@ class KieAvatarStudioApp(App[None]):
             self.workflow_db,
             self.workflow_manifest_writer,
             self.workflow_queue,
+            self.workflow_base_resolver,
             scan_loader=self._scan_workflows_dir,
             entry_builder=build_workflow_from_entry,
             presets_store=self.presets_store,
@@ -445,12 +446,22 @@ class KieAvatarStudioApp(App[None]):
         pantallas se subscriben al mismo evento). El update check es
         opcional via `settings.update_check_enabled`.
         """
+        self._attach_bridge_listeners()
+        if self.settings.update_check_enabled:
+            self.run_worker(self._check_for_update(), exclusive=True)
+
+    def _attach_bridge_listeners(self) -> None:
+        """Adhiere el `NotificationBridge` a las queues vigentes.
+
+        Idempotente respecto al ciclo de vida del bridge: cada `QueueManager`
+        es nuevo después de un `_rebuild_kie_client`, por eso siempre arranca
+        sin listeners. Llamado desde `_wire_background_workers` (boot) y
+        desde `_rebuild_kie_client` (después de cambiar la API key activa).
+        """
         self.queue.add_listener(self.notification_bridge.on_video_event)
         self.audio_queue.add_listener(self.notification_bridge.on_audio_event)
         self.image_queue.add_listener(self.notification_bridge.on_image_event)
         self.workflow_queue.add_listener(self.notification_bridge.on_workflow_event)
-        if self.settings.update_check_enabled:
-            self.run_worker(self._check_for_update(), exclusive=True)
 
     def _dispatch_workflow_event(self, workflow: WorkflowJob) -> None:
         """Callback que el WorkflowRunner invoca tras cada transición.
@@ -736,6 +747,9 @@ class KieAvatarStudioApp(App[None]):
                     check_credits=self._check_credits,
                     presets_controller=self.presets_controller,
                     audio_player=self.audio_player,
+                    default_input_dir=self.settings.inputs_dir,
+                    open_local_path=open_local_path,
+                    default_i2v_duration_seconds=self.settings.default_i2v_duration_seconds,
                 )
             )
             return
@@ -860,6 +874,15 @@ class KieAvatarStudioApp(App[None]):
 
     async def _rebuild_kie_client(self) -> None:
         old = self.kie
+        # Capturamos referencias a las queues VIEJAS para drenarlas antes de
+        # cerrar el cliente: cualquier job en flight todavía está corriendo
+        # contra `old` y reventaría con "client closed" si hacemos `aclose()`
+        # sin esperarlos. `drain()` espera a que todos los `_active` futures
+        # terminen (ya sea por éxito, fallo o cancelación).
+        old_video_queue = self.queue
+        old_audio_queue = self.audio_queue
+        old_image_queue = self.image_queue
+        old_workflow_queue = self.workflow_queue
         self.kie = self._build_kie_client()
         # `JobRunner`, `AudioJobRunner` e `ImageJobRunner` toman el cliente
         # en cada `run()` desde `self._client`, así que solo necesitamos
@@ -896,6 +919,61 @@ class KieAvatarStudioApp(App[None]):
             lifecycle=self.image_lifecycle,
             capacity_limiter=self._capacity_limiter,
         )
+        # Rebuild del workflow subsystem: factory + step_runner + base_resolver
+        # + runner + queue + controller, todos apuntan al `self.kie` viejo.
+        # Sin esto, el preview de la imagen base falla con "client has been
+        # closed" después de que el usuario configura/cambia una API key.
+        self.workflow_runner_factory = WorkflowRunnerFactory(
+            image_deps=ImageRunnerDeps(
+                settings=self.settings,
+                client=self.kie,
+                image_jobs_repo=self.image_jobs_db,
+                generated_images_store=self.generated_images_db,
+                uploaded_images_store=self.images_db,
+            ),
+            audio_deps=AudioRunnerDeps(
+                settings=self.settings,
+                client=self.kie,
+                audio_jobs_repo=self.audio_jobs_db,
+                audios_store=self.audios_db,
+            ),
+        )
+        self.workflow_step_runner = WorkflowStepRunner(
+            self.settings,
+            self.kie,
+            self._capacity_limiter,
+            image_jobs_repo=self.image_jobs_db,
+            generated_images_store=self.generated_images_db,
+            runner_factory=self.workflow_runner_factory,
+        )
+        self.workflow_base_resolver = WorkflowBaseResolver(
+            self.settings,
+            self.kie,
+            self.presets_store,
+            self.images_db,
+            self.generated_images_db,
+            self.image_jobs_db,
+            self._capacity_limiter,
+            self.workflow_runner_factory,
+        )
+        self.workflow_runner = WorkflowRunner(
+            self.settings,
+            self.kie,
+            WorkflowRunnerDeps(
+                repository=self.workflow_db,
+                manifest_writer=self.workflow_manifest_writer,
+                step_runner=self.workflow_step_runner,
+                base_resolver=self.workflow_base_resolver,
+            ),
+        )
+        self.workflow_queue = QueueManager(
+            self.settings,
+            self.workflow_runner,
+            event_factory=WorkflowJobUpdated,
+            lifecycle=self.workflow_lifecycle,
+            capacity_limiter=self._workflows_limiter,
+        )
+        self.workflow_runner.set_notify(self._dispatch_workflow_event)
         # IMPORTANTE: el `AudiosController` guarda una referencia concreta
         # al queue. Si solo rebindeamos `self.audio_queue` y dejamos el
         # controller apuntando al queue viejo, los próximos enqueue desde
@@ -928,5 +1006,33 @@ class KieAvatarStudioApp(App[None]):
             self.queue,
             self.audio_queue,
             self.image_queue,
+        )
+        self.workflow_controller = WorkflowController(
+            self.settings,
+            self.workflow_db,
+            self.workflow_manifest_writer,
+            self.workflow_queue,
+            self.workflow_base_resolver,
+            scan_loader=self._scan_workflows_dir,
+            entry_builder=build_workflow_from_entry,
+            presets_store=self.presets_store,
+            uploaded_images=self.images_db,
+            generated_images=self.generated_images_db,
+        )
+        # Re-suscribimos los listeners del notification bridge a las queues
+        # NUEVAS (las viejas seguían vivas pero apuntan al cliente que vamos
+        # a cerrar; sus listeners morirán naturalmente cuando se garbage
+        # collect-een).
+        self._attach_bridge_listeners()
+        # Drenamos las queues VIEJAS antes de cerrar el cliente. Si alguien
+        # tenía una request en flight contra `old`, esperar a que termine
+        # evita el error "Cannot send a request, as the client has been
+        # closed." que reportó el usuario al cambiar de API key.
+        await asyncio.gather(
+            old_video_queue.drain(),
+            old_audio_queue.drain(),
+            old_image_queue.drain(),
+            old_workflow_queue.drain(),
+            return_exceptions=True,
         )
         await old.aclose()

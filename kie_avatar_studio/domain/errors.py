@@ -153,5 +153,26 @@ class WorkflowStepError(KieError):
     """
 
 
+class StepAwaitingApprovalSignal(Exception):  # noqa: N818 - es señal de control, no error
+    """Señal de control de flujo: el step quedó esperando aprobación humana.
+
+    NO es un error — el step generó correctamente la scene_image con Nano
+    Banana pero el workflow corre en modo `SceneApprovalMode.MANUAL` y
+    necesita revisión humana antes de continuar al render Kling i2v.
+
+    El `WorkflowStepRunner._prepare_scene_image` la levanta después de
+    persistir el `step.bg_image_job_id` + `step.scene_image_path` y poner
+    el step en `WorkflowStepStatus.AWAITING_APPROVAL`. El `WorkflowRunner`
+    la captura en `_run_one`, marca el workflow en
+    `WorkflowStatus.AWAITING_APPROVAL` y termina su tarea sin avanzar a
+    steps siguientes ni marcar el workflow como FAILED. El semáforo de
+    workflows queda libre.
+
+    Hereda de `Exception` (no `KieError`) para que sea detectable como
+    señal específica sin chocar con el except genérico que captura errores
+    del runner.
+    """
+
+
 class WorkflowNotFoundError(KieError):
     """Se intentó operar sobre un `WorkflowJob` por id pero no existe en el store."""

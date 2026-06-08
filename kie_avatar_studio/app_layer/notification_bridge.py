@@ -126,6 +126,19 @@ _WORKFLOW_PARTIAL_SPEC: Final[_NotifySpec] = _NotifySpec(
     success_hint="Mirá los outputs (algunos steps fallaron, revisá el detalle)",
 )
 
+# Spec especial para AWAITING_APPROVAL: solo dispara la notificación "ok"
+# (no hay caso "fail" para este estado). Reusamos la estructura pero con
+# un `failed_status` ficticio que nunca matchea (CANCELLED no aparece en
+# transiciones automáticas hacia este estado).
+_WORKFLOW_APPROVAL_SPEC: Final[_NotifySpec] = _NotifySpec(
+    completed_status=WorkflowStatus.AWAITING_APPROVAL,
+    failed_status=WorkflowStatus.CANCELLED,
+    label_extractor=_workflow_label,
+    title_ok="⏳ Workflow esperando tu aprobación",
+    title_fail="",  # no usado: la transición a CANCELLED desde awaiting es manual
+    success_hint="Abrí Automatización → Revisar aprobación para continuar",
+)
+
 
 class JobNotificationBridge:
     """Listener de queues que dispara notificaciones del SO al terminar un job.
@@ -148,6 +161,7 @@ class JobNotificationBridge:
                 _IMAGE_SPEC,
                 _WORKFLOW_SPEC,
                 _WORKFLOW_PARTIAL_SPEC,
+                _WORKFLOW_APPROVAL_SPEC,
             )
         }
         # Mantenemos referencia fuerte a las tasks fire-and-forget para
@@ -166,11 +180,14 @@ class JobNotificationBridge:
         self._handle_event(_IMAGE_SPEC, event.job)
 
     def on_workflow_event(self, event: WorkflowJobUpdated) -> None:
-        # Despachamos contra dos specs: uno cubre COMPLETED/FAILED, el otro
-        # cubre PARTIALLY_FAILED como "completed con warnings". El dedup
-        # por (spec, id) garantiza que se notifica una vez por kind.
+        # Despachamos contra tres specs:
+        # - _WORKFLOW_SPEC: COMPLETED / FAILED
+        # - _WORKFLOW_PARTIAL_SPEC: PARTIALLY_FAILED como "completed con warnings"
+        # - _WORKFLOW_APPROVAL_SPEC: AWAITING_APPROVAL (acción humana requerida)
+        # El dedup por (spec, id) garantiza una notificación por kind.
         self._handle_event(_WORKFLOW_SPEC, event.job)
         self._handle_event(_WORKFLOW_PARTIAL_SPEC, event.job)
+        self._handle_event(_WORKFLOW_APPROVAL_SPEC, event.job)
 
     # --- internals -----------------------------------------------------
 
@@ -179,9 +196,16 @@ class JobNotificationBridge:
         spec: _NotifySpec,
         job: VideoJob | AudioJob | ImageJob | WorkflowJob,
     ) -> None:
-        if job.status not in (spec.completed_status, spec.failed_status):
-            return
         seen = self._notified[id(spec)]
+        # Dedup transient: para AWAITING_APPROVAL, si el workflow ya salió
+        # del estado pausado (porque el usuario aprobó/regeneró/canceló y
+        # volvió a QUEUED), liberamos el seen para poder volver a notificar
+        # si pausa de nuevo. Sin esto, multi-step MANUAL solo notifica una
+        # vez por workflow_id durante toda su vida.
+        if job.status not in (spec.completed_status, spec.failed_status):
+            if job.id in seen and spec is _WORKFLOW_APPROVAL_SPEC:
+                seen.discard(job.id)
+            return
         if job.id in seen:
             return
         seen.add(job.id)

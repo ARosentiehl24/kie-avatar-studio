@@ -68,6 +68,30 @@ MINOR, **S** → PATCH.
   - Restore al arrancar: workflows en estado no-terminal se marcan
     FAILED y el manifest se regenera inmediatamente para que un
     consumer externo no vea snapshot stale post-crash.
+- **Aprobación humana de scene_image (modo `scene_approval_mode`)**. En
+  modo `manual`, los b-roll que generan scene nueva con Nano Banana pausan
+  el workflow en `awaiting_approval` esperando que el usuario apruebe /
+  regenere / cancele desde el modal `SceneImageApprovalScreen` (botón
+  "Revisar aprobación" + badge `⏳`). Evita gastar créditos en Kling
+  animando una scene que salió mal. `auto` (default) sigue sin pausa.
+- **Producto promocional en workflows** (`promote_product` +
+  `include_product` + `product_prompt`). Un workflow puede promocionar UN
+  producto global:
+  - `pre_settings.promote_product: true` activa el flujo; al encolar, la
+    UI pide elegir la foto del producto desde `inputs/` y la sube a Kie
+    (TTL 24h). La imagen NO va en el JSON.
+  - Cada step (a-roll o b-roll) con `include_product: true` + un
+    `product_prompt` compone el producto sobre la modelo con Nano Banana 2
+    (refs = `[base, producto]`). La scene resultante alimenta el render.
+  - Nano Banana se invoca si `change_scene` **o** `include_product`
+    (`needs_scene_generation`). Con `change_scene=false` +
+    `include_product=true`, mantiene el fondo de la base y solo añade el
+    producto.
+  - La aprobación humana `manual` (solo b-roll) se amplía a la condición
+    `change_scene OR include_product`; los a-roll con producto generan
+    scene pero nunca pausan.
+  - Validación cruzada: `include_product=true` exige
+    `promote_product=true`. Ejemplo en `workflows/example_product_promo.json`.
 - **Endpoint Kie nuevo**: `kling-2.6/image-to-video` (b-roll silencioso).
   Implementado en `KieClient.create_image_to_video_task`. Documentado
   en `docs/API_KIE.md` §6.
@@ -117,6 +141,24 @@ MINOR, **S** → PATCH.
   acepta tanto `UploadedImage` como `GeneratedImage`, etiquetando cada
   opción como `[subida]` o `[generada]`. Devuelve `ImageAssetRef`
   (no `image_id`) para que `VideosController` resuelva sin asumir origen.
+
+### Changed (S) — UI polish
+
+- `ConfigureWorkflowScreen`: los campos del formulario ahora viven en un
+  `VerticalScroll`, con título/subtítulo fijos arriba y los botones de
+  acción fijos abajo. Antes, con muchos campos (preset + duración +
+  aprobación + producto), los de abajo —incluidos los botones— se
+  recortaban por overflow y eran inalcanzables. Además se corrigió un hueco
+  grande causado por la fila del Select de aprobación que se expandía a
+  `height: 1fr`, y los bloques de estado "Producto promocional" y "Próximo
+  paso" se muestran como cards con borde redondeado para destacar del muro
+  de hints.
+- Botones secundarios (`.btn-info` / `.btn-success` / `.btn-warning`)
+  rediseñados a estilo **ghost** (fondo tenue teñido + texto del color
+  semántico) en vez de fills saturados. Más sobrios contra el tema
+  tokyo-night; ahora solo el botón primary (lavanda sólido) y el destructive
+  (rojo sólido) dominan la jerarquía. Afecta todas las pantallas de forma
+  consistente.
 
 ---
 

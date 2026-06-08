@@ -177,8 +177,30 @@ def _build_manifest_payload(workflow: WorkflowJob) -> dict[str, Any]:
         "manifest_write_failed": workflow.manifest_write_failed,
         "pre_settings": workflow.pre_settings.model_dump(by_alias=True, mode="json"),
         "model_base": _model_base_block(workflow),
+        "product": _product_block(workflow),
         "steps": [_step_block(step) for step in workflow.steps],
     }
+
+
+def _product_block(workflow: WorkflowJob) -> dict[str, Any] | None:
+    """Devuelve el bloque `product` con el producto promocional resuelto o `None`."""
+    pre = workflow.pre_settings
+    if not pre.promote_product or pre.product_image is None:
+        return None
+    product = pre.product_image
+    ref = product.resolved_image_ref
+    block: dict[str, Any] = {"local_path": product.local_path}
+    if ref is not None:
+        block.update(
+            {
+                "kind": ref.kind.value,
+                "id": ref.id,
+                "label": ref.label,
+                "kie_url": ref.kie_url,
+                "expires_at": ref.expires_at.isoformat(),
+            }
+        )
+    return block
 
 
 def _model_base_block(workflow: WorkflowJob) -> dict[str, Any] | None:
@@ -209,10 +231,19 @@ def _step_block(step: WorkflowStep) -> dict[str, Any]:
         "scene_name": step.scene_name,
         "scene_slug": step.scene_slug,
         "type": step.type.value,
-        "change_background": step.change_background,
-        "background_description": step.background_description,
+        "change_scene": step.change_scene,
+        "scene_description": step.scene_description,
         "prompt": step.prompt,
         "text": step.text,
+        "duration_seconds": step.duration_seconds,
+        "voiceover": step.voiceover,
+        "include_product": step.include_product,
+        "include_model": step.include_model,
+        "product_prompt": step.product_prompt,
+        "image_aspect_ratio": step.image_aspect_ratio,
+        "scene_image_approved_at": (
+            step.scene_image_approved_at.isoformat() if step.scene_image_approved_at else None
+        ),
         "status": step.status.value,
         "progress": {k.value: v.value for k, v in step.progress.items()},
         "outputs": _step_outputs(step),

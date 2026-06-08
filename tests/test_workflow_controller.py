@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,8 @@ from kie_avatar_studio.config import Settings
 from kie_avatar_studio.domain.errors import WorkflowValidationError
 from kie_avatar_studio.domain.events import WorkflowJobUpdated
 from kie_avatar_studio.domain.models import (
+    ImageAssetKind,
+    ImageAssetRef,
     VoicePreset,
     WorkflowJob,
 )
@@ -37,6 +40,43 @@ class _FakeRunner:
     async def run(self, job: WorkflowJob) -> WorkflowJob:
         self.runs.append(job)
         return job
+
+
+class _FakeBaseResolver:
+    """Base resolver fake configurable para tests de preview/upload."""
+
+    def __init__(
+        self,
+        *,
+        preview_ref: ImageAssetRef | None = None,
+        upload_ref: ImageAssetRef | None = None,
+    ) -> None:
+        self.preview_ref = preview_ref
+        self.upload_ref = upload_ref
+        self.preview_calls: list[tuple[str, str, Path | None]] = []
+        self.upload_calls: list[Path] = []
+
+    async def generate_from_prompt_standalone(
+        self,
+        prompt: str,
+        *,
+        label_hint: str,
+        download_to: Path | None = None,
+        settings: object | None = None,
+    ) -> ImageAssetRef:
+        self.preview_calls.append((prompt, label_hint, download_to))
+        if self.preview_ref is None:
+            raise NotImplementedError("configurar `preview_ref` para tests que usan preview")
+        if download_to is not None:
+            download_to.parent.mkdir(parents=True, exist_ok=True)
+            download_to.write_bytes(b"fake image bytes")
+        return self.preview_ref
+
+    async def upload_local_standalone(self, path: Path) -> ImageAssetRef:
+        self.upload_calls.append(path)
+        if self.upload_ref is None:
+            raise NotImplementedError("configurar `upload_ref` para tests que usan upload")
+        return self.upload_ref
 
 
 def _valid_payload(name: str = "Sample") -> dict:
@@ -98,6 +138,7 @@ async def workflow_controller_setup(
         db,
         AtomicWorkflowManifestWriter(),
         queue,
+        _FakeBaseResolver(),  # type: ignore[arg-type]
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
         presets_store=presets,
@@ -229,6 +270,169 @@ async def test_enqueue_prefers_id_over_label_match(
     assert workflow.pre_settings.voice_preset_id == "alpha"
 
 
+# --- pre-enqueue base resolution (preview + upload + resolved_base_ref) -
+
+
+def _mock_generated_ref() -> ImageAssetRef:
+    return ImageAssetRef(
+        kind=ImageAssetKind.GENERATED,
+        id="img_mock",
+        label="mock generated",
+        kie_url="https://tempfile.kie.ai/img/mock.png",
+        expires_at=datetime.now(UTC) + timedelta(days=14),
+    )
+
+
+def _mock_uploaded_ref() -> ImageAssetRef:
+    return ImageAssetRef(
+        kind=ImageAssetKind.UPLOADED,
+        id="uploads/local_mock.png",
+        label="local_mock.png",
+        kie_url="https://tempfile.kie.ai/uploads/local_mock.png",
+        expires_at=datetime.now(UTC) + timedelta(hours=24),
+    )
+
+
+def _build_controller_with_fake_resolver(
+    tmp_settings: Settings,
+    db: WorkflowDB,
+    images_db: ImagesDB,
+    generated_db: GeneratedImagesDB,
+    presets: VoicePresetsStore,
+    workflows_dir: Path,
+    fake_resolver: _FakeBaseResolver,
+) -> tuple[WorkflowController, _FakeRunner]:
+    fake_runner = _FakeRunner()
+    lifecycle = WorkflowLifecycle(db)
+    queue: QueueManager[WorkflowJob, WorkflowJobUpdated] = QueueManager(
+        tmp_settings,
+        fake_runner,
+        event_factory=WorkflowJobUpdated,
+        lifecycle=lifecycle,
+    )
+    controller = WorkflowController(
+        tmp_settings,
+        db,
+        AtomicWorkflowManifestWriter(),
+        queue,
+        fake_resolver,  # type: ignore[arg-type]
+        scan_loader=lambda: scan_workflows_dir(workflows_dir),
+        entry_builder=build_workflow_from_entry,
+        presets_store=presets,
+        uploaded_images=images_db,
+        generated_images=generated_db,
+    )
+    return controller, fake_runner
+
+
+async def test_preview_base_from_prompt_invokes_resolver_and_downloads(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+    tmp_settings: Settings,
+) -> None:
+    """`preview_base_from_prompt` debe llamar al resolver y producir el path."""
+    _, _, workflows_dir, presets = workflow_controller_setup
+    fake_resolver = _FakeBaseResolver(preview_ref=_mock_generated_ref())
+    db = WorkflowDB(tmp_settings.db_path)
+    await db.init()
+    images_db = ImagesDB(tmp_settings.db_path)
+    await images_db.init()
+    generated_db = GeneratedImagesDB(tmp_settings.db_path)
+    await generated_db.init()
+    controller, _ = _build_controller_with_fake_resolver(
+        tmp_settings, db, images_db, generated_db, presets, workflows_dir, fake_resolver
+    )
+    ref, path = await controller.preview_base_from_prompt(
+        "A photorealistic woman", label_hint="test_wf"
+    )
+    assert ref.id == "img_mock"
+    assert path.parent.name == "_previews"
+    assert path.is_file()  # el fake resolver escribió bytes ahí
+    assert fake_resolver.preview_calls == [("A photorealistic woman", "test_wf", path)]
+
+
+async def test_upload_local_base_propagates_ref(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+    tmp_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """`upload_local_base` debe propagar la ref devuelta por el resolver."""
+    _, _, workflows_dir, presets = workflow_controller_setup
+    fake_resolver = _FakeBaseResolver(upload_ref=_mock_uploaded_ref())
+    db = WorkflowDB(tmp_settings.db_path)
+    await db.init()
+    images_db = ImagesDB(tmp_settings.db_path)
+    await images_db.init()
+    generated_db = GeneratedImagesDB(tmp_settings.db_path)
+    await generated_db.init()
+    controller, _ = _build_controller_with_fake_resolver(
+        tmp_settings, db, images_db, generated_db, presets, workflows_dir, fake_resolver
+    )
+    fake_image = tmp_path / "fake.png"
+    fake_image.write_bytes(b"fake")
+    ref = await controller.upload_local_base(fake_image)
+    assert ref.kind == ImageAssetKind.UPLOADED
+    assert fake_resolver.upload_calls == [fake_image]
+
+
+async def test_enqueue_with_resolved_base_ref_persists_and_skips_path_validation(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    """`enqueue_entry(resolved_base_ref=...)` debe saltar validate_local_model_path."""
+    controller, _, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    ref = _mock_uploaded_ref()
+    # Pasamos ref + local_path; el path NO existe en disco pero igual el
+    # encolado debe pasar (porque resolved_base_ref bypasea la validación).
+    workflow = await controller.enqueue_entry(
+        entries[0],
+        resolved_base_ref=ref,
+        local_path="/path/que/no/existe/modelo.png",
+    )
+    # Persistido en el workflow.
+    persisted = workflow.pre_settings.model_creation.resolved_image_ref
+    assert persisted is not None
+    assert persisted.id == ref.id
+    assert workflow.pre_settings.model_creation.local_path == "/path/que/no/existe/modelo.png"
+    # El workflow ya está en la DB con la ref persistida.
+    loaded = await controller.get_workflow(workflow.id)
+    assert loaded is not None
+    loaded_ref = loaded.pre_settings.model_creation.resolved_image_ref
+    assert loaded_ref is not None
+    assert loaded_ref.id == ref.id
+    assert loaded.pre_settings.model_creation.local_path == "/path/que/no/existe/modelo.png"
+
+
+async def test_enqueue_without_resolved_base_ref_still_validates_path(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    """Sin `resolved_base_ref`, el validator del path se ejecuta normalmente."""
+    from kie_avatar_studio.domain.errors import ImageValidationError
+
+    controller, _, workflows_dir, _ = workflow_controller_setup
+    # Sobreescribimos el JSON con method=local + local_path inexistente.
+    bad_payload = {
+        "workflow": "Bad Local",
+        "pre_settings": {
+            "voice_preset": "warm",
+            "model_creation": {"method": "local", "local_path": "/nope/no.png"},
+        },
+        "run": [
+            {
+                "step": 1,
+                "scene_name": "Hook",
+                "type": "a-roll",
+                "prompt": "p",
+                "text": "t",
+            }
+        ],
+    }
+    (workflows_dir / "bad_local.json").write_text(json.dumps(bad_payload), encoding="utf-8")
+    entries = await controller.list_entries(refresh=True)
+    bad_entry = next(e for e in entries if e.name == "bad_local")
+    with pytest.raises(ImageValidationError):
+        await controller.enqueue_entry(bad_entry)
+
+
 async def test_cancel_returns_false_for_unknown_id(
     workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
 ) -> None:
@@ -253,3 +457,106 @@ async def test_list_workflows_returns_persisted_in_db(
     workflows = await controller.list_workflows()
     assert len(workflows) == 1
     assert workflows[0].name == "Valid WF"
+
+
+# --- approval flow (SceneApprovalMode.MANUAL) -----------------------------
+
+
+async def _enqueue_awaiting_workflow(
+    controller: WorkflowController, entries: list, step_number: int = 1
+):
+    """Helper: encola un workflow y pone un step en AWAITING_APPROVAL para tests."""
+    from kie_avatar_studio.domain.models import (
+        SceneApprovalMode,
+        WorkflowStatus,
+        WorkflowStepStatus,
+    )
+
+    workflow = await controller.enqueue_entry(
+        entries[0], scene_approval_mode=SceneApprovalMode.MANUAL
+    )
+    # Simulamos lo que haría el runner: pausa el step y el workflow.
+    target = workflow.step_by_number(step_number)
+    assert target is not None
+    target.status = WorkflowStepStatus.AWAITING_APPROVAL
+    target.bg_image_job_id = f"img_test_{step_number}"
+    target.scene_image_path = f"/tmp/scene_{step_number}.png"
+    workflow.status = WorkflowStatus.AWAITING_APPROVAL
+    # Persistimos vía la API pública del controller (passthrough al repo).
+    await controller._repository.update_workflow_header(workflow)  # type: ignore[attr-defined]
+    await controller._repository.upsert_step(workflow.id, target)  # type: ignore[attr-defined]
+    return workflow
+
+
+async def test_approve_scene_marks_approved_and_requeues(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    from kie_avatar_studio.domain.models import WorkflowStatus, WorkflowStepStatus
+
+    controller, _fake_runner, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    workflow = await _enqueue_awaiting_workflow(controller, entries)
+    result = await controller.approve_scene(workflow.id, 1)
+    step = result.step_by_number(1)
+    assert step is not None
+    assert step.scene_image_approved_at is not None
+    assert step.status == WorkflowStepStatus.QUEUED
+    assert result.status == WorkflowStatus.QUEUED
+
+
+async def test_regenerate_scene_resets_and_requeues(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    from kie_avatar_studio.domain.models import WorkflowStatus, WorkflowStepStatus
+
+    controller, _fake_runner, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    workflow = await _enqueue_awaiting_workflow(controller, entries)
+    result = await controller.regenerate_scene(workflow.id, 1)
+    step = result.step_by_number(1)
+    assert step is not None
+    assert step.bg_image_job_id is None
+    assert step.scene_image_path is None
+    assert step.scene_image_approved_at is None
+    assert step.status == WorkflowStepStatus.QUEUED
+    assert result.status == WorkflowStatus.QUEUED
+
+
+async def test_cancel_step_marks_cancelled_and_continues_workflow(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    from kie_avatar_studio.domain.models import WorkflowStatus, WorkflowStepStatus
+
+    controller, _, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    workflow = await _enqueue_awaiting_workflow(controller, entries)
+    result = await controller.cancel_step(workflow.id, 1)
+    step = result.step_by_number(1)
+    assert step is not None
+    assert step.status == WorkflowStepStatus.CANCELLED
+    assert step.completed_at is not None
+    # El workflow vuelve a QUEUED para que el runner continúe con otros steps.
+    assert result.status == WorkflowStatus.QUEUED
+
+
+async def test_approve_scene_rejects_step_not_awaiting(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    from kie_avatar_studio.domain.errors import WorkflowValidationError
+
+    controller, _, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    workflow = await controller.enqueue_entry(entries[0])
+    # Step queda en QUEUED (no AWAITING_APPROVAL). Aprobar debe fallar.
+    with pytest.raises(WorkflowValidationError, match="no está esperando aprobación"):
+        await controller.approve_scene(workflow.id, 1)
+
+
+async def test_approve_scene_rejects_unknown_workflow(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    from kie_avatar_studio.domain.errors import WorkflowNotFoundError
+
+    controller, _, _, _ = workflow_controller_setup
+    with pytest.raises(WorkflowNotFoundError):
+        await controller.approve_scene("wf_does_not_exist", 1)

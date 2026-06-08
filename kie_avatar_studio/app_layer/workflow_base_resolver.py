@@ -25,6 +25,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
+
 from ..config import Settings
 from ..domain.errors import WorkflowValidationError
 from ..domain.models import (
@@ -35,6 +37,7 @@ from ..domain.models import (
     ImageJobStatus,
     ModelCreation,
     ModelCreationMethod,
+    UploadedImage,
     VoicePreset,
     VoiceSettings,
     WorkflowJob,
@@ -55,6 +58,12 @@ from .ids import new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
 
 BASE_IMAGE_FILENAME: Final[str] = "base.png"
+
+# Buffer de seguridad para `expires_at` del ref pre-resuelto: si quedan
+# menos de N minutos, lo tratamos como expirado para evitar URLs que
+# vencen mid-flight (clock skew entre Kie y la app + latencia HTTP del
+# siguiente paso del runner).
+_RESOLVED_REF_SAFETY_BUFFER_MINUTES: Final[int] = 5
 
 
 class WorkflowBaseResolver:
@@ -99,8 +108,35 @@ class WorkflowBaseResolver:
         return _voice_from_preset(preset)
 
     async def resolve_base_image(self, workflow: WorkflowJob) -> ImageAssetRef:
-        """Resuelve la imagen base según `pre_settings.model_creation.method`."""
+        """Resuelve la imagen base según `pre_settings.model_creation.method`.
+
+        Si `creation.resolved_image_ref` ya está poblado (pre-aprobado por
+        la UI antes de encolar — ej. preview de método PROMPT o selector
+        de método LOCAL), reusa esa ref **siempre que no haya expirado**.
+        Si expiró, cae al path normal (regenera/re-sube). Esto evita
+        gastar créditos dos veces cuando la UI ya hizo el trabajo, pero
+        también previene que el runner llame a Kie con una URL muerta
+        cuando el workflow quedó en cola mucho tiempo (>24h para uploaded,
+        >14d para generated).
+        """
         creation = workflow.pre_settings.model_creation
+        if creation.resolved_image_ref is not None:
+            # Buffer de seguridad: si quedan <N min, lo tratamos como expirado
+            # para evitar URLs que vencen mid-flight (clock skew + latencia).
+            safety_threshold = datetime.now(UTC) + timedelta(
+                minutes=_RESOLVED_REF_SAFETY_BUFFER_MINUTES
+            )
+            if creation.resolved_image_ref.expires_at > safety_threshold:
+                return creation.resolved_image_ref
+            # Ref expirado o por expirar: limpiamos y caemos al método original.
+            logger.warning(
+                "Workflow {}: resolved_image_ref expirado o por expirar (<{}min) — "
+                "re-resolviendo desde {}",
+                workflow.id,
+                _RESOLVED_REF_SAFETY_BUFFER_MINUTES,
+                creation.method.value,
+            )
+            creation.resolved_image_ref = None
         if creation.method == ModelCreationMethod.PROMPT:
             return await self._resolve_from_prompt(workflow, creation)
         if creation.method == ModelCreationMethod.LOCAL:
@@ -111,6 +147,112 @@ class WorkflowBaseResolver:
         """Descarga la imagen base a `output_dir/base.png` para uso del usuario."""
         target = output_dir / BASE_IMAGE_FILENAME
         await self._client.download_file(ref.kie_url, target)
+
+    # --- standalone public helpers (pre-enqueue UI use) -----------------
+
+    async def generate_from_prompt_standalone(
+        self,
+        prompt: str,
+        *,
+        label_hint: str,
+        download_to: Path | None = None,
+        settings: ImageGenerationSettings | None = None,
+    ) -> ImageAssetRef:
+        """Genera una imagen base con Nano Banana 2 SIN un workflow asociado.
+
+        Pensado para usarse desde la UI ANTES de encolar, para que el
+        usuario pueda previsualizar la modelo base generada y decidir
+        si la aprueba o regenera (evita gastar créditos en steps si la
+        base salió mal).
+
+        Si `download_to` está seteado, descarga la imagen a ese path
+        local (típicamente `outputs/_previews/<ts>.png`) para que la UI
+        la pueda mostrar/abrir con el viewer del sistema.
+
+        `settings` permite override de `aspect_ratio` / `resolution` /
+        `output_format`. Cuando es `None` se usa el preset por defecto
+        del modelo Nano Banana 2.
+        """
+        if not prompt:
+            raise WorkflowValidationError("model_creation.method='prompt' requiere prompt no vacío")
+        effective_settings = settings or ImageGenerationSettings()
+        image_job = ImageJob(
+            id=new_image_job_id(),
+            label=f"[wf-preview]{label_hint}",
+            prompt=prompt,
+            settings_json=effective_settings.model_dump_json(exclude_none=True),
+            refs_json=json.dumps([]),
+            status=ImageJobStatus.QUEUED,
+        )
+        await self._image_jobs_repo.upsert(image_job)
+        runner = self._runner_factory.make_image_runner()
+        async with self._capacity_limiter:
+            await runner.run(image_job)
+        if image_job.status != ImageJobStatus.COMPLETED or not image_job.kie_url:
+            raise WorkflowValidationError(
+                f"falló la generación de la imagen base ({image_job.error or 'sin mensaje'})"
+            )
+        generated = await self._generated_images.get(image_job.id)
+        if generated is None:
+            raise WorkflowValidationError("la imagen base generada no apareció en el store local")
+        ref = ImageAssetRef(
+            kind=ImageAssetKind.GENERATED,
+            id=generated.id,
+            label=generated.label,
+            kie_url=generated.kie_url,
+            expires_at=generated.expires_at(KIE_GENERATED_RETENTION_DAYS),
+        )
+        if download_to is not None:
+            download_to.parent.mkdir(parents=True, exist_ok=True)
+            await self._client.download_file(ref.kie_url, download_to)
+        return ref
+
+    async def upload_local_standalone(self, path: Path) -> ImageAssetRef:
+        """Sube una imagen local a Kie y devuelve el `ImageAssetRef`.
+
+        Pensado para usarse desde la UI cuando `method=local` o para el
+        producto promocional. La ref devuelta queda válida 24h en Kie
+        (`KIE_UPLOAD_RETENTION_HOURS`).
+
+        **Persiste** la imagen en el `uploaded_images` store con `id ==
+        kie_file_path` (mismo id que la ref). Es necesario porque cuando
+        esta imagen se usa como referencia de Nano Banana (scene con
+        producto, o base method=local con change_scene), el
+        `ImageJobRunner._revalidate_refs_freshness` busca la ref en el
+        store por id; sin persistirla, la generación falla con
+        `ImageNotFoundError`.
+        """
+        validate_image_path(path)
+        return await self._upload_and_persist(path)
+
+    async def _upload_and_persist(self, path: Path) -> ImageAssetRef:
+        """Sube `path` a Kie, persiste el `UploadedImage` y devuelve la ref.
+
+        Compartido por `upload_local_standalone` (UI / producto) y
+        `_resolve_from_local` (runtime cuando el ref pre-resuelto expiró).
+        Persistir es lo que permite que el `ImageJobRunner` revalide la ref
+        cuando se usa como input de Nano Banana. Asume que `path` ya fue
+        validado por el caller.
+        """
+        resolved_path = await asyncio.to_thread(path.resolve)
+        result = await self._client.upload_file(path)
+        uploaded = UploadedImage(
+            id=result.file_path,
+            label=path.name,
+            local_path=str(resolved_path),
+            kie_url=result.download_url,
+            kie_file_path=result.file_path,
+            file_size=result.file_size,
+            mime_type=result.mime_type,
+        )
+        await self._uploaded_images.upsert(uploaded)
+        return ImageAssetRef(
+            kind=ImageAssetKind.UPLOADED,
+            id=uploaded.id,
+            label=uploaded.label,
+            kie_url=uploaded.kie_url,
+            expires_at=uploaded.expires_at(KIE_UPLOAD_RETENTION_HOURS),
+        )
 
     # --- method=prompt ---------------------------------------------------
 
@@ -131,11 +273,14 @@ class WorkflowBaseResolver:
         return await self._make_ref_from_completed_job(image_job, creation)
 
     def _build_base_image_job(self, workflow: WorkflowJob, prompt: str) -> ImageJob:
+        settings = ImageGenerationSettings()
+        if workflow.pre_settings.image_aspect_ratio is not None:
+            settings.aspect_ratio = workflow.pre_settings.image_aspect_ratio
         return ImageJob(
             id=new_image_job_id(),
             label=f"[wf-base]{workflow.slug}",
             prompt=prompt,
-            settings_json=ImageGenerationSettings().model_dump_json(exclude_none=True),
+            settings_json=settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,
         )
@@ -165,15 +310,10 @@ class WorkflowBaseResolver:
         # Revalidación: el archivo puede haber sido movido/borrado entre
         # la validación inicial y el momento del upload.
         validate_image_path(path)
-        result = await self._client.upload_file(path)
-        expires_at = datetime.now(UTC) + timedelta(hours=KIE_UPLOAD_RETENTION_HOURS)
-        ref = ImageAssetRef(
-            kind=ImageAssetKind.UPLOADED,
-            id=result.file_path,
-            label=path.name,
-            kie_url=result.download_url,
-            expires_at=expires_at,
-        )
+        # Persiste la imagen (igual que `upload_local_standalone`) para que
+        # el `ImageJobRunner` pueda revalidar la ref si un b-roll la usa
+        # como base de una scene con `change_scene`/`include_product`.
+        ref = await self._upload_and_persist(path)
         creation.resolved_image_ref = ref
         return ref
 

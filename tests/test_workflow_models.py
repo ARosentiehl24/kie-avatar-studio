@@ -45,15 +45,15 @@ def _make_step(
     step: int = 1,
     type_: StepType = StepType.A_ROLL,
     text: str = "Hola, esto es una prueba.",
-    change_background: bool = False,
+    change_scene: bool = False,
 ) -> WorkflowStep:
     return WorkflowStep(
         step=step,
         scene_name=f"Escena {step}",
         scene_slug=f"escena_{step}",
         type=type_,
-        change_background=change_background,
-        background_description="",
+        change_scene=change_scene,
+        scene_description="",
         prompt="Una mujer hablando a cámara, plano medio.",
         text=text,
     )

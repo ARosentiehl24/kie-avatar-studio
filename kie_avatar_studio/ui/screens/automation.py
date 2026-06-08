@@ -11,6 +11,7 @@ abre `WorkflowDetailScreen` desde el botón "Ver detalle".
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import ClassVar, Final
 
 from textual.app import ComposeResult
@@ -23,12 +24,18 @@ from ...app_layer.audio_player import AudioPlayer
 from ...app_layer.presets_controller import VoicePresetsController
 from ...app_layer.workflow_controller import WorkflowController
 from ...domain.errors import (
+    ImageValidationError,
     KieError,
     WorkflowStepError,
     WorkflowValidationError,
 )
 from ...domain.events import WorkflowJobUpdated
 from ...domain.models import (
+    ImageAssetRef,
+    ImageGenerationSettings,
+    ModelCreationMethod,
+    ProductImage,
+    SceneApprovalMode,
     WorkflowEntry,
     WorkflowJob,
     WorkflowPreSettings,
@@ -43,7 +50,10 @@ from ._workflow_format import (
     format_warnings,
     format_workflow_status_cell,
 )
-from .configure_workflow import ConfigureWorkflowScreen
+from .configure_workflow import ConfigureResult, ConfigureWorkflowScreen
+from .file_picker import ImageFilePickerScreen
+from .preview_base_image import PreviewBaseImageScreen
+from .scene_image_approval import SceneImageApprovalScreen
 from .workflow_detail import WorkflowDetailScreen
 from .workflow_summary import CreditsLoader, WorkflowSummaryScreen
 
@@ -84,6 +94,9 @@ class AutomationScreen(Screen[None]):
         check_credits: CreditsLoader,
         presets_controller: VoicePresetsController,
         audio_player: AudioPlayer,
+        default_input_dir: Path,
+        open_local_path: Callable[[Path], Awaitable[None]],
+        default_i2v_duration_seconds: int,
     ) -> None:
         super().__init__()
         self._controller = controller
@@ -91,6 +104,13 @@ class AutomationScreen(Screen[None]):
         self._check_credits = check_credits
         self._presets_controller = presets_controller
         self._audio_player = audio_player
+        self._default_input_dir = default_input_dir
+        self._open_local_path = open_local_path
+        # Necesario para que el `WorkflowSummaryScreen` pueda mostrar la
+        # duración efectiva del b-roll cuando NO hay override del modal
+        # ni `step.duration_seconds` en el JSON. Sin esto la pantalla
+        # hardcodearía un valor que puede diverger del .env.
+        self._default_i2v_duration_seconds = default_i2v_duration_seconds
         self._unsubscribe: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
@@ -125,7 +145,12 @@ class AutomationScreen(Screen[None]):
                 yield Button("Configurar y ejecutar", id="automation-configure", variant="primary")
                 yield Button("Ver detalle", id="automation-detail", classes="btn-info")
                 yield Button("Reintentar", id="automation-retry", classes="btn-info")
-                yield Button("Cancelar", id="automation-cancel", classes="btn-info")
+                yield Button(
+                    "Revisar aprobación",
+                    id="automation-approve",
+                    classes="btn-success",
+                )
+                yield Button("Cancelar", id="automation-cancel", classes="btn-warning")
                 yield Button("Refrescar", id="automation-refresh", classes="btn-info")
             yield Static(
                 "[dim]Seleccioná un archivo de la tabla superior para configurarlo y "
@@ -171,6 +196,13 @@ class AutomationScreen(Screen[None]):
         await self.action_refresh()
 
     async def _handle_configure(self) -> None:
+        """Inicia el flow Configurar → (Preview/Picker) → Summary → Enqueue.
+
+        Usa el patrón **callback-based de Textual** (no `await push_screen`)
+        para evitar cascadas de awaits que causan `InvalidStateError`
+        cuando un modal se intenta cerrar mientras el siguiente está
+        siendo manejado por el caller.
+        """
         entry = await self._selected_fs_entry()
         if entry is None:
             return
@@ -180,45 +212,379 @@ class AutomationScreen(Screen[None]):
                 error=True,
             )
             return
+        self._start_enqueue_flow(entry)
 
-        async def _after_configure(voice_preset_id: str | None, audio_language: str | None) -> None:
-            # Construimos los pre_settings finales (los del JSON con overrides)
-            # para mostrarlos en el resumen final.
-            pre_settings = _merge_pre_settings(entry, voice_preset_id, audio_language)
+    # --- enqueue flow (callback chain, NO awaits anidados) -------------
 
-            async def _on_summary_confirmed() -> bool:
-                try:
-                    workflow = await self._controller.enqueue_entry(
-                        entry,
-                        voice_preset_id=voice_preset_id,
-                        audio_language=audio_language,
-                    )
-                except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
-                    self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
-                    return False
-                self._set_status(
-                    f"{OK} workflow '{workflow.name}' encolado (id={workflow.id[:14]}…)"
-                )
-                await self._refresh_db_table()
-                return True
+    def _start_enqueue_flow(self, entry: WorkflowEntry) -> None:
+        """Abre `ConfigureWorkflowScreen` con callback para el siguiente paso."""
 
-            await self.app.push_screen(
-                WorkflowSummaryScreen(
-                    entry=entry,
-                    pre_settings=pre_settings,
-                    on_confirm=_on_summary_confirmed,
-                    check_credits=self._check_credits,
-                )
+        def _on_configure_dismissed(result: ConfigureResult | None) -> None:
+            if result is None:
+                # Usuario canceló — nada más que hacer.
+                return
+            voice_preset_id, audio_language, i2v_duration_override, approval_mode = result
+            pre_settings = _merge_pre_settings(
+                entry,
+                voice_preset_id,
+                audio_language,
+                i2v_duration_override,
+                approval_mode,
+            )
+            self._dispatch_base_resolution(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
             )
 
-        await self.app.push_screen(
+        self.app.push_screen(
             ConfigureWorkflowScreen(
                 entry=entry,
                 presets_controller=self._presets_controller,
                 audio_player=self._audio_player,
-                on_confirm=_after_configure,
-            )
+                default_i2v_duration_seconds=self._default_i2v_duration_seconds,
+            ),
+            _on_configure_dismissed,
         )
+
+    def _dispatch_base_resolution(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+    ) -> None:
+        """Despacha al modal correcto según `model_creation.method`.
+
+        - `prompt`:  PreviewBaseImageScreen genera + el usuario aprueba.
+        - `local`:   ImageFilePickerScreen elige + subimos en background.
+        - `catalog`: skip directo al summary (la ref se resuelve en runtime
+          contra el store; el usuario ya eligió al editar el JSON).
+        """
+        method = pre_settings.model_creation.method
+        if method == ModelCreationMethod.PROMPT:
+            self._open_prompt_preview(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+            )
+        elif method == ModelCreationMethod.LOCAL:
+            self._open_local_picker(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+            )
+        else:
+            self._open_summary(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+                base_ref=None,
+            )
+
+    def _open_prompt_preview(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+    ) -> None:
+        prompt = pre_settings.model_creation.prompt or ""
+        if not prompt:
+            self._set_status(
+                f"{ERROR} model_creation.method='prompt' requiere prompt no vacío",
+                error=True,
+            )
+            return
+
+        def _on_preview_dismissed(ref: ImageAssetRef | None) -> None:
+            if ref is None:
+                # Usuario canceló el preview — no abrimos el summary.
+                return
+            self._open_summary(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+                base_ref=ref,
+            )
+
+        initial_settings = None
+        if pre_settings.image_aspect_ratio is not None:
+            initial_settings = ImageGenerationSettings(aspect_ratio=pre_settings.image_aspect_ratio)
+
+        self.app.push_screen(
+            PreviewBaseImageScreen(
+                controller=self._controller,
+                prompt=prompt,
+                label_hint=entry.name,
+                open_local_path=self._open_local_path,
+                initial_settings=initial_settings,
+            ),
+            _on_preview_dismissed,
+        )
+
+    def _open_local_picker(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+    ) -> None:
+        start_dir = self._default_input_dir
+        local_path_hint = pre_settings.model_creation.local_path
+        if local_path_hint:
+            candidate = Path(local_path_hint)
+            try:
+                if candidate.is_file():
+                    start_dir = candidate.parent
+            except OSError:
+                pass
+
+        def _on_file_chosen(path: Path | None) -> None:
+            if path is None:
+                # Usuario canceló el picker.
+                return
+            self.app.run_worker(
+                self._upload_and_open_summary(
+                    entry,
+                    voice_preset_id=voice_preset_id,
+                    audio_language=audio_language,
+                    pre_settings=pre_settings,
+                    local_path=path,
+                ),
+                exclusive=False,
+            )
+
+        self.app.push_screen(
+            ImageFilePickerScreen(start_path=start_dir),
+            _on_file_chosen,
+        )
+
+    async def _upload_and_open_summary(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+        local_path: Path,
+    ) -> None:
+        self._set_status(f"Subiendo imagen base '{local_path.name}' a Kie…")
+        try:
+            base_ref = await self._controller.upload_local_base(local_path)
+        except (ImageValidationError, WorkflowValidationError, KieError) as exc:
+            self._set_status(f"{ERROR} no pude subir la imagen base: {exc}", error=True)
+            return
+        except Exception as exc:
+            self._set_status(f"{ERROR} error inesperado subiendo: {exc}", error=True)
+            return
+        # Reflejamos el path local elegido en los pre_settings para que el
+        # summary lo muestre. La ref de Kie viaja por `base_ref`.
+        pre_settings.model_creation.local_path = str(local_path)
+        self._set_status(f"{OK} imagen subida — revisá el resumen y confirmá")
+        self._open_summary(
+            entry,
+            voice_preset_id=voice_preset_id,
+            audio_language=audio_language,
+            pre_settings=pre_settings,
+            base_ref=base_ref,
+        )
+
+    def _open_summary(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+        base_ref: ImageAssetRef | None,
+    ) -> None:
+        """Resuelve el producto (si aplica) y luego abre el summary.
+
+        Punto de convergencia de los 3 caminos de resolución de base
+        (prompt / local / catalog). Si el workflow promociona un producto
+        y todavía no fue resuelto, abre un file picker para elegirlo desde
+        `inputs/`, lo sube a Kie y lo guarda en `pre_settings.product_image`
+        antes de continuar al summary.
+        """
+        needs_product = pre_settings.promote_product and not _product_already_resolved(pre_settings)
+        if needs_product:
+            self._open_product_picker(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+                base_ref=base_ref,
+            )
+            return
+        self._open_summary_screen(
+            entry,
+            voice_preset_id=voice_preset_id,
+            audio_language=audio_language,
+            pre_settings=pre_settings,
+            base_ref=base_ref,
+        )
+
+    def _open_product_picker(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+        base_ref: ImageAssetRef | None,
+    ) -> None:
+        """Abre el file picker para elegir la imagen del producto promocional."""
+
+        def _on_product_chosen(path: Path | None) -> None:
+            if path is None:
+                # Usuario canceló el picker del producto — abortamos el flujo
+                # (no encolamos un workflow con promote_product sin producto).
+                self._set_status(
+                    f"{ERROR} promote_product=true requiere elegir un producto", error=True
+                )
+                return
+            self.app.run_worker(
+                self._upload_product_and_open_summary(
+                    entry,
+                    voice_preset_id=voice_preset_id,
+                    audio_language=audio_language,
+                    pre_settings=pre_settings,
+                    base_ref=base_ref,
+                    product_path=path,
+                ),
+                exclusive=False,
+            )
+
+        self.app.push_screen(
+            ImageFilePickerScreen(start_path=self._default_input_dir),
+            _on_product_chosen,
+        )
+
+    async def _upload_product_and_open_summary(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+        base_ref: ImageAssetRef | None,
+        product_path: Path,
+    ) -> None:
+        self._set_status(f"Subiendo producto '{product_path.name}' a Kie…")
+        try:
+            product_ref = await self._controller.upload_local_product(product_path)
+        except (ImageValidationError, WorkflowValidationError, KieError) as exc:
+            self._set_status(f"{ERROR} no pude subir el producto: {exc}", error=True)
+            return
+        except Exception as exc:
+            self._set_status(f"{ERROR} error inesperado subiendo el producto: {exc}", error=True)
+            return
+        pre_settings.product_image = ProductImage(
+            local_path=str(product_path), resolved_image_ref=product_ref
+        )
+        self._set_status(f"{OK} producto subido — revisá el resumen y confirmá")
+        self._open_summary_screen(
+            entry,
+            voice_preset_id=voice_preset_id,
+            audio_language=audio_language,
+            pre_settings=pre_settings,
+            base_ref=base_ref,
+        )
+
+    def _open_summary_screen(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+        base_ref: ImageAssetRef | None,
+    ) -> None:
+        # Capturamos el local_path AHORA (puede mutar en pre_settings si el
+        # usuario regresa al picker; queremos el snapshot del que aprobó).
+        local_path = pre_settings.model_creation.local_path
+        # El override de duración i2v ya vive en pre_settings (mutado por
+        # `_merge_pre_settings`). Lo capturamos para pasarlo al controller
+        # como kwarg explícito en vez de depender de que algún consumer
+        # del controller lea el pre_settings (más explícito y testeable).
+        i2v_duration_override = pre_settings.i2v_duration_seconds
+        # Idem para scene_approval_mode (si el usuario lo cambió en el modal,
+        # el override vive en pre_settings; lo pasamos explícito al controller).
+        scene_approval_mode = pre_settings.scene_approval_mode
+        # Producto resuelto (si el workflow lo promociona). Snapshot para
+        # pasarlo explícito al controller en el enqueue.
+        product = pre_settings.product_image
+        product_ref = product.resolved_image_ref if product else None
+        product_local_path = product.local_path if product else None
+
+        def _on_summary_dismissed(approved: bool | None) -> None:
+            if not approved:
+                # Usuario canceló o cerró sin confirmar.
+                return
+            self.app.run_worker(
+                self._enqueue_after_summary(
+                    entry,
+                    voice_preset_id=voice_preset_id,
+                    audio_language=audio_language,
+                    base_ref=base_ref,
+                    local_path=local_path,
+                    i2v_duration_override=i2v_duration_override,
+                    scene_approval_mode=scene_approval_mode,
+                    product_ref=product_ref,
+                    product_local_path=product_local_path,
+                ),
+                exclusive=False,
+            )
+
+        self.app.push_screen(
+            WorkflowSummaryScreen(
+                entry=entry,
+                pre_settings=pre_settings,
+                check_credits=self._check_credits,
+                default_i2v_duration_seconds=self._default_i2v_duration_seconds,
+            ),
+            _on_summary_dismissed,
+        )
+
+    async def _enqueue_after_summary(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        base_ref: ImageAssetRef | None,
+        local_path: str | None,
+        i2v_duration_override: int | None,
+        scene_approval_mode: SceneApprovalMode,
+        product_ref: ImageAssetRef | None,
+        product_local_path: str | None,
+    ) -> None:
+        try:
+            workflow = await self._controller.enqueue_entry(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                resolved_base_ref=base_ref,
+                local_path=local_path,
+                i2v_duration_override=i2v_duration_override,
+                scene_approval_mode=scene_approval_mode,
+                product_ref=product_ref,
+                product_local_path=product_local_path,
+            )
+        except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
+            self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
+            return
+        self._set_status(f"{OK} workflow '{workflow.name}' encolado (id={workflow.id[:14]}…)")
+        await self._refresh_db_table()
 
     async def _handle_detail(self) -> None:
         workflow = await self._selected_db_workflow()
@@ -252,6 +618,42 @@ class AutomationScreen(Screen[None]):
         else:
             self._set_status(f"{ERROR} workflow '{workflow.name}' no es cancelable", error=True)
         await self._refresh_db_table()
+
+    async def _handle_approve(self) -> None:
+        """Abre el modal de aprobación si el workflow tiene un step esperando."""
+        workflow = await self._selected_db_workflow()
+        if workflow is None:
+            return
+        if not workflow.is_awaiting_approval():
+            self._set_status(
+                f"{ERROR} workflow '{workflow.name}' no está esperando aprobación "
+                f"(status: {workflow.status.value})",
+                error=True,
+            )
+            return
+        step = workflow.pending_approval_step()
+        if step is None:
+            self._set_status(
+                f"{ERROR} workflow '{workflow.name}' marcado AWAITING_APPROVAL "
+                "pero ningún step en ese estado (inconsistencia; reintentá refresh)",
+                error=True,
+            )
+            return
+
+        def _on_dismissed(result: bool | None) -> None:
+            if result:
+                # Hubo acción → refrescar tabla para ver el nuevo estado.
+                self.app.run_worker(self._refresh_db_table(), exclusive=False)
+
+        self.app.push_screen(
+            SceneImageApprovalScreen(
+                controller=self._controller,
+                workflow=workflow,
+                step=step,
+                open_local_path=self._open_local_path,
+            ),
+            _on_dismissed,
+        )
 
     # --- table refresh ----------------------------------------------------
 
@@ -373,14 +775,27 @@ _BUTTON_HANDLERS: dict[str, Callable[[AutomationScreen], Awaitable[None]]] = {
     "automation-detail": AutomationScreen._handle_detail,
     "automation-retry": AutomationScreen._handle_retry,
     "automation-cancel": AutomationScreen._handle_cancel,
+    "automation-approve": AutomationScreen._handle_approve,
     "automation-refresh": AutomationScreen._handle_refresh,
 }
+
+
+def _product_already_resolved(pre_settings: WorkflowPreSettings) -> bool:
+    """`True` si el producto ya fue subido a Kie (tiene ref resuelta).
+
+    Evita re-abrir el file picker del producto si el flujo ya lo resolvió
+    (ej. el usuario volvió atrás en la cadena de modales).
+    """
+    product = pre_settings.product_image
+    return product is not None and product.resolved_image_ref is not None
 
 
 def _merge_pre_settings(
     entry: WorkflowEntry,
     voice_preset_id: str | None,
     audio_language: str | None,
+    i2v_duration_override: int | None,
+    approval_mode: SceneApprovalMode | None,
 ) -> WorkflowPreSettings:
     """Parsea `pre_settings` del JSON y aplica overrides del modal Configurar.
 
@@ -394,4 +809,8 @@ def _merge_pre_settings(
         pre.voice_preset_id = voice_preset_id
     if audio_language is not None:
         pre.audio_language = audio_language
+    if i2v_duration_override is not None:
+        pre.i2v_duration_seconds = i2v_duration_override
+    if approval_mode is not None:
+        pre.scene_approval_mode = approval_mode
     return pre

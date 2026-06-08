@@ -26,27 +26,29 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Static
 
-from ...domain.errors import KieError, WorkflowStepError, WorkflowValidationError
 from ...domain.models import (
     ModelCreationMethod,
+    SceneApprovalMode,
     StepType,
     WorkflowEntry,
     WorkflowPreSettings,
 )
-from .._icons import ERROR, OK
+from ...domain.policies import parse_optional_int_field, resolve_effective_i2v_duration
 
 _PROMPT_PREVIEW_MAX_CHARS: Final[int] = 80
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 
-# Callback que el caller (AutomationScreen) ejecuta cuando el usuario
-# confirma el resumen. Devuelve True si el enqueue fue OK, False en caso
-# contrario. La pantalla se cierra de cualquier modo.
-ConfirmFinalCallback = Callable[[], Awaitable[bool]]
 CreditsLoader = Callable[[], Awaitable[float | None]]
 
 
-class WorkflowSummaryScreen(ModalScreen[None]):
-    """Resumen final antes de encolar — el usuario confirma o cancela."""
+class WorkflowSummaryScreen(ModalScreen[bool | None]):
+    """Resumen final antes de encolar — el usuario confirma o cancela.
+
+    Dismiss con `True` cuando el usuario aprueba (el caller hace el
+    enqueue real). Dismiss con `None` cuando cancela. NO ejecuta el
+    enqueue acá: es responsabilidad del caller (AutomationScreen) para
+    mantener el patrón "modal devuelve resultado, caller actúa".
+    """
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "dismiss", "Cancelar"),
@@ -57,14 +59,18 @@ class WorkflowSummaryScreen(ModalScreen[None]):
         *,
         entry: WorkflowEntry,
         pre_settings: WorkflowPreSettings,
-        on_confirm: ConfirmFinalCallback,
         check_credits: CreditsLoader,
+        default_i2v_duration_seconds: int,
     ) -> None:
         super().__init__()
         self._entry = entry
         self._pre_settings = pre_settings
-        self._on_confirm = on_confirm
         self._check_credits = check_credits
+        # `default_i2v_duration_seconds` viene inyectado por el caller
+        # (AutomationScreen lo lee de `Settings`). Sin esto, hardcodear
+        # un fallback acá introduce drift con `Settings` cuando el usuario
+        # cambia `KIE_DEFAULT_I2V_DURATION_SECONDS` en `.env`.
+        self._default_i2v_duration_seconds = default_i2v_duration_seconds
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -113,35 +119,13 @@ class WorkflowSummaryScreen(ModalScreen[None]):
         else:
             widget.update(f"[b]Saldo actual de Kie:[/b] [accent]${balance:.2f} USD[/accent]")
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "summary-cancel":
-            self.dismiss()
+            self.dismiss(None)
             return
         if button_id == "summary-confirm":
-            await self._handle_confirm()
-
-    async def _handle_confirm(self) -> None:
-        try:
-            ok = await self._on_confirm()
-        except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
-            self._set_status(f"{ERROR} {exc}", error=True)
-            return
-        if ok:
-            self._set_status(f"{OK} workflow encolado")
-            self.dismiss()
-
-    def _set_status(self, message: str, *, error: bool = False) -> None:
-        try:
-            bar = self.query_one("#workflow-summary-status-bar", Static)
-        except Exception:
-            return
-        bar.update(f"[red]{message}[/red]" if error else message)
-        self.notify(
-            message,
-            severity="error" if error else "information",
-            timeout=_NOTIFICATION_TIMEOUT,
-        )
+            self.dismiss(True)
 
     # --- block builders (no state) -------------------------------------
 
@@ -157,6 +141,26 @@ class WorkflowSummaryScreen(ModalScreen[None]):
             or "[dim](sin language_code, modelo multilingual default)[/dim]"
         )
         lines.append(f"  · [b]Audio language:[/b] {audio_lang}")
+        approval_mode = self._pre_settings.scene_approval_mode
+        if approval_mode == SceneApprovalMode.MANUAL:
+            lines.append(
+                "  · [b]Aprobación scene_image:[/b] "
+                "[yellow]MANUAL[/yellow] — el workflow pausará en cada b-roll que "
+                "genere scene nueva ([b]change_scene=true[/b] o "
+                "[b]include_product=true[/b]) esperando que apruebes la imagen"
+            )
+        else:
+            lines.append("  · [b]Aprobación scene_image:[/b] [dim]auto (sin pausa)[/dim]")
+        duration_override = self._pre_settings.i2v_duration_seconds
+        if duration_override is not None:
+            lines.append(
+                f"  · [b]Duración b-roll (FORZADA):[/b] {duration_override}s en TODOS los b-roll"
+            )
+        else:
+            lines.append(
+                f"  · [b]Duración b-roll:[/b] "
+                f"[dim](la del JSON por step, fallback default {self._default_i2v_duration_seconds}s)[/dim]"
+            )
         lines.append(f"  · [b]Modelo base:[/b] method=[b]{creation.method.value}[/b]")
         if creation.method == ModelCreationMethod.PROMPT and creation.prompt:
             preview = creation.prompt[:_PROMPT_PREVIEW_MAX_CHARS].replace("\n", " ")
@@ -167,6 +171,12 @@ class WorkflowSummaryScreen(ModalScreen[None]):
         elif creation.method == ModelCreationMethod.CATALOG:
             kind = creation.asset_kind.value if creation.asset_kind else "?"
             lines.append(f"    [dim]asset: {kind}/{creation.asset_id or '?'}[/dim]")
+        if self._pre_settings.promote_product:
+            product = self._pre_settings.product_image
+            if product and product.local_path:
+                lines.append(f"  · [b]Producto:[/b] {product.local_path}")
+            else:
+                lines.append("  · [b]Producto:[/b] [dim](se elegirá al confirmar)[/dim]")
         return "\n".join(lines)
 
     def _render_steps_block(self) -> str:
@@ -174,25 +184,54 @@ class WorkflowSummaryScreen(ModalScreen[None]):
         if not isinstance(steps_payload, list):
             return ""
         lines = [f"[b]Steps a ejecutar ({len(steps_payload)})[/b]"]
+        override = self._pre_settings.i2v_duration_seconds
         for raw_step in steps_payload:
             if not isinstance(raw_step, dict):
                 continue
             step_n = raw_step.get("step", "?")
             name = str(raw_step.get("scene_name", "?"))
             type_value = str(raw_step.get("type", "?"))
-            change_bg = bool(raw_step.get("change_background", True))
+            # Aceptamos ambos nombres (nuevo + legacy) por compat con JSONs viejos.
+            change_scene_flag = bool(
+                raw_step.get("change_scene", raw_step.get("change_background", True))
+            )
             has_text = bool(str(raw_step.get("text", "")).strip())
-            tag = _describe_step_operations(type_value, change_bg, has_text)
-            lines.append(f"  [b]{step_n}.[/b] [cyan]{type_value:6}[/cyan] {name[:48]}  {tag}")
+            include_product_flag = bool(raw_step.get("include_product", False))
+            tag = _describe_step_operations(
+                type_value, change_scene_flag, has_text, include_product_flag
+            )
+            # Para b-roll mostramos la duración efectiva (override > step > default)
+            duration_tag = ""
+            if type_value == StepType.B_ROLL.value:
+                # Mismo parser que `infra/workflow_loader._parse_steps` para
+                # que la preview NO diverja del runtime ante valores como
+                # `"10"` (string numérica) en el JSON.
+                step_value = parse_optional_int_field(raw_step.get("duration_seconds"))
+                effective = resolve_effective_i2v_duration(
+                    override, step_value, self._default_i2v_duration_seconds
+                )
+                source = _describe_duration_source(override, step_value)
+                duration_tag = f"  [dim]{effective}s {source}[/dim]"
+            lines.append(
+                f"  [b]{step_n}.[/b] [cyan]{type_value:6}[/cyan] {name[:48]}  {tag}{duration_tag}"
+            )
         return "\n".join(lines)
 
     def _render_operations_block(self) -> str:
         counts = _count_operations(self._entry, self._pre_settings)
         lines = ["[b]Operaciones Kie a consumir[/b]"]
         if counts["nano_banana"]:
-            lines.append(
-                f"  · [green]Nano Banana 2:[/green] {counts['nano_banana']} (1 base + {counts['nano_banana'] - 1} scene)"
+            base = (
+                1 if self._pre_settings.model_creation.method == ModelCreationMethod.PROMPT else 0
             )
+            scene = counts["nano_banana"] - base
+            detail_parts: list[str] = []
+            if base:
+                detail_parts.append(f"{base} base")
+            if scene:
+                detail_parts.append(f"{scene} scene/producto")
+            detail = " + ".join(detail_parts)
+            lines.append(f"  · [green]Nano Banana 2:[/green] {counts['nano_banana']} ({detail})")
         if counts["tts"]:
             lines.append(f"  · [green]TTS ElevenLabs:[/green] {counts['tts']}")
         if counts["avatar"]:
@@ -218,11 +257,15 @@ class WorkflowSummaryScreen(ModalScreen[None]):
 # --- module-level helpers ---------------------------------------------
 
 
-def _describe_step_operations(type_value: str, change_bg: bool, has_text: bool) -> str:
+def _describe_step_operations(
+    type_value: str, change_scene: bool, has_text: bool, include_product: bool
+) -> str:
     """Devuelve un tag corto con las operaciones del step."""
     parts: list[str] = []
-    if change_bg:
+    if change_scene or include_product:
         parts.append("scene-img")
+    if include_product:
+        parts.append("producto")
     if has_text:
         parts.append("tts")
     if type_value == StepType.A_ROLL.value:
@@ -247,9 +290,14 @@ def _count_operations(entry: WorkflowEntry, pre_settings: WorkflowPreSettings) -
         if not isinstance(raw_step, dict):
             continue
         type_value = str(raw_step.get("type", "a-roll"))
-        change_bg = bool(raw_step.get("change_background", True))
+        change_scene_flag = bool(
+            raw_step.get("change_scene", raw_step.get("change_background", True))
+        )
         has_text = bool(str(raw_step.get("text", "")).strip())
-        if change_bg:
+        include_product_flag = bool(raw_step.get("include_product", False))
+        # Nano Banana se invoca si el step cambia escena O incluye el
+        # producto (ambos requieren componer una scene_image nueva).
+        if change_scene_flag or include_product_flag:
             counts["nano_banana"] += 1
         if has_text or type_value == StepType.A_ROLL.value:
             counts["tts"] += 1
@@ -258,6 +306,15 @@ def _count_operations(entry: WorkflowEntry, pre_settings: WorkflowPreSettings) -
         else:
             counts["i2v"] += 1
     return counts
+
+
+def _describe_duration_source(override: int | None, step_value: int | None) -> str:
+    """Etiqueta corta que dice de dónde viene la duración mostrada."""
+    if override is not None:
+        return "(forzado)"
+    if step_value is not None:
+        return "(del JSON)"
+    return "(default)"
 
 
 __all__ = ["WorkflowSummaryScreen"]

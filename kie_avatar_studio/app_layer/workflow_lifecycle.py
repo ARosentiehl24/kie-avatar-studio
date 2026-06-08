@@ -51,10 +51,27 @@ class WorkflowLifecycle:
         await self._repository.update_workflow_header(job)
 
     async def reset_for_retry(self, job: WorkflowJob) -> None:
-        """Resetea solo el header. NO toca los steps (el runner decide qué
-        re-ejecutar según el estado individual de cada step).
+        """Resetea el header y todos los steps FAILED / CANCELLED a QUEUED.
+
+        Reseteamos los steps individuales fallidos o cancelados para que no sean
+        considerados 'terminales' por el runner y se vuelvan a ejecutar
+        correctamente en la nueva pasada.
         """
+        from ..domain.models import WorkflowStepStatus
+
         job.status = WorkflowStatus.QUEUED
         job.error = None
         job.manifest_write_failed = False
         await self._repository.update_workflow_header(job)
+
+        for step in job.steps:
+            if step.status in (WorkflowStepStatus.FAILED, WorkflowStepStatus.CANCELLED):
+                step.status = WorkflowStepStatus.QUEUED
+                step.error = None
+                step.completed_at = None
+                step.started_at = None
+                step.progress.clear()
+                # Forzar recreación de tareas fallidas (audio, video)
+                step.audio_job_id = None
+                step.video_task_id = None
+                await self._repository.upsert_step(job.id, step)

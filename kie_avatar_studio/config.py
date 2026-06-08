@@ -33,6 +33,8 @@ from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .domain.policies import DEFAULT_I2V_DURATION_SECONDS
+
 _APP_DIR_NAME = "KieAvatarStudio"
 
 
@@ -89,7 +91,7 @@ class Settings(BaseSettings):
 
     default_voice: str = "EkK5I93UQWFDigLMpZcX"
     default_prompt: str = "Mirada a cámara, expresión natural, gestos suaves, tono confiado."
-    default_i2v_duration_seconds: int = 5
+    default_i2v_duration_seconds: int = DEFAULT_I2V_DURATION_SECONDS
 
     notifications_enabled: bool = True
     update_check_enabled: bool = True

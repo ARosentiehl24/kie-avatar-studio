@@ -32,6 +32,9 @@ def format_workflow_status_cell(status: WorkflowStatus) -> str:
         return f"[red]{ERROR} {status.value}[/red]"
     if status == WorkflowStatus.CANCELLED:
         return f"[dim]{status.value}[/dim]"
+    if status == WorkflowStatus.AWAITING_APPROVAL:
+        # Resaltado especial: requiere acción humana.
+        return f"[yellow]⏳ {status.value}[/yellow]"
     if status in {WorkflowStatus.RUNNING, WorkflowStatus.PREPARING_BASE}:
         return f"[cyan]{status.value}[/cyan]"
     return f"[yellow]{status.value}[/yellow]"

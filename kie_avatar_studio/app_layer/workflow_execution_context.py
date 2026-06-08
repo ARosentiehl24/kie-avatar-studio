@@ -17,15 +17,16 @@ from typing import Final
 
 from ..domain.models import (
     ImageAssetRef,
+    SceneApprovalMode,
     StepType,
     VoiceSettings,
     WorkflowProgressKey,
     WorkflowProgressStatus,
     WorkflowStep,
 )
-from ..domain.policies import expected_progress_keys_for_step
+from ..domain.policies import expected_progress_keys_for_step, resolve_effective_i2v_duration
 
-DEFAULT_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-v2-5"
+DEFAULT_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 
 
 class WorkflowExecutionContext:
@@ -44,31 +45,72 @@ class WorkflowExecutionContext:
         voice_settings: VoiceSettings | None,
         base_image_ref: ImageAssetRef,
         output_dir: Path,
+        i2v_duration_seconds_override: int | None = None,
+        scene_approval_mode: SceneApprovalMode = SceneApprovalMode.AUTO,
+        product_image_ref: ImageAssetRef | None = None,
+        image_aspect_ratio: str | None = None,
     ) -> None:
         self.audio_language = audio_language
         self.voice_id = voice_id
         self.voice_settings = voice_settings
         self.base_image_ref = base_image_ref
         self.output_dir = output_dir
+        # Override del workflow para la duración de los b-roll. Resuelto
+        # por el WorkflowRunner antes de construir el context (lee de
+        # `WorkflowPreSettings.i2v_duration_seconds`). Si es `None`,
+        # cada step usa su propio `step.duration_seconds` o el default
+        # global de `Settings.default_i2v_duration_seconds`.
+        self.i2v_duration_seconds_override = i2v_duration_seconds_override
+        # Modo de aprobación de scene_image. Cuando es MANUAL, los b-roll
+        # que generan scene nueva (`change_scene=true` o
+        # `include_product=true`) pausan el workflow después de generar la
+        # scene_image y esperan revisión humana via la UI.
+        self.scene_approval_mode = scene_approval_mode
+        # Producto global a promocionar (resuelto a una ref Kie). `None`
+        # si el workflow no promociona producto. Los steps con
+        # `include_product=True` lo pasan como 2da ref a Nano Banana.
+        self.product_image_ref = product_image_ref
+        # Aspect ratio global para las imágenes generadas por Nano Banana 2
+        # (tanto la base como las escenas de cada step).
+        self.image_aspect_ratio = image_aspect_ratio
+
+    def requires_scene_approval(self, step: WorkflowStep) -> bool:
+        """`True` si este step necesita pausa para aprobación humana de scene_image.
+
+        Condiciones:
+        - El workflow corre en `SceneApprovalMode.MANUAL`.
+        - El step es b-roll que genera una scene nueva con Nano Banana, es
+          decir `change_scene=true` O `include_product=true` (ver
+          `needs_scene_generation`). Los b-roll que reusan la base tal cual
+          no tienen nada que aprobar; los a-roll nunca se pausan (decisión
+          de producto: solo b-roll pasa por aprobación humana).
+        - El step NO fue aprobado previamente (`scene_image_approved_at is None`).
+        """
+        if self.scene_approval_mode != SceneApprovalMode.MANUAL:
+            return False
+        if step.type != StepType.B_ROLL or not needs_scene_generation(step):
+            return False
+        return step.scene_image_approved_at is None
+
+    def resolve_i2v_duration(self, step: WorkflowStep, default: int) -> int:
+        """Resuelve la duración del b-roll para un step dado.
+
+        Delega en `domain.policies.resolve_effective_i2v_duration` para
+        evitar duplicar la regla de precedencia entre runtime y UI
+        (preview del summary). Ver ese docstring para el orden completo.
+        """
+        return resolve_effective_i2v_duration(
+            self.i2v_duration_seconds_override, step.duration_seconds, default
+        )
 
     @property
     def tts_model(self) -> str | None:
         """Devuelve el modelo TTS apropiado para esta ejecución.
 
-        Fuerza el modelo turbo (que acepta `language_code`) si:
-        - El JSON trae `audio_language`, O
-        - El preset trae `voice_settings.language_code`.
-
-        Esto es importante: si el preset tiene `language_code` pero
-        usamos el modelo multilingual default, Kie responde 422
-        ("language_code no soportado en este modelo"). Si ninguno
-        tiene language_code, dejamos `None` para que `KieClient` use
-        el multilingual default.
+        Siempre devolvemos `None` (que se resuelve al `DEFAULT_TTS_MODEL`
+        multilingual-v2 en el KieClient) para garantizar que NUNCA se use
+        el modelo turbo, que es propenso a errores 500 del backend de Kie.
         """
-        if self.audio_language:
-            return DEFAULT_TURBO_MODEL
-        if self.voice_settings is not None and self.voice_settings.language_code:
-            return DEFAULT_TURBO_MODEL
         return None
 
     def step_dir(self, step: WorkflowStep) -> Path:
@@ -119,12 +161,46 @@ def mark_remaining_progress_failed(step: WorkflowStep) -> None:
             step.progress[key] = WorkflowProgressStatus.FAILED
 
 
+def needs_scene_generation(step: WorkflowStep) -> bool:
+    """`True` si el step requiere generar una scene_image nueva con Nano Banana.
+
+    Se dispara la generación cuando el step cambia la escena
+    (`change_scene=True`) O cuando incluye el producto promocional
+    (`include_product=True`, que hay que componer sobre la base). Si
+    ninguno aplica, el step reusa la imagen base tal cual (sin gastar
+    Nano Banana).
+    """
+    return step.change_scene or step.include_product
+
+
+# Instrucción (en inglés, idioma de los prompts de Nano Banana) para
+# preservar el fondo de la base cuando se compone un producto sin cambiar
+# la escena (`include_product=True` + `change_scene=False`).
+_KEEP_BACKGROUND_HINT: Final[str] = (
+    "Keep the exact same background, environment and scene from the "
+    "reference person image; do not change the setting, only add the product"
+)
+
+
 def build_scene_prompt(step: WorkflowStep) -> str:
-    """Concatena background_description + prompt para Nano Banana refit."""
+    """Construye el prompt de Nano Banana para la scene_image del step.
+
+    Composición según los flags del step:
+    - `change_scene=True`: incluye `scene_description` (cambia el entorno).
+    - `include_product=True` SIN `change_scene`: añade una instrucción para
+      preservar el fondo de la base (solo se compone el producto encima).
+    - Siempre incluye el `prompt` del step (la acción/escena a animar).
+    - `include_product=True`: añade `product_prompt` al final (cómo/dónde
+      colocar el producto).
+    """
     parts: list[str] = []
-    if step.background_description.strip():
-        parts.append(step.background_description.strip())
+    if step.change_scene and step.scene_description.strip():
+        parts.append(step.scene_description.strip())
+    elif step.include_product and not step.change_scene:
+        parts.append(_KEEP_BACKGROUND_HINT)
     parts.append(step.prompt.strip())
+    if step.include_product and step.product_prompt.strip():
+        parts.append(step.product_prompt.strip())
     return ". ".join(parts)
 
 
@@ -134,13 +210,31 @@ def ref_dict(ref: ImageAssetRef) -> dict[str, object]:
 
 
 def is_b_roll_with_audio(step: WorkflowStep) -> bool:
-    """`True` si el step es b-roll con texto (descarga audio aparte)."""
-    return step.type == StepType.B_ROLL and bool(step.text)
+    """`True` si el step es b-roll que necesita TTS aparte (audio.mp3 + video silencioso).
+
+    Requiere `voiceover=True` (default) Y `text` no vacío. Si `voiceover=False`,
+    el b-roll va por el path de sound nativo de Kling (sin TTS, sin importar
+    el text).
+    """
+    return step.type == StepType.B_ROLL and step.voiceover and bool(step.text)
+
+
+def is_b_roll_native_sound(step: WorkflowStep) -> bool:
+    """`True` si el step es b-roll que pide sound effects nativos de Kling 3.0.
+
+    `voiceover=False` indica que NO se llama a TTS; Kling genera el audio
+    embebido en el video basado en el prompt (`sound=true` en el body).
+    """
+    return step.type == StepType.B_ROLL and step.voiceover is False
 
 
 def is_b_roll_silent(step: WorkflowStep) -> bool:
-    """`True` si el step es b-roll sin texto (solo video silencioso)."""
-    return step.type == StepType.B_ROLL and not step.text
+    """`True` si el step es b-roll silencioso (sin texto y con voiceover=True).
+
+    `voiceover=True` (default) + `text=""` → video silencioso, sin TTS ni
+    sound efx nativos. El usuario tendrá solo `video.mp4` sin audio.
+    """
+    return step.type == StepType.B_ROLL and step.voiceover and not step.text
 
 
 __all__ = [
@@ -148,9 +242,11 @@ __all__ = [
     "WorkflowExecutionContext",
     "build_scene_prompt",
     "initialize_progress",
+    "is_b_roll_native_sound",
     "is_b_roll_silent",
     "is_b_roll_with_audio",
     "mark_remaining_progress_failed",
+    "needs_scene_generation",
     "ref_dict",
     "set_progress",
 ]

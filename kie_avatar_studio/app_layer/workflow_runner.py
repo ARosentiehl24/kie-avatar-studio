@@ -26,10 +26,13 @@ from loguru import logger
 from ..config import Settings
 from ..domain.errors import (
     KieError,
+    StepAwaitingApprovalSignal,
     WorkflowStepError,
     WorkflowValidationError,
 )
 from ..domain.models import (
+    ImageAssetRef,
+    SceneApprovalMode,
     WorkflowJob,
     WorkflowStatus,
     WorkflowStep,
@@ -105,9 +108,20 @@ class WorkflowRunner:
                 voice_settings=voice_settings,
                 base_image_ref=base_ref,
                 output_dir=output_dir,
+                i2v_duration_seconds_override=job.pre_settings.i2v_duration_seconds,
+                scene_approval_mode=job.pre_settings.scene_approval_mode,
+                product_image_ref=self._resolve_product_ref(job),
+                image_aspect_ratio=job.pre_settings.image_aspect_ratio,
             )
-            await self._execute_steps(job, context)
-            await self._finalize_workflow(job)
+            paused = await self._execute_steps(job, context)
+            if paused:
+                # Al menos un step quedó AWAITING_APPROVAL. Marcamos el
+                # workflow como AWAITING_APPROVAL y liberamos el slot del
+                # semáforo. El controller `approve_scene` lo re-encolará
+                # cuando el usuario revise.
+                await self._mark_awaiting_approval(job)
+            else:
+                await self._finalize_workflow(job)
         except asyncio.CancelledError:
             await self._mark_cancelled(job)
             raise
@@ -118,24 +132,70 @@ class WorkflowRunner:
             await self._fail_workflow(job, exc)
         return job
 
+    @staticmethod
+    def _resolve_product_ref(job: WorkflowJob) -> ImageAssetRef | None:
+        """Devuelve la ref Kie del producto si el workflow lo promociona.
+
+        El producto se pre-resuelve en la UI antes de encolar (file picker
+        + upload), igual que `method=local` de la imagen base. Acá solo lo
+        leemos de `pre_settings.product_image.resolved_image_ref`.
+
+        Deuda (v1): si la ref expiró (24h en cola), NO se re-sube en runtime
+        — el `local_path` queda en `pre_settings` para una mejora futura.
+        Mismo trade-off que la imagen base con `method=local` hoy.
+        """
+        pre = job.pre_settings
+        if not pre.promote_product or pre.product_image is None:
+            return None
+        return pre.product_image.resolved_image_ref
+
     # --- step orchestration -----------------------------------------------
 
-    async def _execute_steps(self, job: WorkflowJob, context: WorkflowExecutionContext) -> None:
-        """Lanza todos los steps en paralelo. Recolecta excepciones por step.
+    async def _execute_steps(self, job: WorkflowJob, context: WorkflowExecutionContext) -> bool:
+        """Lanza los steps. Devuelve True si al menos uno quedó AWAITING_APPROVAL.
 
-        El semáforo global vive en el `WorkflowStepRunner` (vía sus
-        helpers + executors). El workflow_runner no consume slots del
-        global — vive en su propio `_workflows_limiter` aplicado por el
-        `QueueManager` superior.
+        Filtramos steps ya completados (is_terminal() == True).
+        Para el paralelismo:
+        - Si estamos en `SceneApprovalMode.MANUAL`, ejecutamos los steps en
+          SERIE (secuencialmente) y detenemos inmediatamente en el primer step
+          que requiera aprobación. Esto evita que se ejecuten steps siguientes
+          en paralelo y se gasten créditos/tiempo innecesariamente antes de que
+          el usuario apruebe, resolviendo el bug de quedar atascado en 'running'
+          mientras se espera por steps paralelos lejanos (ej. step 12).
+        - Si estamos en `SceneApprovalMode.AUTO`, los ejecutamos todos en
+          PARALELO (concurrente) para máximo rendimiento.
         """
+        pending_steps = [s for s in job.steps if not s.is_terminal()]
+        if not pending_steps:
+            return False
+
+        if context.scene_approval_mode == SceneApprovalMode.MANUAL:
+            # Ejecución en serie (secuencial) para MANUAL
+            paused = False
+            for s in pending_steps:
+                try:
+                    await self._step_runner.run(s, context, self._build_step_transition(job))
+                except StepAwaitingApprovalSignal:
+                    paused = True
+                    break  # Detener ejecución inmediatamente: no correr steps siguientes
+            return paused
+
+        # Ejecución en paralelo (concurrente) para AUTO (comportamiento clásico)
+        paused = False
 
         async def _run_one(step: WorkflowStep) -> None:
-            await self._step_runner.run(step, context, self._build_step_transition(job))
+            nonlocal paused
+            try:
+                await self._step_runner.run(step, context, self._build_step_transition(job))
+            except StepAwaitingApprovalSignal:
+                paused = True
 
         tasks = [
-            asyncio.create_task(_run_one(s), name=f"wf-{job.id}-step-{s.step}") for s in job.steps
+            asyncio.create_task(_run_one(s), name=f"wf-{job.id}-step-{s.step}")
+            for s in pending_steps
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
+        return paused
 
     def _build_step_transition(self, job: WorkflowJob) -> Callable[[WorkflowStep], Awaitable[None]]:
         """Crea el callback que el step runner llama tras cada transición.
@@ -170,6 +230,15 @@ class WorkflowRunner:
 
     async def _mark_cancelled(self, job: WorkflowJob) -> None:
         await self._update_header(job, WorkflowStatus.CANCELLED)
+
+    async def _mark_awaiting_approval(self, job: WorkflowJob) -> None:
+        """Pausa el workflow esperando aprobación humana de scene_image."""
+        await self._update_header(job, WorkflowStatus.AWAITING_APPROVAL)
+        logger.info(
+            "WorkflowJob {} ({}) pausado en AWAITING_APPROVAL (modo manual)",
+            job.id,
+            job.name,
+        )
 
     async def _fail_workflow(self, job: WorkflowJob, exc: BaseException) -> None:
         job.error = str(exc) or exc.__class__.__name__

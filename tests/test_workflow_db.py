@@ -35,8 +35,8 @@ def _make_step(step: int = 1, type_: StepType = StepType.A_ROLL) -> WorkflowStep
         scene_name=f"Escena {step}",
         scene_slug=f"escena_{step}",
         type=type_,
-        change_background=False,
-        background_description="",
+        change_scene=False,
+        scene_description="",
         prompt="prompt",
         text="hola" if type_ == StepType.A_ROLL else "",
     )
@@ -234,3 +234,116 @@ async def test_resolved_image_ref_in_pre_settings_roundtrips(workflow_db: Workfl
     assert ref is not None
     assert ref.id == "img_xyz"
     assert ref.kie_url == "https://tempfile.kie.ai/base.png"
+
+
+async def test_roundtrip_include_product_and_product_prompt(workflow_db: WorkflowDB) -> None:
+    """Los campos de producto por step sobreviven el round-trip a la DB."""
+    step = _make_step(1, StepType.A_ROLL)
+    step.include_product = True
+    step.product_prompt = "Sostiene el frasco a la altura del pecho"
+    workflow = _make_workflow(steps=[step])
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.steps[0].include_product is True
+    assert loaded.steps[0].product_prompt == "Sostiene el frasco a la altura del pecho"
+
+
+async def test_roundtrip_promote_product_and_product_image(workflow_db: WorkflowDB) -> None:
+    """`promote_product` + `product_image` (en pre_settings_json) sobreviven el round-trip."""
+    from datetime import UTC, datetime
+
+    from kie_avatar_studio.domain.models import ImageAssetRef, ProductImage
+
+    workflow = _make_workflow()
+    workflow.pre_settings.promote_product = True
+    workflow.pre_settings.product_image = ProductImage(
+        local_path="inputs/product.png",
+        resolved_image_ref=ImageAssetRef(
+            kind=ImageAssetKind.UPLOADED,
+            id="uploads/product.png",
+            label="product.png",
+            kie_url="https://tempfile.kie.ai/product.png",
+            expires_at=datetime.now(UTC),
+        ),
+    )
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.pre_settings.promote_product is True
+    product = loaded.pre_settings.product_image
+    assert product is not None
+    assert product.local_path == "inputs/product.png"
+    assert product.resolved_image_ref is not None
+    assert product.resolved_image_ref.kie_url == "https://tempfile.kie.ai/product.png"
+
+
+async def test_step_duration_seconds_persisted_roundtrip(workflow_db: WorkflowDB) -> None:
+    """`step.duration_seconds` debe sobrevivir el roundtrip por DB.
+
+    Regresión del hallazgo CR-6.3: el campo se agregó al domain pero el
+    schema/_UPSERT/_step_to_row/_row_to_step debían actualizarse a la
+    par. Sin esto, los b-roll con `duration_seconds=10` del JSON se
+    persistían como `None` → en restore tras crash el runner caía al
+    default y descartaba la decisión del autor del workflow.
+    """
+    workflow = _make_workflow(
+        steps=[
+            _make_step(1, StepType.A_ROLL),
+            _make_step(2, StepType.B_ROLL),
+            _make_step(3, StepType.B_ROLL),
+        ]
+    )
+    # b-roll #2 con override 10, b-roll #3 sin override (None)
+    workflow.steps[1].duration_seconds = 10
+    workflow.steps[2].duration_seconds = None
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.steps[0].duration_seconds is None  # a-roll, sin override
+    assert loaded.steps[1].duration_seconds == 10  # b-roll con override
+    assert loaded.steps[2].duration_seconds is None  # b-roll sin override
+
+
+async def test_step_duration_seconds_updates_via_upsert_step(workflow_db: WorkflowDB) -> None:
+    """Mutar `duration_seconds` y reupsertar el step persiste el cambio."""
+    workflow = _make_workflow(steps=[_make_step(1, StepType.B_ROLL)])
+    workflow.steps[0].duration_seconds = 5
+    await workflow_db.upsert_workflow(workflow)
+    # Cambio en runtime (ej. UI lo reasigna a 10).
+    workflow.steps[0].duration_seconds = 10
+    await workflow_db.upsert_step(workflow.id, workflow.steps[0])
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.steps[0].duration_seconds == 10
+
+
+async def test_pre_settings_i2v_duration_override_persisted(workflow_db: WorkflowDB) -> None:
+    """`pre_settings.i2v_duration_seconds` (override del workflow) debe persistir."""
+    workflow = _make_workflow()
+    workflow.pre_settings.i2v_duration_seconds = 10
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.pre_settings.i2v_duration_seconds == 10
+
+
+async def test_roundtrip_step_image_aspect_ratio(workflow_db: WorkflowDB) -> None:
+    """`step.image_aspect_ratio` debe sobrevivir el roundtrip por DB."""
+    workflow = _make_workflow()
+    workflow.steps[0].image_aspect_ratio = "9:16"
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.steps[0].image_aspect_ratio == "9:16"
+
+
+async def test_roundtrip_step_include_model(workflow_db: WorkflowDB) -> None:
+    """`step.include_model` debe sobrevivir el roundtrip por DB (default es True, probamos False)."""
+    workflow = _make_workflow()
+    workflow.steps[0].include_model = False
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.steps[0].include_model is False
+

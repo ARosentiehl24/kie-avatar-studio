@@ -56,8 +56,8 @@ def _make_workflow(
                 scene_name="B-roll",
                 scene_slug="b_roll",
                 type=StepType.B_ROLL,
-                change_background=True,
-                background_description="kitchen",
+                change_scene=True,
+                scene_description="kitchen",
                 prompt="prompt",
                 text="",
             ),
@@ -165,6 +165,44 @@ async def test_model_base_is_null_when_unresolved(tmp_path: Path) -> None:
     await writer.write(workflow)
     data = json.loads((tmp_path / "wf_001" / "workflow.json").read_text(encoding="utf-8"))
     assert data["model_base"] is None
+
+
+async def test_product_block_when_promoting(tmp_path: Path) -> None:
+    from kie_avatar_studio.domain.models import ProductImage
+
+    workflow = _make_workflow(tmp_path / "wf_001")
+    workflow.pre_settings.promote_product = True
+    workflow.pre_settings.product_image = ProductImage(
+        local_path="inputs/product.png",
+        resolved_image_ref=ImageAssetRef(
+            kind=ImageAssetKind.UPLOADED,
+            id="uploads/product.png",
+            label="product.png",
+            kie_url="https://tempfile.kie.ai/product.png",
+            expires_at=datetime.now(UTC),
+        ),
+    )
+    workflow.steps[1].include_product = True
+    workflow.steps[1].product_prompt = "Jar centered on the table"
+    writer = AtomicWorkflowManifestWriter()
+    await writer.write(workflow)
+    data = json.loads((tmp_path / "wf_001" / "workflow.json").read_text(encoding="utf-8"))
+    assert data["product"] is not None
+    assert data["product"]["kind"] == "uploaded"
+    assert data["product"]["kie_url"] == "https://tempfile.kie.ai/product.png"
+    assert data["product"]["local_path"] == "inputs/product.png"
+    # Los campos del step también se serializan.
+    assert data["steps"][1]["include_product"] is True
+    assert data["steps"][1]["product_prompt"] == "Jar centered on the table"
+
+
+async def test_product_block_is_null_when_not_promoting(tmp_path: Path) -> None:
+    workflow = _make_workflow(tmp_path / "wf_001")
+    writer = AtomicWorkflowManifestWriter()
+    await writer.write(workflow)
+    data = json.loads((tmp_path / "wf_001" / "workflow.json").read_text(encoding="utf-8"))
+    assert data["product"] is None
+    assert data["steps"][0]["include_product"] is False
 
 
 async def test_write_overwrites_previous_manifest(tmp_path: Path) -> None:

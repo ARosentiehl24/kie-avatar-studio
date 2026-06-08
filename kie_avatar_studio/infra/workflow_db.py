@@ -61,10 +61,17 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   scene_name             TEXT NOT NULL,
   scene_slug             TEXT NOT NULL,
   type                   TEXT NOT NULL,
-  change_background      INTEGER NOT NULL DEFAULT 0,
-  background_description TEXT NOT NULL DEFAULT '',
+  change_scene           INTEGER NOT NULL DEFAULT 0,
+  scene_description      TEXT NOT NULL DEFAULT '',
   prompt                 TEXT NOT NULL,
   text                   TEXT NOT NULL DEFAULT '',
+  duration_seconds       INTEGER,
+  voiceover              INTEGER NOT NULL DEFAULT 1,
+  include_product        INTEGER NOT NULL DEFAULT 0,
+  include_model          INTEGER NOT NULL DEFAULT 1,
+  product_prompt         TEXT NOT NULL DEFAULT '',
+  scene_image_approved_at TEXT,
+  image_aspect_ratio     TEXT,
   bg_image_job_id        TEXT,
   audio_job_id           TEXT,
   video_task_id          TEXT,
@@ -113,30 +120,39 @@ WHERE id = :id
 
 _UPSERT_STEP_SQL: Final[str] = """
 INSERT INTO workflow_steps(
-  workflow_id, step, scene_name, scene_slug, type, change_background,
-  background_description, prompt, text, bg_image_job_id, audio_job_id,
-  video_task_id, scene_image_path, audio_path, video_path, status,
+  workflow_id, step, scene_name, scene_slug, type, change_scene,
+  scene_description, prompt, text, duration_seconds, voiceover, bg_image_job_id,
+  audio_job_id, video_task_id, scene_image_path, audio_path, video_path,
+  scene_image_approved_at, include_product, include_model, product_prompt, image_aspect_ratio, status,
   progress_json, error, started_at, completed_at
 ) VALUES (
-  :workflow_id, :step, :scene_name, :scene_slug, :type, :change_background,
-  :background_description, :prompt, :text, :bg_image_job_id, :audio_job_id,
-  :video_task_id, :scene_image_path, :audio_path, :video_path, :status,
+  :workflow_id, :step, :scene_name, :scene_slug, :type, :change_scene,
+  :scene_description, :prompt, :text, :duration_seconds, :voiceover, :bg_image_job_id,
+  :audio_job_id, :video_task_id, :scene_image_path, :audio_path, :video_path,
+  :scene_image_approved_at, :include_product, :include_model, :product_prompt, :image_aspect_ratio, :status,
   :progress_json, :error, :started_at, :completed_at
 )
 ON CONFLICT(workflow_id, step) DO UPDATE SET
   scene_name=excluded.scene_name,
   scene_slug=excluded.scene_slug,
   type=excluded.type,
-  change_background=excluded.change_background,
-  background_description=excluded.background_description,
+  change_scene=excluded.change_scene,
+  scene_description=excluded.scene_description,
   prompt=excluded.prompt,
   text=excluded.text,
+  duration_seconds=excluded.duration_seconds,
+  voiceover=excluded.voiceover,
   bg_image_job_id=excluded.bg_image_job_id,
   audio_job_id=excluded.audio_job_id,
   video_task_id=excluded.video_task_id,
   scene_image_path=excluded.scene_image_path,
   audio_path=excluded.audio_path,
   video_path=excluded.video_path,
+  scene_image_approved_at=excluded.scene_image_approved_at,
+  include_product=excluded.include_product,
+  include_model=excluded.include_model,
+  product_prompt=excluded.product_prompt,
+  image_aspect_ratio=excluded.image_aspect_ratio,
   status=excluded.status,
   progress_json=excluded.progress_json,
   error=excluded.error,
@@ -155,6 +171,49 @@ class WorkflowDB:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(_SCHEMA)
+            # Migraciones defensivas. Mismo patrón en todas: try ALTER, swallow
+            # "duplicate column" o "no such column" según corresponda
+            # (idempotente — la migración ya corrió). SQLite no soporta
+            # `ADD COLUMN IF NOT EXISTS` ni `RENAME COLUMN IF EXISTS` con
+            # sintaxis estándar, así que esto es lo más portable.
+            #
+            # 2026-06-06: `duration_seconds` (b-roll i2v override por step).
+            # 2026-06-06: `voiceover` (b-roll: true=TTS aparte, false=Kling
+            #             sound efx nativos embebidos en el video).
+            # 2026-06-06: `scene_image_approved_at` (timestamp de aprobación
+            #             humana cuando scene_approval_mode=manual).
+            # 2026-06-07: `include_product` + `product_prompt` (producto
+            #             promocional compuesto sobre la base con Nano Banana).
+            # 2026-06-06: rename `change_background → change_scene` y
+            #             `background_description → scene_description`
+            #             (mejor semántica: el flag dispara regenerar TODA
+            #             la scene image con Nano Banana, no solo el fondo).
+            for column_ddl in (
+                "ALTER TABLE workflow_steps ADD COLUMN duration_seconds INTEGER",
+                "ALTER TABLE workflow_steps ADD COLUMN voiceover INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE workflow_steps ADD COLUMN scene_image_approved_at TEXT",
+                "ALTER TABLE workflow_steps ADD COLUMN include_product INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE workflow_steps ADD COLUMN include_model INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE workflow_steps ADD COLUMN product_prompt TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE workflow_steps ADD COLUMN image_aspect_ratio TEXT",
+            ):
+                try:
+                    await db.execute(column_ddl)
+                except aiosqlite.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            for rename_ddl in (
+                "ALTER TABLE workflow_steps RENAME COLUMN change_background TO change_scene",
+                "ALTER TABLE workflow_steps RENAME COLUMN background_description TO scene_description",
+            ):
+                try:
+                    await db.execute(rename_ddl)
+                except aiosqlite.OperationalError as exc:
+                    msg = str(exc).lower()
+                    # "no such column" → la columna vieja no existe; "duplicate" →
+                    # el rename ya pasó. Ambos casos = ya migrado, no-op.
+                    if "no such column" not in msg and "duplicate" not in msg:
+                        raise
             await db.commit()
 
     async def upsert_workflow(self, workflow: WorkflowJob) -> None:
@@ -271,16 +330,25 @@ class WorkflowDB:
             "scene_name": step.scene_name,
             "scene_slug": step.scene_slug,
             "type": step.type.value,
-            "change_background": int(step.change_background),
-            "background_description": step.background_description,
+            "change_scene": int(step.change_scene),
+            "scene_description": step.scene_description,
             "prompt": step.prompt,
             "text": step.text,
+            "duration_seconds": step.duration_seconds,
+            "voiceover": int(step.voiceover),
+            "include_product": int(step.include_product),
+            "include_model": int(step.include_model),
+            "product_prompt": step.product_prompt,
+            "image_aspect_ratio": step.image_aspect_ratio,
             "bg_image_job_id": step.bg_image_job_id,
             "audio_job_id": step.audio_job_id,
             "video_task_id": step.video_task_id,
             "scene_image_path": step.scene_image_path,
             "audio_path": step.audio_path,
             "video_path": step.video_path,
+            "scene_image_approved_at": (
+                step.scene_image_approved_at.isoformat() if step.scene_image_approved_at else None
+            ),
             "status": step.status.value,
             "progress_json": json.dumps(
                 {k.value: v.value for k, v in step.progress.items()},
@@ -319,16 +387,27 @@ class WorkflowDB:
             scene_name=row["scene_name"],
             scene_slug=row["scene_slug"],
             type=row["type"],
-            change_background=bool(row["change_background"]),
-            background_description=row["background_description"],
+            change_scene=bool(row["change_scene"]),
+            scene_description=row["scene_description"],
             prompt=row["prompt"],
             text=row["text"],
+            duration_seconds=row["duration_seconds"],
+            voiceover=bool(row["voiceover"]),
+            include_product=bool(row["include_product"]),
+            include_model=bool(row["include_model"]),
+            product_prompt=row["product_prompt"],
+            image_aspect_ratio=row["image_aspect_ratio"],
             bg_image_job_id=row["bg_image_job_id"],
             audio_job_id=row["audio_job_id"],
             video_task_id=row["video_task_id"],
             scene_image_path=row["scene_image_path"],
             audio_path=row["audio_path"],
             video_path=row["video_path"],
+            scene_image_approved_at=(
+                datetime.fromisoformat(row["scene_image_approved_at"])
+                if row["scene_image_approved_at"]
+                else None
+            ),
             status=WorkflowStepStatus(row["status"]),
             progress=progress,
             error=row["error"],

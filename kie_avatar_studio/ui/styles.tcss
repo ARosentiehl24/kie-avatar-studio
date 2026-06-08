@@ -1,9 +1,11 @@
 /* Estilos globales de la app. CSS único (SPEC §12.3) — no usar CSS inline en widgets.
  *
  * Estética: refresh estilo OpenCode / Claude Code (tema `tokyo-night` activado
- * desde `App.theme`). Bordes finos `solid` con color sutil, sin esquinas
- * redondeadas. La jerarquía visual la dan el peso de texto y el color de
- * acento, no los bordes.
+ * desde `App.theme`). Bordes finos y sutiles. La jerarquía visual la dan el
+ * peso de texto y el color de acento; los bordes son secundarios. Excepción:
+ * algunos "cards" de realce (callouts de estado, viewers) usan `border: round`
+ * con tinte del acento para destacar bloques puntuales (ver
+ * `#preview-base-result-scroll`, `#configure-product-info`).
  */
 
 /* ============================================================================
@@ -133,7 +135,7 @@ Button.-error.-active {
  * variantes propias como **clases CSS** (no `variant=`) para no chocar con
  * las built-in y mantener control total del color:
  *
- *   .btn-info     → cyan/azul   → acciones de lectura no destructivas
+ *   .btn-info     → acento      → acciones de lectura no destructivas
  *                                  (ver, copiar, escuchar, abrir, preview)
  *   .btn-success  → verde       → acciones que confirman algo (raro,
  *                                  típicamente uso variant="primary" en su lugar)
@@ -141,6 +143,13 @@ Button.-error.-active {
  *                                  (reintentar, cancelar job, pausar, refrescar)
  *   .btn-glyph    → compacto    → botones de un solo emoji/glifo (⏹, 🔁)
  *                                  con width chico y background sutil
+ *
+ * Estilo "ghost" (2026-06-08): estas variantes secundarias usan un fondo
+ * TENUE teñido con el color semántico (color a baja opacidad) + texto del
+ * color, en vez de fills saturados full-color. Los fills saturados se veían
+ * "loud" contra el tema tokyo-night; el ghost es más sobrio y deja que solo
+ * el botón primary (lavanda sólido) y el destructive (rojo sólido) dominen
+ * la jerarquía. Se mantienen planos (sin borde, decisión de diseño ~línea 64).
  *
  * Uso: yield Button("Copiar URL", id="...", classes="btn-info")
  *
@@ -150,44 +159,48 @@ Button.-error.-active {
  * -------------------------------------------------------------------------- */
 
 Button.btn-info {
-    background: $accent;
-    color: $text;
+    background: $accent 15%;
+    color: $accent-lighten-1;
 }
 
 Button.btn-info:hover {
-    background: $accent-lighten-1;
-}
-
-Button.btn-info.-active {
-    background: $accent-darken-1;
-}
-
-Button.btn-success {
-    background: $success;
+    background: $accent 30%;
     color: $text;
 }
 
+Button.btn-info.-active {
+    background: $accent 45%;
+    color: $text;
+}
+
+Button.btn-success {
+    background: $success 15%;
+    color: $success-lighten-1;
+}
+
 Button.btn-success:hover {
-    background: $success-lighten-1;
+    background: $success 30%;
+    color: $text;
 }
 
 Button.btn-success.-active {
-    background: $success-darken-1;
+    background: $success 45%;
+    color: $text;
 }
 
 Button.btn-warning {
-    background: $warning;
-    /* Warning suele ser amarillo brillante; el texto en blanco no
-     * contrasta. Usamos el surface oscuro para legibilidad. */
-    color: $surface;
+    background: $warning 18%;
+    color: $warning-lighten-1;
 }
 
 Button.btn-warning:hover {
-    background: $warning-lighten-1;
+    background: $warning 32%;
+    color: $text;
 }
 
 Button.btn-warning.-active {
-    background: $warning-darken-1;
+    background: $warning 45%;
+    color: $text;
 }
 
 /* Glyph buttons: para acciones de 1-2 chars (emojis/símbolos). El
@@ -1426,6 +1439,20 @@ ConfigureWorkflowScreen {
     color: $text-muted;
 }
 
+/* Región scrollable de los campos del formulario: título/subtítulo quedan
+ * fijos arriba y los botones de acción fijos abajo, mientras los controles
+ * (preset/duración/aprobación/producto) hacen scroll si no entran en
+ * pantalla. Mismo patrón que #workflow-summary-body: `max-height` en % del
+ * viewport + `height: auto` para contraerse a contenido en forms cortos. */
+#configure-workflow-body {
+    height: auto;
+    max-height: 70%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
 #configure-workflow-box Static {
     height: auto;
 }
@@ -1440,9 +1467,14 @@ ConfigureWorkflowScreen {
     margin-top: 1;
 }
 
+/* "Próximo paso / Atención": callout informativo del cierre del modal.
+ * Card con borde lavanda (mismo color que el botón primary "Continuar")
+ * para separarlo visualmente del muro de hints grises de arriba. */
 #configure-warning {
-    color: $warning;
     height: auto;
+    color: $text;
+    border: round $primary 60%;
+    padding: 1 2;
     margin-top: 1;
     margin-bottom: 1;
 }
@@ -1451,6 +1483,84 @@ ConfigureWorkflowScreen {
     height: auto;
     content-align: left middle;
     padding-top: 1;
+}
+
+#configure-preset-row {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#configure-preset-row Select {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#configure-preset-row Button {
+    margin-left: 1;
+}
+
+#configure-preset-hint {
+    color: $text-muted;
+    height: auto;
+    margin-bottom: 1;
+}
+
+#configure-duration-label {
+    height: 1;
+    color: $accent;
+    padding-top: 1;
+}
+
+#configure-duration-row {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#configure-duration-row Select {
+    width: 1fr;
+}
+
+#configure-duration-hint {
+    color: $text-muted;
+    height: auto;
+    margin-bottom: 1;
+}
+
+/* --- Aprobación de scene_image (mismo patrón que el bloque de duración) --- */
+
+#configure-approval-label {
+    height: 1;
+    color: $accent;
+    padding-top: 1;
+}
+
+/* Altura fija como las demás filas de control. SIN esto, el `Horizontal`
+ * toma `height: 1fr` por default y se expande para llenar el espacio
+ * sobrante del scroll body, dejando un HUECO grande antes del hint. */
+#configure-approval-row {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#configure-approval-row Select {
+    width: 1fr;
+}
+
+#configure-approval-hint {
+    color: $text-muted;
+    height: auto;
+    margin-bottom: 1;
+}
+
+/* Producto promocional: es un ESTADO (activado), no un hint más. Card con
+ * borde redondeado verde (mismo lenguaje visual que los cards del repo,
+ * ver #preview-base-result-scroll) para que destaque del muro de hints. */
+#configure-product-info {
+    height: auto;
+    border: round $success 60%;
+    padding: 1 2;
+    margin-top: 1;
+    margin-bottom: 1;
 }
 
 /* --- WorkflowSummaryScreen modal (resumen pre-encolar) --- */
@@ -1548,6 +1658,152 @@ WorkflowDetailScreen {
     height: auto;
     content-align: left middle;
     padding-top: 1;
+}
+
+/* --- PreviewBaseImageScreen modal (preview de imagen base on-demand) --- */
+
+PreviewBaseImageScreen {
+    align: center middle;
+}
+
+#preview-base-box {
+    width: 95%;
+    height: 95%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+}
+
+#preview-base-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#preview-base-subtitle {
+    height: auto;
+    color: $text-muted;
+    padding-bottom: 1;
+}
+
+.preview-base-section {
+    height: 1;
+    color: $accent;
+    padding-top: 1;
+}
+
+#preview-base-prompt-input {
+    height: 10;
+    margin-bottom: 1;
+    border: round $primary 60%;
+}
+
+#preview-base-settings-row {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#preview-base-settings-row Select {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#preview-base-result-scroll {
+    height: 1fr;
+    min-height: 5;
+    border: round $primary 40%;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+
+#preview-base-result {
+    height: auto;
+}
+
+#preview-base-loader {
+    height: 3;
+    margin-bottom: 1;
+    display: none;
+}
+
+#preview-base-actions {
+    height: 3;
+    align: right middle;
+}
+
+#preview-base-actions Button {
+    margin-left: 1;
+}
+
+/* --- SceneImageApprovalScreen modal (aprobacion humana scene_image) --- */
+
+SceneImageApprovalScreen {
+    align: center middle;
+}
+
+#scene-approval-box {
+    width: 110;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#scene-approval-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#scene-approval-subtitle {
+    height: auto;
+    color: $text-muted;
+    padding-bottom: 1;
+}
+
+#scene-approval-body {
+    height: auto;
+    max-height: 30;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+    border: round $primary 40%;
+    margin-bottom: 1;
+}
+
+#scene-approval-body Static {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#scene-approval-status {
+    height: auto;
+    color: $text;
+    margin-top: 1;
+}
+
+#scene-approval-loader {
+    height: 3;
+    margin-bottom: 1;
+    display: none;
+}
+
+#scene-approval-actions {
+    height: 3;
+    align: right middle;
+}
+
+#scene-approval-actions Button {
+    margin-left: 1;
 }
 
 #gen-image-settings-row Select {

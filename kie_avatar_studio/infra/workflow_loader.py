@@ -31,9 +31,12 @@ from ..domain.models import (
     WorkflowStatus,
     WorkflowStep,
 )
-from ..domain.policies import slugify_workflow_name, validate_workflow
+from ..domain.policies import parse_optional_int_field, slugify_workflow_name, validate_workflow
 
 _WORKFLOWS_GLOB: Final[str] = "*.json"
+# Archivos JSON que NO son workflows ejecutables (docs, schemas, etc.).
+# Se omiten del escaneo para evitar mostrar errores spam en la UI.
+_RESERVED_JSON_NAMES: Final[frozenset[str]] = frozenset({"SCHEMA.json"})
 
 
 async def scan_workflows_dir(directory: Path) -> list[WorkflowEntry]:
@@ -55,7 +58,7 @@ async def scan_workflows_dir(directory: Path) -> list[WorkflowEntry]:
 
 
 def _list_json_files(directory: Path) -> list[Path]:
-    return sorted(directory.glob(_WORKFLOWS_GLOB))
+    return sorted(p for p in directory.glob(_WORKFLOWS_GLOB) if p.name not in _RESERVED_JSON_NAMES)
 
 
 def _build_entry(path: Path) -> WorkflowEntry:
@@ -153,10 +156,28 @@ def _parse_steps(steps_payload: list[Any]) -> tuple[list[WorkflowStep], list[str
                 scene_name=scene_name,
                 scene_slug=slugify_workflow_name(scene_name),
                 type=StepType(raw_step.get("type", "a-roll")),
-                change_background=bool(raw_step.get("change_background", True)),
-                background_description=str(raw_step.get("background_description", "")),
+                # Aceptamos ambos nombres (nuevo + legacy) por compat con
+                # JSONs viejos. Pydantic AliasChoices del modelo cubre el
+                # camino formal, pero como acá construimos kwargs explícitos
+                # tenemos que hacer el fallback manual.
+                change_scene=bool(
+                    raw_step.get("change_scene", raw_step.get("change_background", True))
+                ),
+                scene_description=str(
+                    raw_step.get("scene_description", raw_step.get("background_description", ""))
+                ),
                 prompt=str(raw_step.get("prompt", "")),
                 text=str(raw_step.get("text", "")),
+                duration_seconds=parse_optional_int_field(raw_step.get("duration_seconds")),
+                voiceover=bool(raw_step.get("voiceover", True)),
+                include_product=bool(raw_step.get("include_product", False)),
+                include_model=bool(raw_step.get("include_model", True)),
+                product_prompt=str(raw_step.get("product_prompt", "")),
+                image_aspect_ratio=(
+                    str(raw_step["image_aspect_ratio"])
+                    if raw_step.get("image_aspect_ratio") is not None
+                    else None
+                ),
             )
         except (ValueError, ValidationError) as exc:
             errors.append(f"step #{idx}: {exc}")

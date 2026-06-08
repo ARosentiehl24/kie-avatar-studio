@@ -48,7 +48,7 @@ from typing import Final
 from loguru import logger
 
 from ..config import Settings
-from ..domain.errors import WorkflowStepError
+from ..domain.errors import StepAwaitingApprovalSignal, WorkflowStepError
 from ..domain.models import (
     AudioJob,
     AudioJobStatus,
@@ -71,8 +71,10 @@ from .workflow_execution_context import (
     WorkflowExecutionContext,
     build_scene_prompt,
     initialize_progress,
+    is_b_roll_native_sound,
     is_b_roll_with_audio,
     mark_remaining_progress_failed,
+    needs_scene_generation,
     ref_dict,
     set_progress,
 )
@@ -130,6 +132,14 @@ class WorkflowStepRunner:
             step.completed_at = datetime.now(UTC)
             await on_transition(step)
             raise
+        except StepAwaitingApprovalSignal:
+            # NO es error: el step generó la scene_image y se queda en
+            # AWAITING_APPROVAL hasta que el usuario apruebe. El estado
+            # ya fue seteado en `_prepare_scene_image` antes del raise.
+            # NO seteamos `completed_at` (el step no terminó). NO marcamos
+            # progress como FAILED. Re-raise para que el WorkflowRunner
+            # detecte la pausa y propague el status al workflow.
+            raise
         except Exception as exc:
             logger.exception("Step {} ({}): falló", step.step, step.scene_name)
             step.status = WorkflowStepStatus.FAILED
@@ -147,6 +157,10 @@ class WorkflowStepRunner:
     ) -> None:
         if step.type == StepType.A_ROLL:
             await self._run_a_roll(step, context, on_transition)
+        elif is_b_roll_native_sound(step):
+            # voiceover=false: Kling 3.0 genera sound effects ambient embebidos
+            # en el video; sin TTS aparte. El video ya viene "completo".
+            await self._run_b_roll_native_sound(step, context, on_transition)
         elif is_b_roll_with_audio(step):
             await self._run_b_roll_with_audio(step, context, on_transition)
         else:
@@ -237,7 +251,7 @@ class WorkflowStepRunner:
         set_progress(step, WorkflowProgressKey.DOWNLOAD_AUDIO, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
         await asyncio.gather(
-            self._render_i2v(step, scene_ref, video_path),
+            self._render_i2v(step, context, scene_ref, video_path),
             self._download_audio_only(step, audio_url, audio_path),
         )
         set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.COMPLETED)
@@ -247,9 +261,32 @@ class WorkflowStepRunner:
     async def _render_i2v(
         self,
         step: WorkflowStep,
+        context: WorkflowExecutionContext,
         scene_ref: ImageAssetRef,
         video_path: Path,
+        *,
+        sound: bool = False,
     ) -> None:
+        # Resolución de duración con fallback 3 niveles. Ver docstring de
+        # `WorkflowExecutionContext.resolve_i2v_duration` para el orden de
+        # precedencia (override del modal > step.duration_seconds > default
+        # de Settings).
+        duration = context.resolve_i2v_duration(
+            step, default=self._settings.default_i2v_duration_seconds
+        )
+        # Log explícito para post-mortems: cuando un b-roll sale con
+        # duración o sound inesperado, este debug evita tener que cruzar
+        # manifest + entry original para inferir qué nivel del fallback ganó.
+        logger.debug(
+            "workflow.step.i2v duration_resolved step={} override={} "
+            "step_value={} default={} -> {} sound={}",
+            step.step,
+            context.i2v_duration_seconds_override,
+            step.duration_seconds,
+            self._settings.default_i2v_duration_seconds,
+            duration,
+            sound,
+        )
         task_id, path = await render_i2v_video(
             client=self._client,
             settings=self._settings,
@@ -257,7 +294,8 @@ class WorkflowStepRunner:
             image_url=scene_ref.kie_url,
             prompt=step.prompt,
             output_path=video_path,
-            duration=self._settings.default_i2v_duration_seconds,
+            duration=duration,
+            sound=sound,
             existing_task_id=step.video_task_id,
         )
         step.video_task_id = task_id
@@ -283,7 +321,29 @@ class WorkflowStepRunner:
         step.status = WorkflowStepStatus.RENDERING
         set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
-        await self._render_i2v_to_step(step, context, scene_ref, on_transition)
+        await self._render_i2v_to_step(step, context, scene_ref, on_transition, sound=False)
+
+    # --- b-roll native sound (Kling 3.0 sound effects embebidos) ---------
+
+    async def _run_b_roll_native_sound(
+        self,
+        step: WorkflowStep,
+        context: WorkflowExecutionContext,
+        on_transition: StepTransition,
+    ) -> None:
+        """B-roll con `voiceover=false`: Kling 3.0 genera sound effects nativos.
+
+        Mismo flow que `_run_b_roll_silent` pero pasamos `sound=true` al i2v:
+        Kling embebe sound effects ambientales en el video basados en el
+        prompt. NO se llama a TTS ni se descarga audio.mp3 aparte.
+        """
+        step.status = WorkflowStepStatus.PREPARING
+        await on_transition(step)
+        scene_ref = await self._prepare_scene_image(step, context, on_transition)
+        step.status = WorkflowStepStatus.RENDERING
+        set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.RUNNING)
+        await on_transition(step)
+        await self._render_i2v_to_step(step, context, scene_ref, on_transition, sound=True)
 
     async def _render_i2v_to_step(
         self,
@@ -291,6 +351,8 @@ class WorkflowStepRunner:
         context: WorkflowExecutionContext,
         scene_ref: ImageAssetRef,
         on_transition: StepTransition,
+        *,
+        sound: bool = False,
     ) -> None:
         step_dir = context.step_dir(step)
         step_dir.mkdir(parents=True, exist_ok=True)
@@ -299,7 +361,7 @@ class WorkflowStepRunner:
         set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.COMPLETED)
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
-        await self._render_i2v(step, scene_ref, output_path)
+        await self._render_i2v(step, context, scene_ref, output_path, sound=sound)
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.COMPLETED)
 
     # --- scene image preparation ------------------------------------------
@@ -312,16 +374,26 @@ class WorkflowStepRunner:
     ) -> ImageAssetRef:
         """Genera (o reusa) la imagen scene del step y la descarga local.
 
-        - Si `change_background=False`: reusa la imagen base de la modelo.
-        - Si `change_background=True`: genera nueva imagen Nano Banana 2
-          con refs=[base] y prompt=`background_description + step.prompt`.
+        Casos (la generación con Nano Banana se dispara si `change_scene` O
+        `include_product` — ver `needs_scene_generation`):
+        - Ni cambia escena ni incluye producto: reusa la imagen base de la
+          modelo (no gasta Nano Banana).
+        - Genera scene Y `scene_image_approved_at` seteado (resume tras
+          aprobación humana): reusa la scene_image ya generada en
+          `bg_image_job_id` (no gasta Nano Banana de nuevo).
+        - Genera scene Y NO aprobado Y modo=AUTO: genera nueva imagen Nano
+          Banana 2 y continúa al render (comportamiento clásico).
+        - Genera scene Y NO aprobado Y modo=MANUAL (solo b-roll): genera
+          nueva imagen Nano Banana 2, marca el step en AWAITING_APPROVAL y
+          lanza `StepAwaitingApprovalSignal` para que el `WorkflowRunner`
+          pause el workflow.
         """
         step_dir = context.step_dir(step)
         step_dir.mkdir(parents=True, exist_ok=True)
         scene_path = step_dir / SCENE_IMAGE_FILENAME
         set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
-        if not step.change_background:
+        if not needs_scene_generation(step):
             await download_kie_asset(
                 client=self._client,
                 url=context.base_image_ref.kie_url,
@@ -330,7 +402,87 @@ class WorkflowStepRunner:
             step.scene_image_path = str(scene_path)
             set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
             return context.base_image_ref
-        return await self._generate_scene_image(step, context, scene_path, on_transition)
+        # Resume tras aprobación humana: ya tenemos el bg_image_job_id +
+        # scene_image_path; no regeneramos.
+        if step.scene_image_approved_at is not None and step.bg_image_job_id:
+            ref = await self._reload_scene_ref(step, scene_path)
+            set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
+            return ref
+        # Step que ya estaba esperando aprobación de un run previo (multi-step
+        # MANUAL: aprobamos otro step y re-encolamos; este sigue awaiting).
+        # NO debemos regenerar — ya gastamos Nano Banana en la run anterior.
+        # Re-emitimos el signal para que el workflow vuelva a pausar SIN tocar
+        # créditos. Es CRÍTICO: sin este branch, cada aprobación de un step
+        # cuesta regenerar todos los demás pendientes (bug grave).
+        if step.bg_image_job_id and context.requires_scene_approval(step):
+            ref = await self._reload_scene_ref(step, scene_path)
+            # CRÍTICO: el parent (`_run_b_roll_*`) ya pisó el status con
+            # PREPARING antes de llamar acá. Tenemos que restaurar
+            # AWAITING_APPROVAL explícitamente, sino el workflow queda
+            # bricked: el header dirá AWAITING_APPROVAL pero ningún step
+            # estará en ese status, y `pending_approval_step()` devolverá
+            # None → el modal de aprobación no podrá encontrar el step.
+            # Cubierto por test_b_roll_repause_without_regeneration_keeps_step_in_awaiting_approval.
+            step.status = WorkflowStepStatus.AWAITING_APPROVAL
+            await on_transition(step)
+            raise StepAwaitingApprovalSignal(
+                f"step {step.step}: scene_image previa todavía pendiente de "
+                "aprobación (reanudado sin regenerar)"
+            )
+        # Generación fresca con Nano Banana 2.
+        ref = await self._generate_scene_image(step, context, scene_path, on_transition)
+        # Si el modo es MANUAL, pausamos acá. El step ya tiene
+        # bg_image_job_id + scene_image_path persistidos; cuando el
+        # usuario apruebe, este mismo método entrará por el branch de
+        # resume y reusará todo.
+        if context.requires_scene_approval(step):
+            step.status = WorkflowStepStatus.AWAITING_APPROVAL
+            await on_transition(step)
+            raise StepAwaitingApprovalSignal(
+                f"step {step.step}: scene_image generada, esperando aprobación humana"
+            )
+        return ref
+
+    async def _reload_scene_ref(self, step: WorkflowStep, scene_path: Path) -> ImageAssetRef:
+        """Recupera el `ImageAssetRef` de una scene_image ya generada.
+
+        Usado para resume tras aprobación humana: el `bg_image_job_id`
+        está persistido en el step, lo buscamos en el store y
+        reconstruimos el ref. Si el `scene_path` local no existe (ej.
+        el usuario borró outputs/), lo re-descargamos del `kie_url`
+        (vive 14 días).
+        """
+        if not step.bg_image_job_id:
+            raise WorkflowStepError(
+                f"step {step.step}: resume tras aprobación pero falta bg_image_job_id"
+            )
+        generated = await self._generated_images_store.get(step.bg_image_job_id)
+        if generated is None:
+            raise WorkflowStepError(
+                f"step {step.step}: scene_image aprobada (id={step.bg_image_job_id}) "
+                "ya no existe en el store local; regenerá el step"
+            )
+        ref = ImageAssetRef(
+            kind=ImageAssetKind.GENERATED,
+            id=generated.id,
+            label=generated.label,
+            kie_url=generated.kie_url,
+            expires_at=generated.expires_at(KIE_GENERATED_RETENTION_DAYS),
+        )
+        # Validamos expires_at ANTES de descargar para fail-fast con un error
+        # tipado del dominio (el usuario aprobó hace >14 días → el kie_url
+        # ya no es accesible; mejor pedirle regenerar que dar un download
+        # error genérico de Kie).
+        if ref.expires_at <= datetime.now(UTC):
+            raise WorkflowStepError(
+                f"step {step.step}: scene_image (id={step.bg_image_job_id}) "
+                f"expirada en Kie ({ref.expires_at.isoformat()}); usá Regenerar "
+                "desde el modal de aprobación para crear una nueva"
+            )
+        if not scene_path.exists():  # noqa: ASYNC240 - check sync trivial
+            await download_kie_asset(client=self._client, url=ref.kie_url, output_path=scene_path)
+        step.scene_image_path = str(scene_path)
+        return ref
 
     async def _generate_scene_image(
         self,
@@ -360,12 +512,27 @@ class WorkflowStepRunner:
     def _build_scene_image_job(
         self, step: WorkflowStep, context: WorkflowExecutionContext
     ) -> ImageJob:
+        # Refs para Nano Banana: la base (modelo) solo si include_model=True.
+        # El producto global se agrega si include_product=True.
+        refs = []
+        if step.include_model:
+            refs.append(ref_dict(context.base_image_ref))
+        if step.include_product and context.product_image_ref is not None:
+            refs.append(ref_dict(context.product_image_ref))
+
+        # Usamos el aspect ratio: sobrescribe el del step si está configurado,
+        # sino usa el global del workflow.
+        settings = ImageGenerationSettings()
+        effective_aspect = step.image_aspect_ratio or context.image_aspect_ratio
+        if effective_aspect is not None:
+            settings.aspect_ratio = effective_aspect
+
         return ImageJob(
             id=step.bg_image_job_id or new_image_job_id(),
             label=f"[wf]{step.scene_slug}",
             prompt=build_scene_prompt(step),
-            settings_json=ImageGenerationSettings().model_dump_json(exclude_none=True),
-            refs_json=json.dumps([ref_dict(context.base_image_ref)], ensure_ascii=False),
+            settings_json=settings.model_dump_json(exclude_none=True),
+            refs_json=json.dumps(refs, ensure_ascii=False),
             status=ImageJobStatus.QUEUED,
         )
 
@@ -384,6 +551,16 @@ class WorkflowStepRunner:
         )
 
     def _build_audio_job(self, step: WorkflowStep, context: WorkflowExecutionContext) -> AudioJob:
+        """Construye el AudioJob a procesar.
+
+        TODO(Fase 4): cuando el step está en re-pause por MANUAL multi-step
+        (scene_image_approved_at=None pero workflow re-encolado para revisar
+        otro step), este método crea un AudioJob FRESH sin preservar el
+        `task_id` del job persistido previamente, lo que regenera TTS en
+        Kie y gasta créditos extra (O(N²) para N steps b-roll con texto).
+        Fix futuro: inyectar `AudioJobRepository` al step runner y cargar
+        el job persistido para preservar `task_id` cuando exista.
+        """
         voice_settings = context.resolved_voice_settings()
         settings_json: str | None = None
         if voice_settings is not None and not voice_settings.is_empty():

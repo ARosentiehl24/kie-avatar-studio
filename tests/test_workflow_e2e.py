@@ -27,6 +27,7 @@ from kie_avatar_studio.app_layer.workflow_step_runner import WorkflowStepRunner
 from kie_avatar_studio.config import Settings
 from kie_avatar_studio.domain.events import WorkflowJobUpdated
 from kie_avatar_studio.domain.models import (
+    SceneApprovalMode,
     VoicePreset,
     WorkflowJob,
     WorkflowStatus,
@@ -100,7 +101,7 @@ class _MockKieAllSuccess:
     def _result_url(model: str, task_id: str) -> str:
         if "avatar-pro" in model:
             return f"https://tempfile.kie.ai/avatar/{task_id}.mp4"
-        if "image-to-video" in model:
+        if "image-to-video" in model or "kling-3.0/video" in model:
             return f"https://tempfile.kie.ai/i2v/{task_id}.mp4"
         if "nano-banana" in model:
             return f"https://tempfile.kie.ai/img/{task_id}.png"
@@ -126,8 +127,8 @@ def _workflow_json_3_steps() -> dict:
                 "step": 1,
                 "scene_name": "Hook a-roll",
                 "type": "a-roll",
-                "change_background": False,
-                "background_description": "",
+                "change_scene": False,
+                "scene_description": "",
                 "prompt": "Una mujer mira a cámara plano medio",
                 "text": "Hola, gracias por estar acá hoy.",
             },
@@ -135,8 +136,8 @@ def _workflow_json_3_steps() -> dict:
                 "step": 2,
                 "scene_name": "B-roll con audio",
                 "type": "b-roll",
-                "change_background": True,
-                "background_description": "Cocina con luz natural",
+                "change_scene": True,
+                "scene_description": "Cocina con luz natural",
                 "prompt": "Manos cortando vegetales",
                 "text": "Esta es la narración del b-roll para post.",
             },
@@ -144,8 +145,8 @@ def _workflow_json_3_steps() -> dict:
                 "step": 3,
                 "scene_name": "B-roll silencioso",
                 "type": "b-roll",
-                "change_background": True,
-                "background_description": "Apothecary jar con luz cálida",
+                "change_scene": True,
+                "scene_description": "Apothecary jar con luz cálida",
                 "prompt": "Frasco ambar siendo abierto",
                 "text": "",
             },
@@ -253,6 +254,7 @@ async def e2e_setup(tmp_settings: Settings):
         workflow_db,
         manifest_writer,
         queue,
+        base_resolver,
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
         presets_store=presets,
@@ -350,11 +352,11 @@ async def test_e2e_workflow_steps_run_in_parallel(e2e_setup) -> None:
     # Más liberal: al menos los 3 videos y los 2 audios.
     models_called = Counter(t["model"] for t in handler.tasks.values())
     assert models_called["kling/ai-avatar-pro"] == 1, "1 avatar para a-roll"
-    assert models_called["kling-2.6/image-to-video"] == 2, "2 i2v para b-rolls"
-    assert models_called["elevenlabs/text-to-speech-turbo-v2-5"] == 2, (
-        "2 TTS para a-roll + b-roll-con-texto"
+    assert models_called["kling-3.0/video"] == 2, "2 i2v para b-rolls"
+    assert models_called["elevenlabs/text-to-speech-multilingual-v2"] == 2, (
+        "2 TTS para a-roll + b-roll-con-texto (siempre multilingual, nunca turbo)"
     )
-    # 3 nano banana: 1 base + 2 scenes (steps con change_background=True).
+    # 3 nano banana: 1 base + 2 scenes (steps con change_scene=True).
     assert models_called["nano-banana-2"] == 3, "1 base + 2 scenes"
 
 
@@ -374,16 +376,17 @@ async def test_e2e_manifest_updated_throughout_execution(e2e_setup) -> None:
             assert value == "completed", f"step {step['step']} progress={step['progress']}"
 
 
-async def test_e2e_uses_turbo_model_when_audio_language_set(e2e_setup) -> None:
-    """`audio_language='es-419'` debe forzar el modelo turbo TTS."""
+async def test_e2e_never_uses_turbo_model_even_if_audio_language_set(e2e_setup) -> None:
+    """Incluso si `audio_language='es-419'` está seteado, se debe usar siempre
+    el modelo multilingual-v2 (nunca turbo) por requerimiento del usuario."""
     controller = e2e_setup["controller"]
     entries = await controller.list_entries(refresh=True)
     workflow = await controller.enqueue_entry(entries[0])
     await _wait_for_terminal(controller, workflow.id, timeout=30.0)
     handler = e2e_setup["handler"]
     tts_models = [t["model"] for t in handler.tasks.values() if "text-to-speech" in t["model"]]
-    # TODAS las llamadas TTS usaron el modelo turbo (porque audio_language está seteado).
-    assert all("turbo" in m for m in tts_models), f"TTS models: {tts_models}"
+    # TODAS las llamadas TTS usaron el modelo multilingual-v2 (porque turbo está baneado).
+    assert all("multilingual" in m for m in tts_models), f"TTS models: {tts_models}"
 
 
 async def test_e2e_partially_failed_when_some_steps_fail(
@@ -418,7 +421,7 @@ async def test_e2e_partially_failed_when_some_steps_fail(
                 self.task_counter += 1
                 tk = f"tk_{self.task_counter:04d}"
                 body = json.loads(request.content)
-                if "image-to-video" in body["model"]:
+                if "image-to-video" in body["model"] or "kling-3.0/video" in body["model"]:
                     return httpx.Response(400, json={"error": "i2v down"})
                 self.tasks[tk] = {"model": body["model"]}
                 return httpx.Response(200, json={"data": {"taskId": tk}})
@@ -531,6 +534,7 @@ async def test_e2e_partially_failed_when_some_steps_fail(
         workflow_db,
         manifest_writer,
         queue,
+        base_resolver,
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
         presets_store=presets,
@@ -547,3 +551,48 @@ async def test_e2e_partially_failed_when_some_steps_fail(
     assert completed == 1
     assert failed == 2
     await kie.aclose()
+
+
+async def test_e2e_workflow_steps_run_sequentially_in_manual_mode(e2e_setup) -> None:
+    """En modo MANUAL, los steps deben ejecutarse secuencialmente en serie y
+    detenerse INMEDIATAMENTE ante el primer step que requiere aprobación,
+    sin lanzar steps paralelos posteriores en background (lo que gastaría
+    créditos o atascaría la cola)."""
+    controller = e2e_setup["controller"]
+    entries = await controller.list_entries(refresh=True)
+
+    # Encolamos con MANUAL
+    workflow = await controller.enqueue_entry(
+        entries[0],
+        scene_approval_mode=SceneApprovalMode.MANUAL,
+    )
+    # Esperamos a que la ejecución se pause en AWAITING_APPROVAL
+    deadline = asyncio.get_running_loop().time() + 15.0
+    paused = None
+    while asyncio.get_running_loop().time() < deadline:
+        paused = await controller.get_workflow(workflow.id)
+        if paused is not None and (
+            paused.status == WorkflowStatus.AWAITING_APPROVAL or paused.is_terminal()
+        ):
+            break
+        await asyncio.sleep(0.5)
+
+    assert paused is not None
+    assert paused.status == WorkflowStatus.AWAITING_APPROVAL
+
+    # El step 2 (b-roll con change_scene=true) requirió aprobación y pausó.
+    # Por ende, el paso 3 (b-roll silencioso) NO debió iniciarse en absoluto.
+    # Verificamos qué tareas se enviaron a Kie:
+    handler = e2e_setup["handler"]
+    models_called = Counter(t["model"] for t in handler.tasks.values())
+
+    # Step 1 (a-roll): corre completo -> 1 TTS (multilingual) y 1 avatar-pro.
+    assert models_called["kling/ai-avatar-pro"] == 1
+    # Step 2 (b-roll): genera su scene_image con Nano Banana y de inmediato lanza
+    # StepAwaitingApprovalSignal.
+    # Total Nano Banana llamadas: 1 (base) + 1 (step 2 scene_image) = 2.
+    # Step 3 nunca arrancó, por lo que NO hay 3ª llamada a Nano Banana (para su escena).
+    assert models_called["nano-banana-2"] == 2
+    # El video i2v de Kling para step 2 y step 3 NO se debió llamar (step 2 pausó antes
+    # del render, step 3 ni arrancó).
+    assert models_called["kling-3.0/video"] == 0

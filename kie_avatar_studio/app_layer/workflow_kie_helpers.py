@@ -68,16 +68,31 @@ async def render_i2v_video(
     prompt: str,
     output_path: Path,
     duration: int,
+    sound: bool = False,
+    mode: str | None = None,
+    aspect_ratio: str | None = None,
     existing_task_id: str | None = None,
 ) -> tuple[str, str]:
-    """Crea (o reusa) un task de Kling i2v, pollea, descarga al path dado.
+    """Crea (o reusa) un task de Kling 3.0 i2v, pollea, descarga al path dado.
 
     Devuelve `(task_id, str(output_path))`.
+
+    `sound=True` → Kling genera sound effects ambientales nativos basados en
+    el prompt (NO es voiceover hablado de TTS). `sound=False` → video
+    silencioso (el TTS aparte si hay text se monta en post).
+
+    `mode` y `aspect_ratio` opcionales; si son `None` se usan los defaults
+    del cliente (`pro` / `16:9`).
     """
     task_id = existing_task_id
     if task_id is None:
+        kwargs: dict[str, object] = {"duration": duration, "sound": sound}
+        if mode is not None:
+            kwargs["mode"] = mode
+        if aspect_ratio is not None:
+            kwargs["aspect_ratio"] = aspect_ratio
         async with limiter:
-            created = await client.create_image_to_video_task(image_url, prompt, duration=duration)
+            created = await client.create_image_to_video_task(image_url, prompt, **kwargs)  # type: ignore[arg-type]
         task_id = created.task_id
 
     async with limiter:

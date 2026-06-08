@@ -505,12 +505,95 @@ def validate_image_refs(refs: list[ImageAssetRef]) -> None:
 
 # --- Workflow automation validators ---------------------------------------
 
-# Restricciones del endpoint Kling 2.6 image-to-video (`kling-2.6/image-to-video`):
-# - prompt máximo 2500 chars en la doc oficial.
-# - duración aceptada: 5 o 10 segundos (`duration` int).
+# Restricciones del endpoint Kling 3.0 (`kling-3.0/video`, ver `docs.kie.ai/market/kling/kling-3-0`):
+# - prompt máximo 2500 chars.
+# - duración aceptada: entero 3-15 segundos (se serializa como string al body).
 # Ver `docs/API_KIE.md §6`.
 MAX_I2V_PROMPT_CHARS: Final[int] = 2500
-I2V_DURATIONS: Final[tuple[int, ...]] = (5, 10)
+I2V_DURATIONS: Final[tuple[int, ...]] = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+
+# Default global cuando ningún nivel (override del modal, step.duration_seconds
+# del JSON) provee una duración explícita para un b-roll. La fuente canónica
+# vive acá; `Settings.default_i2v_duration_seconds` la importa para que .env
+# pueda override-arla sin desincronizarse con la UI (preview del summary).
+DEFAULT_I2V_DURATION_SECONDS: Final[int] = 5
+
+# Modos de generación de Kling 3.0 (resolución y costo dependen del modo).
+# - `std`  -> 720p (16:9 = 1280x720). Más barato.
+# - `pro`  -> 1080p (16:9 = 1920x1080). Default razonable.
+# - `4K`   -> 2160p (16:9 = 3840x2160). Más caro y lento.
+I2V_MODES: Final[tuple[str, ...]] = ("std", "pro", "4K")
+DEFAULT_I2V_MODE: Final[str] = "pro"
+
+# Aspect ratios de Kling 3.0. Cuando se pasa una imagen ref, Kling auto-adapta
+# al ratio de la imagen y este campo se vuelve opcional.
+I2V_ASPECT_RATIOS: Final[tuple[str, ...]] = ("16:9", "9:16", "1:1")
+DEFAULT_I2V_ASPECT_RATIO: Final[str] = "16:9"
+
+
+def resolve_effective_i2v_duration(
+    override: int | None, step_value: int | None, default: int
+) -> int:
+    """Resuelve la duración del b-roll a usar en runtime.
+
+    Precedencia (de más fuerte a más débil):
+
+    1. `override`  — `WorkflowPreSettings.i2v_duration_seconds` del modal
+       Configurar. Si está seteado FORZA a todos los b-roll del workflow
+       (sobreescribe cualquier valor por step). La justificación es que
+       el modal es la última palabra antes de encolar.
+    2. `step_value` — `WorkflowStep.duration_seconds` del JSON. Decisión
+       por escena del autor del workflow.
+    3. `default`   — fallback global (`Settings.default_i2v_duration_seconds`,
+       configurable vía `.env`).
+
+    Esta es la fuente ÚNICA de la regla de precedencia. Tanto el runtime
+    (`WorkflowExecutionContext.resolve_i2v_duration`) como la UI
+    (`WorkflowSummaryScreen._render_steps_block`) la consumen para que no
+    haya drift entre lo que se PREVIEWS y lo que se EJECUTA.
+    """
+    if override is not None:
+        return override
+    if step_value is not None:
+        return step_value
+    return default
+
+
+def parse_optional_int_field(raw: object) -> int | None:
+    """Convierte `raw` (proveniente de JSON crudo) a `int` o `None`.
+
+    Acepta `int`, `str` numérica y `float` (con coerción). Rechaza tipos
+    no convertibles devolviendo `None` para que el caller no tenga que
+    distinguir entre "campo ausente del JSON" y "campo presente como
+    string vacío o no numérico". El validador de dominio decide si
+    `None` es válido para ese campo o no.
+
+    `bool` es subclass de `int` en Python; el JSON `true/false` no debe
+    pasar como duración numérica (sería 0/1 sin sentido). Por eso
+    descartamos bools explícitamente al principio (antes del check
+    `isinstance(raw, int)`).
+
+    Centralizado acá para que el loader (`infra/workflow_loader._parse_steps`)
+    y la UI (`ui/screens/workflow_summary._render_steps_block`) usen el
+    MISMO criterio cuando normalizan el campo `duration_seconds` del
+    JSON crudo — sin esto la preview del summary podía diverger del
+    runtime ante valores tipo `"10"` (string numérico).
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    # Tipos no convertibles (list, dict, etc.): no es un número.
+    return None
+
 
 # Mapping (key requerida según tipo de step) ⇒ keys que `progress` debe tener.
 # Las extras no son error (futuro-proof), las faltantes sí (incompletitud).
@@ -566,6 +649,11 @@ def validate_model_creation(model_creation: ModelCreation) -> None:
     existencia del path local en disco (eso es responsabilidad del
     `WorkflowRunner._resolve_base()` que revalida justo antes del upload
     para evitar race window).
+
+    `method=local` SIN `local_path` (o con string vacío) es válido en el
+    dominio: la UI puede pedírselo al usuario en runtime via selector de
+    archivo. El controller exige el path solo si NO hay `resolved_image_ref`
+    pre-cargada antes del enqueue.
     """
     method = model_creation.method
     if method == ModelCreationMethod.PROMPT:
@@ -579,10 +667,11 @@ def validate_model_creation(model_creation: ModelCreation) -> None:
         except ImageGenerationValidationError as exc:
             raise WorkflowValidationError(f"model_creation.prompt inválido: {exc}") from exc
     elif method == ModelCreationMethod.LOCAL:
-        if not model_creation.local_path:
-            raise WorkflowValidationError(
-                "model_creation.method='local' requiere 'local_path' no vacío"
-            )
+        # local_path opcional acá: el selector de la UI lo completa al
+        # encolar. Si llega seteado, la existencia se valida en el
+        # `WorkflowBaseResolver.upload_local_standalone` o en
+        # `WorkflowRunner._resolve_from_local` (revalidación pre-upload).
+        return
     elif method == ModelCreationMethod.CATALOG:
         if model_creation.asset_kind is None or not model_creation.asset_id:
             raise WorkflowValidationError(
@@ -607,8 +696,30 @@ def validate_workflow_step(step: WorkflowStep) -> list[str]:
         raise WorkflowStepValidationError(f"step {step.step}: prompt vacío")
     _validate_step_prompt_length(step)
     _validate_step_text_per_type(step)
+    _validate_step_duration(step)
+    if step.image_aspect_ratio is not None and step.image_aspect_ratio not in ASPECT_RATIOS:
+        raise WorkflowStepValidationError(
+            f"step {step.step}: image_aspect_ratio inválido: {step.image_aspect_ratio!r} "
+            f"(válidos: {', '.join(ASPECT_RATIOS)})"
+        )
     _validate_workflow_step_progress(step)
     return _collect_step_warnings(step)
+
+
+def _validate_step_duration(step: WorkflowStep) -> None:
+    """A-roll ignora `duration_seconds`. B-roll lo valida si está seteado.
+
+    Si `duration_seconds` es `None`, el step usa el fallback global
+    (pre_settings o settings). Si está seteado, debe ser un entero 3-15.
+
+    Para a-roll, si el JSON trae `duration_seconds` lo dejamos pasar
+    como warning visual del loader (la duración del avatar la define el
+    audio TTS, no el setting), pero no es un error bloqueante.
+    """
+    if step.duration_seconds is None:
+        return
+    if step.type == StepType.B_ROLL:
+        validate_i2v_duration(step.duration_seconds)
 
 
 def _validate_step_prompt_length(step: WorkflowStep) -> None:
@@ -616,8 +727,8 @@ def _validate_step_prompt_length(step: WorkflowStep) -> None:
 
     A-roll usa Avatar Pro (límite del prompt = `MAX_PROMPT_CHARS=5000`).
     B-roll usa Kling i2v (límite del prompt = `MAX_I2V_PROMPT_CHARS=2500`).
-    Si `change_background=True`, el prompt también alimenta al Nano Banana
-    refit con el `background_description`, pero ese pasa por su propia
+    Si `change_scene=True`, el prompt también alimenta al Nano Banana
+    refit con el `scene_description`, pero ese pasa por su propia
     validación en el runner.
     """
     max_chars = MAX_PROMPT_CHARS if step.type == StepType.A_ROLL else MAX_I2V_PROMPT_CHARS
@@ -670,10 +781,20 @@ def _validate_workflow_step_progress(step: WorkflowStep) -> None:
 
 
 def _expected_progress_keys(step: WorkflowStep) -> frozenset[WorkflowProgressKey]:
-    """Devuelve el set de keys que `progress` debe (eventualmente) tener para este step."""
+    """Devuelve el set de keys que `progress` debe (eventualmente) tener para este step.
+
+    El criterio para b-roll considera `voiceover`:
+    - `voiceover=true` Y `text` no vacío → ruta "with audio" (TTS aparte +
+      video silencioso). Keys: SCENE_IMAGE, AUDIO, VIDEO, DOWNLOAD_VIDEO,
+      DOWNLOAD_AUDIO.
+    - `voiceover=true` Y `text` vacío → ruta "silent" (video silencioso solo).
+      Keys: SCENE_IMAGE, VIDEO, DOWNLOAD.
+    - `voiceover=false` → ruta "native sound" (Kling embebe sound efx en el
+      video). Mismo set que silent: SCENE_IMAGE, VIDEO, DOWNLOAD.
+    """
     if step.type == StepType.A_ROLL:
         return _REQUIRED_PROGRESS_KEYS_A_ROLL
-    if step.text.strip():
+    if step.voiceover and step.text.strip():
         return _REQUIRED_PROGRESS_KEYS_B_ROLL_WITH_TEXT
     return _REQUIRED_PROGRESS_KEYS_B_ROLL_SILENT
 
@@ -686,19 +807,39 @@ def expected_progress_keys_for_step(step: WorkflowStep) -> frozenset[WorkflowPro
 def _collect_step_warnings(step: WorkflowStep) -> list[str]:
     """Devuelve mensajes informativos no bloqueantes para el step."""
     warnings: list[str] = []
-    if step.type == StepType.B_ROLL and not step.change_background:
+    if step.type == StepType.B_ROLL and not step.change_scene:
         warnings.append(
-            f"step {step.step}: b-roll con change_background=false usará la imagen base "
-            "de la modelo; normalmente querés change_background=true para escenas auxiliares"
+            f"step {step.step}: b-roll con change_scene=false usará la imagen base "
+            "de la modelo; normalmente querés change_scene=true para escenas auxiliares"
         )
-    if (
-        step.type == StepType.B_ROLL
-        and step.change_background
-        and not step.background_description.strip()
-    ):
+    if step.type == StepType.B_ROLL and step.change_scene and not step.scene_description.strip():
         warnings.append(
-            f"step {step.step}: change_background=true pero background_description vacío; "
+            f"step {step.step}: change_scene=true pero scene_description vacío; "
             "la imagen scene se generará solo con el prompt del step"
+        )
+    if step.type == StepType.A_ROLL and step.duration_seconds is not None:
+        warnings.append(
+            f"step {step.step}: a-roll trae duration_seconds={step.duration_seconds}, "
+            "pero la duración del avatar la determina el audio TTS. "
+            "Este campo se ignora para a-roll; sacalo del JSON para evitar confusión."
+        )
+    # Voiceover: solo aplica a b-roll. Avisar combinaciones que se ignoran.
+    if step.type == StepType.A_ROLL and step.voiceover is False:
+        warnings.append(
+            f"step {step.step}: a-roll trae voiceover=false, pero a-roll siempre "
+            "tiene audio embebido del lip-sync. Este campo se ignora; sacalo del JSON."
+        )
+    if step.type == StepType.B_ROLL and step.voiceover is False and step.text.strip():
+        warnings.append(
+            f"step {step.step}: b-roll con voiceover=false ignora el campo 'text' "
+            "(Kling 3.0 genera sound effects basados en el prompt, no en text). "
+            "Si querés voz humana, usá voiceover=true."
+        )
+    if step.include_product and not step.product_prompt.strip():
+        warnings.append(
+            f"step {step.step}: include_product=true pero product_prompt vacío; "
+            "Nano Banana compondrá el producto solo con el prompt de la escena. "
+            "Agregá product_prompt para indicar cómo/dónde colocar el producto."
         )
     return warnings
 
@@ -716,11 +857,43 @@ def validate_workflow(workflow: WorkflowJob) -> list[str]:
     if not workflow.steps:
         raise WorkflowValidationError("workflow debe tener al menos 1 step")
     validate_model_creation(workflow.pre_settings.model_creation)
+    if workflow.pre_settings.i2v_duration_seconds is not None:
+        validate_i2v_duration(workflow.pre_settings.i2v_duration_seconds)
+    if workflow.pre_settings.image_aspect_ratio is not None and workflow.pre_settings.image_aspect_ratio not in ASPECT_RATIOS:
+        raise WorkflowValidationError(
+            f"image_aspect_ratio inválido: {workflow.pre_settings.image_aspect_ratio!r} "
+            f"(válidos: {', '.join(ASPECT_RATIOS)})"
+        )
     _validate_workflow_step_numbering(workflow)
     warnings: list[str] = []
+    warnings.extend(_validate_product_promotion(workflow))
     for step in workflow.steps:
         warnings.extend(validate_workflow_step(step))
     return warnings
+
+
+def _validate_product_promotion(workflow: WorkflowJob) -> list[str]:
+    """Valida la coherencia entre `promote_product` y los `include_product`.
+
+    Error si algún step pide `include_product=true` pero el workflow no
+    promociona producto (`promote_product=false`): no hay imagen de
+    producto que componer. Warning si `promote_product=true` pero ningún
+    step lo incluye (producto subido pero sin usar).
+    """
+    promote = workflow.pre_settings.promote_product
+    steps_with_product = [step.step for step in workflow.steps if step.include_product]
+    if steps_with_product and not promote:
+        raise WorkflowValidationError(
+            f"steps {steps_with_product} tienen include_product=true pero "
+            "pre_settings.promote_product=false; activá promote_product y elegí "
+            "el producto, o quitá include_product de esos steps"
+        )
+    if promote and not steps_with_product:
+        return [
+            "promote_product=true pero ningún step tiene include_product=true; "
+            "el producto se subirá pero no aparecerá en ninguna escena"
+        ]
+    return []
 
 
 def _validate_workflow_step_numbering(workflow: WorkflowJob) -> None:
@@ -735,7 +908,7 @@ def _validate_workflow_step_numbering(workflow: WorkflowJob) -> None:
 
 
 def validate_i2v_duration(duration: int) -> None:
-    """Valida `duration` del endpoint Kling 2.6 image-to-video."""
+    """Valida `duration` del endpoint Kling 3.0 video (`kling-3.0/video`)."""
     if duration not in I2V_DURATIONS:
         raise WorkflowStepValidationError(
             f"duration i2v inválido: {duration} (válidos: {', '.join(map(str, I2V_DURATIONS))})"

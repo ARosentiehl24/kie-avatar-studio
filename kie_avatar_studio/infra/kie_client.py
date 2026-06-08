@@ -22,11 +22,20 @@ from ..domain.models import KieTaskCreated, KieUploadResult, VoiceSettings
 
 DEFAULT_UPLOAD_PATH: Final[str] = "images/avatar-models"
 DEFAULT_TTS_MODEL: Final[str] = "elevenlabs/text-to-speech-multilingual-v2"
-DEFAULT_TTS_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-v2-5"
+DEFAULT_TTS_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 DEFAULT_AVATAR_MODEL: Final[str] = "kling/ai-avatar-pro"
 DEFAULT_NANO_BANANA_MODEL: Final[str] = "nano-banana-2"
-DEFAULT_I2V_MODEL: Final[str] = "kling-2.6/image-to-video"
+# Modelo de b-roll del workflow automation. Migramos de `kling-2.6/image-to-video`
+# a `kling-3.0/video` (2026-06-06) porque 3.0 ofrece:
+#  - Duración 3-15s (vs solo 5 o 10 en 2.6)
+#  - Aspect ratio configurable (16:9 / 9:16 / 1:1)
+#  - Modos std / pro / 4K
+#  - Sound effects nativos generados por la IA (`sound: true`)
+# Spec: https://docs.kie.ai/market/kling/kling-3-0
+DEFAULT_I2V_MODEL: Final[str] = "kling-3.0/video"
 DEFAULT_I2V_DURATION: Final[int] = 5
+DEFAULT_I2V_MODE: Final[str] = "pro"
+DEFAULT_I2V_ASPECT_RATIO: Final[str] = "16:9"
 
 _DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
 _MAX_RETRIES: Final[int] = 3
@@ -87,10 +96,15 @@ class KieClient:
             data={"uploadPath": upload_path, "fileName": name},
         )
         data = self._extract_data(payload)
+        raw_download_url = data["downloadUrl"]
+        # Sanitizar URL codificando espacios a %20 para que sea una URL HTTP
+        # bien formada (sin espacios internos) y no falle la validación de
+        # `validate_http_url` en domain/policies.py.
+        download_url = raw_download_url.replace(" ", "%20") if raw_download_url else ""
         return KieUploadResult(
             file_name=data["fileName"],
             file_path=data["filePath"],
-            download_url=data["downloadUrl"],
+            download_url=download_url,
             file_size=data.get("fileSize", 0),
             mime_type=data.get("mimeType", "application/octet-stream"),
         )
@@ -105,19 +119,31 @@ class KieClient:
     ) -> KieTaskCreated:
         """POST /api/v1/jobs/createTask — crea task de TTS ElevenLabs.
 
-        Si `model` es `None`, usa `DEFAULT_TTS_MODEL`
-        (`elevenlabs/text-to-speech-multilingual-v2`).
+        Si `model` es `None` o `elevenlabs/text-to-speech-turbo-2-5`, usa
+        `DEFAULT_TTS_MODEL` (`elevenlabs/text-to-speech-multilingual-v2`).
+        Se fuerza el modelo multilingual-v2 por requerimiento del usuario,
+        evitando el turbo que es propenso a errores 500 del backend de Kie.
 
-        Si `voice_settings` es `None`, no se envía ningún ajuste extra: Kie
-        aplica los defaults documentados (stability=0.5, similarity_boost=0.75,
-        style=0, speed=1). Si se pasa, los campos no-None se mergean **planos
-        dentro de `input`** (no anidados bajo `voice_settings`): ese es el
-        shape real que documenta el OpenAPI spec del endpoint TTS de Kie.
+        Si `voice_settings` es `None`, no se envía ningún ajuste extra. Si
+        se pasa, los campos no-None se mergean planos dentro de `input`.
+        Si el modelo resultante es multilingual-v2, se quita el parámetro
+        `language_code` para evitar un error 422 de Kie (ese modelo no lo
+        soporta).
         """
-        chosen_model = model or DEFAULT_TTS_MODEL
+        requested_model = model or DEFAULT_TTS_MODEL
+        # Enforzar siempre multilingual-v2 si se solicitó el turbo
+        chosen_model = (
+            DEFAULT_TTS_MODEL if requested_model == DEFAULT_TTS_TURBO_MODEL else requested_model
+        )
+
         body_input: dict[str, Any] = {"text": text, "voice": voice}
         if voice_settings is not None:
-            body_input.update(voice_settings.model_dump(exclude_none=True))
+            settings_dict = voice_settings.model_dump(exclude_none=True)
+            # El modelo multilingual v2 no acepta language_code (da 422 si se manda)
+            if chosen_model == DEFAULT_TTS_MODEL:
+                settings_dict.pop("language_code", None)
+            body_input.update(settings_dict)
+
         body = {"model": chosen_model, "input": body_input}
         return await self._create_task(body)
 
@@ -177,23 +203,42 @@ class KieClient:
         *,
         model: str = DEFAULT_I2V_MODEL,
         duration: int = DEFAULT_I2V_DURATION,
+        sound: bool = False,
+        mode: str = DEFAULT_I2V_MODE,
+        aspect_ratio: str = DEFAULT_I2V_ASPECT_RATIO,
     ) -> KieTaskCreated:
-        """POST /api/v1/jobs/createTask — crea task de Kling 2.6 image-to-video.
+        """POST /api/v1/jobs/createTask — crea task de Kling 3.0 image-to-video.
 
         Endpoint usado para los b-roll del workflow automation: convierte una
-        imagen estática en un video silencioso (no acepta audio_url, a
-        diferencia de `kling/ai-avatar-pro`). La duración estándar es 5s o
-        10s; validamos en `domain.policies.validate_i2v_duration`.
+        imagen estática en un video (con o sin sound effects ambientales).
 
-        El cliente NO valida `duration` ni el formato de `image_url` (eso lo
-        hace el domain antes de llamar). Mantiene CR-2.1: KieClient = solo HTTP.
+        El cliente NO valida `duration`/`mode`/`aspect_ratio` (eso lo hace el
+        domain antes de llamar). Mantiene CR-2.1: KieClient = solo HTTP.
+
+        **Shape del input según docs.kie.ai/market/kling/kling-3-0**:
+        - `image_urls`: array (incluso para 1 imagen).
+        - `duration`: string enum "3"-"15" (NO int).
+        - `sound`: bool. `true` = Kling genera sound effects ambientales nativos
+          basados en el prompt (no es voiceover hablado). `false` = video
+          silencioso (el TTS aparte se monta en post si hay text).
+        - `mode`: enum `std` (720p) / `pro` (1080p) / `4K` (2160p).
+        - `aspect_ratio`: enum `16:9` / `9:16` / `1:1`.
+        - `multi_shots`: false fijo (single-shot, no exponemos multi-shot todavía).
+        - `multi_prompt`: array vacío fijo (solo aplica a multi_shots=true).
+        - `kling_elements`: array vacío fijo (no exponemos element references).
         """
         body = {
             "model": model,
             "input": {
-                "image_url": image_url,
                 "prompt": prompt,
-                "duration": duration,
+                "image_urls": [image_url],
+                "sound": sound,
+                "duration": str(duration),
+                "aspect_ratio": aspect_ratio,
+                "mode": mode,
+                "multi_shots": False,
+                "multi_prompt": [],
+                "kling_elements": [],
             },
         }
         return await self._create_task(body)
