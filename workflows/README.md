@@ -139,6 +139,7 @@ actual de Kie antes de ejecutar.
 
 ## Ejemplo completo
 
-Ver `workflows/example_video_creation_automation.json` para un workflow
-realista de 7 steps (4 a-rolls + 3 b-rolls) basado en el caso de uso
-canónico de probiótico/digestivo.
+Ver `workflows/example_product_promo.json` para un workflow realista que
+promociona un producto: un a-roll (la modelo hablando mientras sostiene el
+producto) + un b-roll (el producto en una escena nueva), con
+`promote_product: true` e `include_product: true` por step.
