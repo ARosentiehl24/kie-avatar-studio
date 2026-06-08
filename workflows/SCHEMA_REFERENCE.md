@@ -73,7 +73,7 @@ Modelos TTS de Kie soportados:
 ```jsonc
 {
   "method": "prompt",
-  "prompt": "<string max 20000 chars; descripción de la modelo>",
+  "prompt": "<string max 5000 chars; descripción de la modelo>",
   "reference_image": null    // reservado, no implementado
 }
 ```
@@ -81,7 +81,7 @@ Modelos TTS de Kie soportados:
 | Campo | Tipo | Notas |
 |---|---|---|
 | `method` | string | Debe ser `"prompt"` |
-| `prompt` | string | Requerido, no vacío, máx 20000 chars (límite Nano Banana 2) |
+| `prompt` | string | Requerido, no vacío, máx 5000 chars (siguiendo las directrices del proyecto) |
 | `reference_image` | null | Reservado para futuro (sub-prompt con imagen) |
 
 Cuando encolás: se abre el modal `PreviewBaseImageScreen` donde podés
@@ -622,7 +622,7 @@ Total Kie: 7 llamadas (0 base + 2 scene + 2 TTS + 2 Avatar Pro + 1 Kling i2v).
 > - `step.step` consecutivo desde 1.
 > - a-roll: `text` obligatorio no vacío.
 > - b-roll: `duration_seconds` entero 3-15 o null.
-> - prompts no superan los límites de chars (5000 a-roll, 2500 b-roll, 20000 base).
+> - prompts no superan los límites de chars (5000 a-roll, 2500 b-roll, 5000 base).
 > - producto: si el guion promociona un producto, poné `pre_settings.promote_product: true`
 >   y en cada step que lo muestre `include_product: true` + un `product_prompt` (la foto
 >   del producto la elige el usuario en la UI, NO va en el JSON).
@@ -652,7 +652,7 @@ elegí UNO de los 3 bloques (`prompt` / `local` / `catalog`).
     "image_aspect_ratio": "<string \"auto\" | \"1:1\" | \"9:16\" | \"16:9\" | ... · default \"auto\" · aspect ratio global para todas las imágenes generadas por Nano Banana 2>",
     "model_creation": {
       "method": "prompt",
-      "prompt": "<string 1-20000 chars · descripción de la modelo (estilo, edad, vestimenta, fondo, lighting, cámara) · SOLO si method=prompt>",
+      "prompt": "<string 1-5000 chars · descripción de la modelo (estilo, edad, vestimenta, fondo, lighting, cámara) · SOLO si method=prompt>",
 
       "// método 2 (local)": "method=\"local\" + local_path=\"<path absoluto a .jpg/.png <=10MB | \\\"\\\" para que la UI abra file picker>\"",
       "// método 3 (catalog)": "method=\"catalog\" + asset_kind=\"<uploaded | generated>\" + asset_id=\"<id interno de la DB, ej. img_20260606_233843_c1121e>\""

@@ -94,8 +94,8 @@
         "prompt": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 20000,
-          "description": "Descripción de la modelo. Recomendado: estilo, edad, vestimenta, fondo, lighting, cámara. Límite de Nano Banana 2: 20000 chars (mucho más generoso que el prompt de a-roll/b-roll)."
+          "maxLength": 5000,
+          "description": "Descripción de la modelo. Recomendado: estilo, edad, vestimenta, fondo, lighting, cámara. Máximo 5000 chars (siguiendo las directrices del proyecto)."
         },
         "reference_image": {
           "description": "Reservado, no implementado todavía. Dejar null.",

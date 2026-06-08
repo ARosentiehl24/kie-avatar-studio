@@ -45,11 +45,11 @@ MAX_AUDIO_BYTES: Final[int] = 100 * _BYTES_PER_MB
 MAX_AUDIO_SECONDS: Final[int] = 5 * 60
 
 # Restricciones del endpoint Nano Banana 2 (`docs.kie.ai/market/google/nanobanana2`).
-# El prompt admite hasta 20.000 chars (mucho más generoso que el de avatar/TTS)
+# El prompt admite hasta 5000 chars (siguiendo las directrices del proyecto)
 # y la API acepta hasta 14 refs como `image_input` (cada una debe ser una URL
 # pública, jpg/png/webp ≤ 30 MB). Validamos cantidad y forma de las URLs;
 # el tamaño y mimetype reales los enforcea Kie al consumir la URL.
-MAX_IMAGE_PROMPT_CHARS: Final[int] = 20000
+MAX_IMAGE_PROMPT_CHARS: Final[int] = 5000
 MAX_IMAGE_REFS: Final[int] = 14
 
 # Enums del input del endpoint. Mantenemos el orden del spec para que la UI
@@ -780,21 +780,27 @@ def _validate_step_text_per_type(step: WorkflowStep) -> None:
 
 
 def _validate_workflow_step_progress(step: WorkflowStep) -> None:
-    """Valida que `step.progress` tenga las keys correctas para `step.type`.
+    """Valida que `step.progress` tenga exactamente las keys esperadas para `step.type`.
 
     Si `progress` está vacío, no chequea nada (default freshly-created).
-    Si tiene keys, deben ser un subset de las esperadas para el tipo —
-    sino indica corrupción/inconsistencia.
+    Si tiene keys, deben coincidir exactamente con el set de keys esperadas;
+    cualquier discrepancia (keys faltantes o sobrantes) indica corrupción.
     """
     if not step.progress:
         return
     expected_keys = _expected_progress_keys(step)
     actual_keys = set(step.progress.keys())
-    unexpected = actual_keys - expected_keys
-    if unexpected:
+    if actual_keys != expected_keys:
+        missing = expected_keys - actual_keys
+        unexpected = actual_keys - expected_keys
+        reasons = []
+        if missing:
+            reasons.append(f"faltan: {sorted(k.value for k in missing)}")
+        if unexpected:
+            reasons.append(f"sobran: {sorted(k.value for k in unexpected)}")
         raise WorkflowStepValidationError(
-            f"step {step.step}: progress tiene keys inválidas para tipo "
-            f"{step.type.value}: {sorted(k.value for k in unexpected)}"
+            f"step {step.step}: progress inválido para tipo {step.type.value}. "
+            f"{'; '.join(reasons)}"
         )
 
 

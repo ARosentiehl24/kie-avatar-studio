@@ -211,7 +211,7 @@ class TestValidateWorkflowStep:
         # A-roll NO usa DOWNLOAD_VIDEO/DOWNLOAD_AUDIO (esas son de b-roll con text).
         step = _make_step()
         step.progress[WorkflowProgressKey.DOWNLOAD_VIDEO] = WorkflowProgressStatus.PENDING
-        with pytest.raises(WorkflowStepValidationError, match="progress tiene keys inválidas"):
+        with pytest.raises(WorkflowStepValidationError, match="progress inválido para tipo"):
             validate_workflow_step(step)
 
 
