@@ -101,8 +101,8 @@ async def test_audios_screen_buttons_render_with_labels(tmp_path: Path) -> None:
         await pilot.pause()
         for btn_id, expected in (
             ("aud-generate", "Generar"),
-            ("aud-listen", "🔊 Escuchar"),
-            ("aud-stop", "⏹  Detener"),
+            ("aud-listen", "Escuchar"),
+            ("aud-stop", "Detener"),
             ("aud-copy-url", "Copiar URL"),
             ("aud-cancel-job", "Cancelar job"),
             ("aud-retry", "Reintentar"),
@@ -127,8 +127,21 @@ async def test_table_does_not_render_clickable_url(tmp_path: Path) -> None:
             assert "%E2%80%A6" not in value
 
 
-async def test_handle_listen_uses_audio_player_with_clipboard_backup(tmp_path: Path) -> None:
-    """El botón Escuchar invoca audio_player.play_audio y copia la URL al clipboard."""
+async def test_handle_listen_uses_audio_player_with_clipboard_backup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """El botón Escuchar invoca audio_player.play_audio y copia la URL al clipboard.
+
+    Tras el refactor multi-backend de `app_layer.clipboard`, el
+    `osc52_fallback` (= `app.copy_to_clipboard`) SOLO se invoca si
+    todos los backends del SO fallaron primero. En CI/Windows con
+    `clip.exe` disponible, ese backend triunfa antes y el mock nunca
+    se llama. Forzamos el path OSC 52 vaciando la tabla de backends.
+    """
+    from kie_avatar_studio.app_layer import clipboard as cb_module
+
+    monkeypatch.setattr(cb_module, "_SYSTEM_BACKENDS", ())
+
     app = _build_app(tmp_path)
     play_calls: list[str] = []
     clipboard_calls: list[str] = []
@@ -179,7 +192,17 @@ async def test_handle_stop_invokes_audio_player_stop(tmp_path: Path) -> None:
     assert click_stop_calls == [True]
 
 
-async def test_handle_copy_url_copies_to_clipboard(tmp_path: Path) -> None:
+async def test_handle_copy_url_copies_to_clipboard(tmp_path: Path, monkeypatch) -> None:
+    """Verifica que 'Copiar URL' termina invocando el clipboard del sistema.
+
+    Forzamos el path OSC 52 (mismo motivo que `test_handle_listen_*`):
+    en plataformas con backend del SO disponible, el `osc52_fallback`
+    no se llama y el mock queda vacío.
+    """
+    from kie_avatar_studio.app_layer import clipboard as cb_module
+
+    monkeypatch.setattr(cb_module, "_SYSTEM_BACKENDS", ())
+
     app = _build_app(tmp_path)
     clipboard_calls: list[str] = []
 

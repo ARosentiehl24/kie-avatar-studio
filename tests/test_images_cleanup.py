@@ -190,13 +190,17 @@ async def test_get_for_use_expired_message_includes_label(store: ImagesDB, tmp_s
 
 
 def test_format_time_left_renderiza_horas_y_minutos() -> None:
-    """Con retención de 24h, el formato típico es 'Xh Ym'."""
-    from kie_avatar_studio.ui.screens.images import _format_time_left
+    """Con retención de 24h, el formato típico es 'Xh Ym'.
 
-    assert _format_time_left(timedelta(hours=2, minutes=30)) == "2h 30m"
-    assert _format_time_left(timedelta(hours=23, minutes=15)) == "23h 15m"
-    assert _format_time_left(timedelta(seconds=0)) == "EXPIRADO"
-    assert _format_time_left(timedelta(hours=-1)) == "EXPIRADO"
+    `format_time_left` ahora vive en `ui/screens/_image_format.py`
+    (extraído de `images.py` por CR-3.2).
+    """
+    from kie_avatar_studio.ui.screens._image_format import format_time_left
+
+    assert format_time_left(timedelta(hours=2, minutes=30)) == "2h 30m"
+    assert format_time_left(timedelta(hours=23, minutes=15)) == "23h 15m"
+    assert format_time_left(timedelta(seconds=0)) == "EXPIRADO"
+    assert format_time_left(timedelta(hours=-1)) == "EXPIRADO"
     # Backwards compat: si por algún motivo se pasa >1 día, sigue
     # formateando "Xd Yh" (test_audios usa el mismo helper).
-    assert _format_time_left(timedelta(days=12, hours=4)) == "12d 4h"
+    assert format_time_left(timedelta(days=12, hours=4)) == "12d 4h"

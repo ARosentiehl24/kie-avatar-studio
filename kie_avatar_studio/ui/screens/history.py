@@ -1,4 +1,4 @@
-"""Pantalla `Historial`: vista unificada de video jobs + audio jobs.
+"""Pantalla `Historial`: vista unificada de video + audio + image jobs.
 
 Solo dispatch + render (CR-10.1). Recibe `HistoryController` que abstrae
 ambos tipos de job detrás de `HistoryEntry`. La pantalla es **read-only**:
@@ -16,7 +16,6 @@ hay muchos jobs y solo interesa una clase.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
 from typing import ClassVar, Final
 
 from textual.app import ComposeResult
@@ -28,8 +27,15 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from ...app_layer.history_controller import HistoryController
 from ...domain.events import TERMINAL_HISTORY_STATUS_VALUES, HistoryEntry, JobKind
-from ...domain.models import AudioJobStatus, JobStatus
-from .._status_badges import AUDIO_STATUS_BADGES, BASE_STATUS_BADGES, VIDEO_STATUS_BADGES
+from ...domain.models import AudioJobStatus, ImageJobStatus, JobStatus
+from .._counters import format_full_counters
+from .._status_badges import (
+    AUDIO_STATUS_BADGES,
+    BASE_STATUS_BADGES,
+    IMAGE_STATUS_BADGES,
+    KIND_BADGES,
+    VIDEO_STATUS_BADGES,
+)
 from .._table_helpers import get_selected_row_key, select_row_by_key
 from .._text_format import truncate as _truncate
 
@@ -44,26 +50,22 @@ _TABLE_COLUMNS: Final[tuple[str, ...]] = (
     "Creado",
 )
 
-# Iconos por tipo de job para escaneo rápido en la primera columna.
-_KIND_ICONS: Final[dict[JobKind, str]] = {
-    "video": "🎬 Video",
-    "audio": "🔊 Audio",
-}
-
 # Renders de status: combinamos los compartidos (BASE) + los específicos
-# de cada tipo. La pantalla de Historial muestra ambos kinds, así que
-# necesita todos.
+# de cada tipo. La pantalla de Historial muestra los tres kinds, así
+# que necesita todos.
 _STATUS_BADGES: Final[dict[str, str]] = {
     **BASE_STATUS_BADGES,
     **VIDEO_STATUS_BADGES,
     **AUDIO_STATUS_BADGES,
+    **IMAGE_STATUS_BADGES,
 }
 
 # Filtros de tipo: id → predicado sobre `HistoryEntry.kind`.
 _KIND_FILTERS: Final[dict[str, frozenset[JobKind]]] = {
-    "hist-filter-all": frozenset({"video", "audio"}),
+    "hist-filter-all": frozenset({"video", "audio", "image"}),
     "hist-filter-video": frozenset({"video"}),
     "hist-filter-audio": frozenset({"audio"}),
+    "hist-filter-image": frozenset({"image"}),
 }
 
 
@@ -86,7 +88,7 @@ class HistoryScreen(Screen[None]):
         super().__init__()
         self._controller = controller
         self._unsubscribe: Callable[[], None] | None = None
-        self._kind_filter: frozenset[JobKind] = frozenset({"video", "audio"})
+        self._kind_filter: frozenset[JobKind] = frozenset({"video", "audio", "image"})
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -95,8 +97,9 @@ class HistoryScreen(Screen[None]):
             yield Static(_format_summary(0, 0, 0, 0, 0), id="history-summary")
             with Horizontal(classes="actions-row actions-row-keys", id="history-filters"):
                 yield Button("Todos", id="hist-filter-all", variant="primary", classes="btn-filter")
-                yield Button("🎬 Solo video", id="hist-filter-video", classes="btn-filter")
-                yield Button("🔊 Solo audio", id="hist-filter-audio", classes="btn-filter")
+                yield Button("Solo video", id="hist-filter-video", classes="btn-filter")
+                yield Button("Solo audio", id="hist-filter-audio", classes="btn-filter")
+                yield Button("Solo imagen", id="hist-filter-image", classes="btn-filter")
                 yield Button("Refrescar", id="hist-refresh", classes="btn-info")
             table: DataTable[str] = DataTable(
                 id="history-table", cursor_type="row", zebra_stripes=True
@@ -159,7 +162,7 @@ class HistoryScreen(Screen[None]):
         table.clear()
         for entry in filtered:
             table.add_row(
-                _KIND_ICONS[entry.kind],
+                KIND_BADGES[entry.kind],
                 _STATUS_BADGES.get(entry.status_value, entry.status_value),
                 _truncate(entry.label, _DETAIL_PREVIEW_LEN),
                 _truncate(entry.detail, _DETAIL_PREVIEW_LEN),
@@ -185,50 +188,37 @@ class HistoryScreen(Screen[None]):
 
 def _compute_summary(entries: list[HistoryEntry]) -> tuple[int, int, int, int, int]:
     """Cuenta (total, activos, en_cola, listos, fallidos)."""
+    queued_values = (
+        JobStatus.QUEUED.value,
+        AudioJobStatus.QUEUED.value,
+        ImageJobStatus.QUEUED.value,
+    )
+    completed_values = (
+        JobStatus.COMPLETED.value,
+        AudioJobStatus.COMPLETED.value,
+        ImageJobStatus.COMPLETED.value,
+    )
+    failed_values = (
+        JobStatus.FAILED.value,
+        JobStatus.CANCELLED.value,
+        AudioJobStatus.FAILED.value,
+        AudioJobStatus.CANCELLED.value,
+        ImageJobStatus.FAILED.value,
+        ImageJobStatus.CANCELLED.value,
+    )
     total = len(entries)
     active = sum(
         1
         for e in entries
         if e.status_value not in TERMINAL_HISTORY_STATUS_VALUES
-        and e.status_value not in (JobStatus.QUEUED.value, AudioJobStatus.QUEUED.value)
+        and e.status_value not in queued_values
     )
-    queued = sum(
-        1
-        for e in entries
-        if e.status_value in (JobStatus.QUEUED.value, AudioJobStatus.QUEUED.value)
-    )
-    done = sum(
-        1
-        for e in entries
-        if e.status_value in (JobStatus.COMPLETED.value, AudioJobStatus.COMPLETED.value)
-    )
-    failed = sum(
-        1
-        for e in entries
-        if e.status_value
-        in (
-            JobStatus.FAILED.value,
-            JobStatus.CANCELLED.value,
-            AudioJobStatus.FAILED.value,
-            AudioJobStatus.CANCELLED.value,
-        )
-    )
+    queued = sum(1 for e in entries if e.status_value in queued_values)
+    done = sum(1 for e in entries if e.status_value in completed_values)
+    failed = sum(1 for e in entries if e.status_value in failed_values)
     return total, active, queued, done, failed
 
 
 def _format_summary(total: int, active: int, queued: int, done: int, failed: int) -> str:
-    """Render del header de contadores del historial."""
-    return (
-        f"[bold]Total {total}[/bold]  ·  "
-        f"[cyan]🔄 {active} activos[/cyan]  ·  "
-        f"[yellow]⏳ {queued} en cola[/yellow]  ·  "
-        f"[green]✓ {done} listos[/green]  ·  "
-        f"[red]✖ {failed} fallidos[/red]"
-    )
-
-
-# Helper para detectar timestamps de test (no usado en runtime, pero
-# disponible si la screen necesita formatear timestamps relativos).
-def _is_recent(when: datetime, max_age_seconds: int = 60) -> bool:
-    delta = datetime.now(when.tzinfo) - when
-    return delta.total_seconds() <= max_age_seconds
+    """Wrapper sobre `ui._counters.format_full_counters`."""
+    return format_full_counters(total, active, queued, done, failed, active_label="activos")

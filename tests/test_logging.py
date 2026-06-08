@@ -33,7 +33,7 @@ def test_configure_logging_writes_to_file(tmp_path: Path) -> None:
     configure_logging(tmp_path, "INFO", tui_mode=True)
     logger.info("mensaje de prueba 42")
     _flush_loguru()
-    content = (tmp_path / LOG_FILE_NAME).read_text()
+    content = (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8")
     assert "mensaje de prueba 42" in content
 
 
@@ -44,7 +44,7 @@ def test_configure_logging_captures_exception_with_traceback(tmp_path: Path) -> 
     except ValueError:
         logger.exception("falló algo")
     _flush_loguru()
-    content = (tmp_path / LOG_FILE_NAME).read_text()
+    content = (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8")
     assert "falló algo" in content
     assert "ValueError" in content
     assert "explosión controlada" in content
@@ -55,7 +55,7 @@ def test_bridge_stdlib_logging_redirects_to_loguru(tmp_path: Path) -> None:
     bridge_stdlib_logging("INFO")
     logging.getLogger("test.bridge").error("mensaje desde logging stdlib")
     _flush_loguru()
-    content = (tmp_path / LOG_FILE_NAME).read_text()
+    content = (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8")
     assert "mensaje desde logging stdlib" in content
 
 
@@ -73,7 +73,7 @@ async def test_install_asyncio_exception_handler_logs_orphan(tmp_path: Path) -> 
             {"message": "Task exception was never retrieved", "exception": exc}
         )
     _flush_loguru()
-    content = (tmp_path / LOG_FILE_NAME).read_text()
+    content = (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8")
     assert "task huérfana" in content
     assert "RuntimeError" in content
 

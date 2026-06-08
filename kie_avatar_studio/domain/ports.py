@@ -15,6 +15,9 @@ from .models import (
     AudioJob,
     AudioJobStatus,
     GeneratedAudio,
+    GeneratedImage,
+    ImageJob,
+    ImageJobStatus,
     JobStatus,
     KieKey,
     KieTaskCreated,
@@ -104,6 +107,16 @@ class KieGateway(Protocol):
 
     async def create_avatar_task(
         self, image_url: str, audio_url: str, prompt: str
+    ) -> KieTaskCreated: ...
+
+    async def create_nano_banana_task(
+        self,
+        prompt: str,
+        *,
+        image_input: list[str] | None = ...,
+        aspect_ratio: str = ...,
+        resolution: str = ...,
+        output_format: str = ...,
     ) -> KieTaskCreated: ...
 
     async def get_task_detail(self, task_id: str) -> dict[str, Any]: ...
@@ -228,6 +241,51 @@ class AudioStore(Protocol):
     async def delete(self, audio_id: str) -> None: ...
 
     async def delete_many(self, audio_ids: list[str]) -> None: ...
+
+
+@runtime_checkable
+class ImageJobRepository(Protocol):
+    """Persistencia de `ImageJob`. Implementado por `infra.image_jobs_db.ImageJobsDB`.
+
+    Espejo de `AudioJobRepository`. Misma `data/jobs.db`, conexión por
+    operación con WAL. La política de qué status restaurar al arrancar
+    vive en `IMAGE_RESUMABLE_STATUSES` (`domain.models`); el composition
+    root itera esos status y llama `list_by_status` para cada uno
+    (mismo patrón que video y audio).
+    """
+
+    async def init(self) -> None: ...
+
+    async def upsert(self, job: ImageJob) -> None: ...
+
+    async def get(self, job_id: str) -> ImageJob | None: ...
+
+    async def list_recent(self, limit: int = 50) -> list[ImageJob]: ...
+
+    async def list_by_status(self, status: ImageJobStatus) -> list[ImageJob]: ...
+
+    async def delete(self, job_id: str) -> None: ...
+
+
+@runtime_checkable
+class GeneratedImageStore(Protocol):
+    """Persistencia de `GeneratedImage`. Implementado por `infra.generated_images_db.GeneratedImagesDB`.
+
+    Mismo patrón que `AudioStore`. `delete_many` se usa al limpiar
+    expirados al arrancar la app para no abrir N conexiones aiosqlite.
+    """
+
+    async def init(self) -> None: ...
+
+    async def list_recent(self, limit: int = 100) -> list[GeneratedImage]: ...
+
+    async def get(self, image_id: str) -> GeneratedImage | None: ...
+
+    async def upsert(self, image: GeneratedImage) -> None: ...
+
+    async def delete(self, image_id: str) -> None: ...
+
+    async def delete_many(self, image_ids: list[str]) -> None: ...
 
 
 @runtime_checkable

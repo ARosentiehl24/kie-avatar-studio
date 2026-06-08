@@ -26,6 +26,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 from ...app_layer.batch_controller import BatchController
 from ...domain.kie_voice_catalog import get_builtin_voice
 from ...domain.models import BatchEntry
+from .._icons import ERROR, OK
 from .._table_helpers import get_selected_row_key, select_row_by_key
 from .._text_format import truncate
 
@@ -124,7 +125,7 @@ class BatchScreen(Screen[None]):
         if result.skipped_invalid:
             parts.append(f"{result.skipped_invalid} inválidos omitidos")
         summary = " · ".join(parts) if parts else "nada por hacer"
-        self._set_status(f"✓ Lote procesado: {summary}", error=bool(result.errors))
+        self._set_status(f"{OK} Lote procesado: {summary}", error=bool(result.errors))
         if result.errors:
             preview = "; ".join(f"{name}: {err}" for name, err in result.errors[:3])
             self.notify(
@@ -140,16 +141,16 @@ class BatchScreen(Screen[None]):
             return
         if not entry.valid:
             self._set_status(
-                f"✖ '{entry.name}' tiene errores: {'; '.join(entry.errors)}",
+                f"{ERROR} '{entry.name}' tiene errores: {'; '.join(entry.errors)}",
                 error=True,
             )
             return
         try:
             job = await self._controller.enqueue_entry(entry)
         except Exception as exc:
-            self._set_status(f"✖ no pude encolar '{entry.name}': {exc}", error=True)
+            self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
             return
-        self._set_status(f"✓ '{entry.name}' encolado (job {job.id[:8]})")
+        self._set_status(f"{OK} '{entry.name}' encolado (job {job.id[:8]})")
 
     # --- helpers ----------------------------------------------------------
 
@@ -163,11 +164,11 @@ class BatchScreen(Screen[None]):
         for entry in entries:
             if entry.valid:
                 valid_count += 1
-                status_cell = "[green]✓ listo[/green]"
+                status_cell = f"[green]{OK} listo[/green]"
                 details_cell = "—"
             else:
                 invalid_count += 1
-                status_cell = "[red]✖ error[/red]"
+                status_cell = f"[red]{ERROR} error[/red]"
                 details_cell = (
                     f"[red]{truncate('; '.join(entry.errors), _ERRORS_PREVIEW_LEN)}[/red]"
                 )

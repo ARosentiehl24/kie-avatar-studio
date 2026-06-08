@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from kie_avatar_studio.app_layer.batch_controller import BatchController, BatchEnqueueResult
+from kie_avatar_studio.app_layer.image_catalog_controller import ImageCatalogController
 from kie_avatar_studio.app_layer.queue_manager import QueueManager
 from kie_avatar_studio.app_layer.video_job_lifecycle import VideoJobLifecycle
 from kie_avatar_studio.app_layer.videos_controller import VideosController
@@ -21,6 +22,7 @@ from kie_avatar_studio.domain.events import JobUpdated
 from kie_avatar_studio.domain.models import BatchEntry, JobStatus, VideoJob
 from kie_avatar_studio.infra.audios_db import AudiosDB
 from kie_avatar_studio.infra.db import JobsDB
+from kie_avatar_studio.infra.generated_images_db import GeneratedImagesDB
 from kie_avatar_studio.infra.images_db import ImagesDB
 
 
@@ -46,15 +48,18 @@ async def videos_controller(tmp_settings, tmp_path) -> VideosController:
     await repo.init()
     images = ImagesDB(tmp_path / "jobs.db")
     await images.init()
+    generated_images = GeneratedImagesDB(tmp_path / "jobs.db")
+    await generated_images.init()
     audios = AudiosDB(tmp_path / "jobs.db")
     await audios.init()
+    catalog = ImageCatalogController(images, generated_images)
     queue: QueueManager[VideoJob, JobUpdated] = QueueManager(
         tmp_settings,
         _RecordingRunner(),
         event_factory=JobUpdated,
         lifecycle=VideoJobLifecycle(repo),
     )
-    return VideosController(repo, images, audios, queue)
+    return VideosController(repo, catalog, audios, queue)
 
 
 def _valid_entry(name: str, tmp_path: Path) -> BatchEntry:

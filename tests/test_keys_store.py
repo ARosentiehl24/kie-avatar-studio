@@ -1,5 +1,6 @@
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,15 @@ import pytest
 from kie_avatar_studio.domain.errors import KeyNotFoundError
 from kie_avatar_studio.domain.models import KieKey
 from kie_avatar_studio.infra.keys_store import KEYS_FILE_NAME, KeysStore
+
+# `chmod 0o600` solo es significativo en Unix-like. Windows NTFS no
+# expone bits POSIX vía `os.chmod` — siempre devuelve `0o666` para
+# archivos legibles. La seguridad real en Windows pasa por ACLs y eso
+# no se testea acá. Skip los tests de permisos en esa plataforma.
+_REQUIRES_POSIX = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod 0o600 no aplica en Windows NTFS (devuelve siempre 0o666)",
+)
 
 
 @pytest.fixture
@@ -28,6 +38,7 @@ async def test_init_creates_empty_file(tmp_path: Path) -> None:
     assert payload == {"active_key_id": None, "keys": []}
 
 
+@_REQUIRES_POSIX
 async def test_init_applies_0600(tmp_path: Path) -> None:
     s = KeysStore(tmp_path / KEYS_FILE_NAME)
     await s.init()
@@ -113,6 +124,7 @@ async def test_active_persists_across_instances(tmp_path: Path) -> None:
     assert active.id == "dev"
 
 
+@_REQUIRES_POSIX
 async def test_chmod_0600_preserved_after_upsert(tmp_path: Path) -> None:
     path = tmp_path / KEYS_FILE_NAME
     s = KeysStore(path)

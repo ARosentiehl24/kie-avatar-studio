@@ -20,7 +20,11 @@ from .app_layer.audio_job_runner import AudioJobRunner
 from .app_layer.audio_player import AudioPlayer
 from .app_layer.audios_controller import AudiosController
 from .app_layer.batch_controller import BatchController
+from .app_layer.generated_images_controller import GeneratedImagesController
 from .app_layer.history_controller import HistoryController
+from .app_layer.image_catalog_controller import ImageCatalogController
+from .app_layer.image_job_lifecycle import ImageJobLifecycle
+from .app_layer.image_job_runner import ImageJobRunner
 from .app_layer.images_controller import ImagesController
 from .app_layer.job_runner import JobRunner
 from .app_layer.keys_controller import KeysController
@@ -34,15 +38,19 @@ from .app_layer.update_checker import UpdateChecker
 from .app_layer.video_job_lifecycle import VideoJobLifecycle
 from .app_layer.videos_controller import VideosController
 from .config import Settings, load_settings
-from .domain.events import AudioJobUpdated, JobUpdated
+from .domain.events import AudioJobUpdated, ImageJobUpdated, JobUpdated
 from .domain.models import (
     AUDIO_RESUMABLE_STATUSES,
+    IMAGE_RESUMABLE_STATUSES,
     RESUMABLE_STATUSES,
     AudioJob,
     AudioJobStatus,
     BatchEntry,
     GeneratedAudio,
+    GeneratedImage,
     GitHubRelease,
+    ImageJob,
+    ImageJobStatus,
     UploadedImage,
     VideoJob,
 )
@@ -53,7 +61,9 @@ from .infra.audios_db import AudiosDB
 from .infra.batch_loader import scan_batch_dir
 from .infra.db import JobsDB
 from .infra.env_writer import DotenvWriter
+from .infra.generated_images_db import GeneratedImagesDB
 from .infra.github_releases import get_latest_release
+from .infra.image_jobs_db import ImageJobsDB
 from .infra.images_db import ImagesDB
 from .infra.keys_store import KEYS_FILE_NAME, KeysStore
 from .infra.kie_client import KieClient
@@ -145,18 +155,21 @@ class KieAvatarStudioApp(App[None]):
         self.images_db = ImagesDB(self.settings.db_path)
         self.audios_db = AudiosDB(self.settings.db_path)
         self.audio_jobs_db = AudioJobsDB(self.settings.db_path)
+        self.image_jobs_db = ImageJobsDB(self.settings.db_path)
+        self.generated_images_db = GeneratedImagesDB(self.settings.db_path)
         self.presets_store = VoicePresetsStore(self.settings.presets_dir)
         self.keys_store = KeysStore(self.settings.data_dir / KEYS_FILE_NAME)
         self.env_writer = DotenvWriter(self.settings.data_dir.parent / _ENV_FILE_NAME)
         self.kie = self._build_kie_client()
         self.runner = JobRunner(self.settings, self.kie, self.db)
         # Lifecycle de VideoJob separado del QueueManager para que el queue
-        # sea type-agnostic (reutilizable con AudioJob en próxima etapa).
+        # sea type-agnostic (reutilizable con AudioJob/ImageJob).
         self.video_lifecycle = VideoJobLifecycle(self.db)
-        # Semáforo único compartido entre las dos colas: garantiza que el
-        # límite global `max_parallel_jobs` no se viole cuando hay video y
-        # audio corriendo en paralelo. Sin esto, cada queue tendría su
-        # propio contador y podríamos llegar al doble del límite real.
+        # Semáforo único compartido entre las tres colas: garantiza que el
+        # límite global `max_parallel_jobs` no se viole cuando hay video,
+        # audio e imagen corriendo en paralelo. Sin esto, cada queue
+        # tendría su propio contador y podríamos llegar al triple del
+        # límite real.
         self._capacity_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_jobs))
         self.queue: QueueManager[VideoJob, JobUpdated] = QueueManager(
             self.settings,
@@ -176,6 +189,21 @@ class KieAvatarStudioApp(App[None]):
             lifecycle=self.audio_lifecycle,
             capacity_limiter=self._capacity_limiter,
         )
+        self.image_lifecycle = ImageJobLifecycle(self.image_jobs_db)
+        self.image_runner = ImageJobRunner(
+            self.settings,
+            self.kie,
+            self.image_jobs_db,
+            self.generated_images_db,
+            self.images_db,
+        )
+        self.image_queue: QueueManager[ImageJob, ImageJobUpdated] = QueueManager(
+            self.settings,
+            self.image_runner,
+            event_factory=ImageJobUpdated,
+            lifecycle=self.image_lifecycle,
+            capacity_limiter=self._capacity_limiter,
+        )
         self.keys_controller = KeysController(self.keys_store, self._gateway_factory)
         self.settings_controller = SettingsController(self.settings, self.env_writer)
         self.images_controller = ImagesController(self.images_db, self.kie)
@@ -184,17 +212,25 @@ class KieAvatarStudioApp(App[None]):
             self.audio_jobs_db,
             self.audio_queue,
         )
+        self.generated_images_controller = GeneratedImagesController(
+            self.generated_images_db,
+            self.image_jobs_db,
+            self.image_queue,
+        )
+        self.image_catalog = ImageCatalogController(self.images_db, self.generated_images_db)
         self.videos_controller = VideosController(
             self.db,
-            self.images_db,
+            self.image_catalog,
             self.audios_db,
             self.queue,
         )
         self.history_controller = HistoryController(
             self.db,
             self.audio_jobs_db,
+            self.image_jobs_db,
             self.queue,
             self.audio_queue,
+            self.image_queue,
         )
         self.presets_controller = VoicePresetsController(self.presets_store)
         self.batch_controller = BatchController(
@@ -225,6 +261,7 @@ class KieAvatarStudioApp(App[None]):
         self._wire_background_workers()
         expired_images = await self.images_controller.cleanup_expired()
         expired_audios = await self.audios_controller.cleanup_expired()
+        expired_generated_images = await self.generated_images_controller.cleanup_expired()
 
         # `restore_pending` ahora recibe un loader callable (no el repo
         # directo): así el QueueManager no conoce JobRepository concreto.
@@ -250,13 +287,27 @@ class KieAvatarStudioApp(App[None]):
 
         recovered_audio = await self.audio_queue.restore_pending(load_resumable_audio_jobs)
 
+        # Mismo razonamiento que con audio: CREATING en image es estado
+        # indeterminado tras crash → FAILED para que el usuario decida.
+        await self._mark_creating_image_jobs_as_failed()
+
+        async def load_resumable_image_jobs() -> list[ImageJob]:
+            jobs: list[ImageJob] = []
+            for status in IMAGE_RESUMABLE_STATUSES:
+                jobs.extend(await self.image_jobs_db.list_by_status(status))
+            return jobs
+
+        recovered_image = await self.image_queue.restore_pending(load_resumable_image_jobs)
+
         screen = MainMenuScreen(on_select=self._handle_menu_selection)
         await self.push_screen(screen)
         self._notify_startup_summary(
             expired_images=expired_images,
             expired_audios=expired_audios,
+            expired_generated_images=expired_generated_images,
             recovered=recovered,
             recovered_audio=recovered_audio,
+            recovered_image=recovered_image,
         )
 
     async def _init_stores(self) -> None:
@@ -265,6 +316,8 @@ class KieAvatarStudioApp(App[None]):
         await self.images_db.init()
         await self.audios_db.init()
         await self.audio_jobs_db.init()
+        await self.image_jobs_db.init()
+        await self.generated_images_db.init()
         await self.presets_store.init()
         await self.keys_store.init()
 
@@ -284,6 +337,7 @@ class KieAvatarStudioApp(App[None]):
         """
         self.queue.add_listener(self.notification_bridge.on_video_event)
         self.audio_queue.add_listener(self.notification_bridge.on_audio_event)
+        self.image_queue.add_listener(self.notification_bridge.on_image_event)
         if self.settings.update_check_enabled:
             self.run_worker(self._check_for_update(), exclusive=True)
 
@@ -292,8 +346,10 @@ class KieAvatarStudioApp(App[None]):
         *,
         expired_images: list[UploadedImage],
         expired_audios: list[GeneratedAudio],
+        expired_generated_images: list[GeneratedImage],
         recovered: int,
         recovered_audio: int,
+        recovered_image: int,
     ) -> None:
         if expired_images:
             self.notify(
@@ -309,6 +365,13 @@ class KieAvatarStudioApp(App[None]):
                 title="Limpieza",
                 timeout=_NOTIFY_RECOVERY_TIMEOUT,
             )
+        if expired_generated_images:
+            self.notify(
+                f"Se quitaron {len(expired_generated_images)} imágenes generadas ya expiradas "
+                f"({self.generated_images_controller.retention_days}d en Kie).",
+                title="Limpieza",
+                timeout=_NOTIFY_RECOVERY_TIMEOUT,
+            )
         if recovered:
             self.notify(
                 f"Se reanudaron {recovered} jobs pendientes desde la última sesión.",
@@ -318,6 +381,12 @@ class KieAvatarStudioApp(App[None]):
         if recovered_audio:
             self.notify(
                 f"Se reanudaron {recovered_audio} audio jobs pendientes.",
+                title="Recuperación",
+                timeout=_NOTIFY_RECOVERY_TIMEOUT,
+            )
+        if recovered_image:
+            self.notify(
+                f"Se reanudaron {recovered_image} image jobs pendientes.",
                 title="Recuperación",
                 timeout=_NOTIFY_RECOVERY_TIMEOUT,
             )
@@ -345,10 +414,33 @@ class KieAvatarStudioApp(App[None]):
             )
             await self.audio_jobs_db.upsert(job)
 
+    async def _mark_creating_image_jobs_as_failed(self) -> None:
+        """Sanea image jobs que quedaron en CREATING tras un crash.
+
+        Mismo razonamiento que `_mark_creating_audio_jobs_as_failed`: sin
+        `task_id` persistido no podemos saber si el `createTask` de Kie
+        llegó a registrar el job. Reintentar a ciegas duplicaría créditos.
+        """
+        stuck = await self.image_jobs_db.list_by_status(ImageJobStatus.CREATING)
+        for job in stuck:
+            logger.warning(
+                "ImageJob {} ('{}') estaba en CREATING al arrancar; marcando FAILED "
+                "(estado indeterminado, posible crédito consumido)",
+                job.id,
+                job.label,
+            )
+            job.status = ImageJobStatus.FAILED
+            job.error = (
+                "Estado indeterminado al reiniciar: el task pudo o no haberse "
+                "creado en Kie. Verificá tu saldo antes de reintentar."
+            )
+            await self.image_jobs_db.upsert(job)
+
     async def on_unmount(self) -> None:
         await self.audio_player.stop()
         await self.queue.drain()
         await self.audio_queue.drain()
+        await self.image_queue.drain()
         await self.kie.aclose()
         logger.info("Kie Avatar Studio cerrado limpiamente")
 
@@ -399,7 +491,9 @@ class KieAvatarStudioApp(App[None]):
         if item.id == _IMAGES_ITEM_ID:
             self.push_screen(
                 ImagesScreen(
-                    controller=self.images_controller,
+                    uploads_controller=self.images_controller,
+                    generated_controller=self.generated_images_controller,
+                    image_catalog=self.image_catalog,
                     open_local_path=open_local_path,
                     open_url=open_url,
                     default_input_dir=self.settings.inputs_dir,
@@ -426,6 +520,7 @@ class KieAvatarStudioApp(App[None]):
                     history_controller=self.history_controller,
                     audios_controller=self.audios_controller,
                     videos_controller=self.videos_controller,
+                    generated_images_controller=self.generated_images_controller,
                 )
             )
             return
@@ -433,7 +528,7 @@ class KieAvatarStudioApp(App[None]):
             self.push_screen(
                 VideosScreen(
                     videos_controller=self.videos_controller,
-                    images_controller=self.images_controller,
+                    image_catalog=self.image_catalog,
                     audios_controller=self.audios_controller,
                     audio_player=self.audio_player,
                     open_local_path=open_local_path,
@@ -570,9 +665,9 @@ class KieAvatarStudioApp(App[None]):
     async def _rebuild_kie_client(self) -> None:
         old = self.kie
         self.kie = self._build_kie_client()
-        # `JobRunner` y `AudioJobRunner` toman el cliente en cada `run()`
-        # desde `self._client`, así que solo necesitamos rebindear las
-        # referencias que usan.
+        # `JobRunner`, `AudioJobRunner` e `ImageJobRunner` toman el cliente
+        # en cada `run()` desde `self._client`, así que solo necesitamos
+        # rebindear las referencias que usan.
         self.runner = JobRunner(self.settings, self.kie, self.db)
         self.queue = QueueManager(
             self.settings,
@@ -591,29 +686,51 @@ class KieAvatarStudioApp(App[None]):
             lifecycle=self.audio_lifecycle,
             capacity_limiter=self._capacity_limiter,
         )
+        self.image_runner = ImageJobRunner(
+            self.settings,
+            self.kie,
+            self.image_jobs_db,
+            self.generated_images_db,
+            self.images_db,
+        )
+        self.image_queue = QueueManager(
+            self.settings,
+            self.image_runner,
+            event_factory=ImageJobUpdated,
+            lifecycle=self.image_lifecycle,
+            capacity_limiter=self._capacity_limiter,
+        )
         # IMPORTANTE: el `AudiosController` guarda una referencia concreta
         # al queue. Si solo rebindeamos `self.audio_queue` y dejamos el
         # controller apuntando al queue viejo, los próximos enqueue desde
         # la UI van al runner viejo (que ya usa un KieClient cerrado).
         # Hay que recrear el controller con el nuevo queue. Mismo motivo
-        # para `HistoryController` y `VideosController` (referencias a
-        # los queues).
+        # para `HistoryController`, `VideosController` y
+        # `GeneratedImagesController` (referencias a los queues).
         self.images_controller = ImagesController(self.images_db, self.kie)
         self.audios_controller = AudiosController(
             self.audios_db,
             self.audio_jobs_db,
             self.audio_queue,
         )
+        self.generated_images_controller = GeneratedImagesController(
+            self.generated_images_db,
+            self.image_jobs_db,
+            self.image_queue,
+        )
+        self.image_catalog = ImageCatalogController(self.images_db, self.generated_images_db)
         self.videos_controller = VideosController(
             self.db,
-            self.images_db,
+            self.image_catalog,
             self.audios_db,
             self.queue,
         )
         self.history_controller = HistoryController(
             self.db,
             self.audio_jobs_db,
+            self.image_jobs_db,
             self.queue,
             self.audio_queue,
+            self.image_queue,
         )
         await old.aclose()

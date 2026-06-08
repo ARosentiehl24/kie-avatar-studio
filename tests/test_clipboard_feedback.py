@@ -19,7 +19,7 @@ async def test_native_backend_message_is_success(monkeypatch) -> None:
     )
 
     assert is_error is False
-    assert message == "✓ URL copiada al clipboard"
+    assert message == "✅ URL copiada al clipboard"
 
 
 async def test_osc52_message_warns_about_uncertainty(monkeypatch) -> None:

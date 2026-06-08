@@ -26,6 +26,7 @@ from ...app_layer.presets_controller import VoicePresetsController
 from ...domain.errors import VoicePresetNotFoundError, VoicePresetValidationError
 from ...domain.kie_voice_catalog import get_builtin_voice
 from ...domain.models import VoicePreset
+from .._icons import ERROR, OK
 from .._table_helpers import get_selected_row_key, select_row_by_key
 from .._text_format import truncate
 from .preset_form import PresetFormResult, PresetFormScreen
@@ -114,7 +115,7 @@ class PresetsScreen(Screen[None]):
         except VoicePresetNotFoundError:
             self._set_status("Ese preset ya no existe", error=True)
             return
-        self._set_status(f"✓ preset '{preset.label}' eliminado")
+        self._set_status(f"{OK} preset '{preset.label}' eliminado")
         await self._refresh_table()
 
     def _on_form_dismissed(self, result: PresetFormResult | None) -> None:
@@ -132,7 +133,7 @@ class PresetsScreen(Screen[None]):
                     voice_settings=result.voice_settings,
                     description=result.description,
                 )
-                msg = f"✓ preset '{preset.label}' actualizado"
+                msg = f"{OK} preset '{preset.label}' actualizado"
             else:
                 preset = await self._controller.create(
                     label=result.label,
@@ -140,12 +141,12 @@ class PresetsScreen(Screen[None]):
                     voice_settings=result.voice_settings,
                     description=result.description,
                 )
-                msg = f"✓ preset '{preset.label}' creado"
+                msg = f"{OK} preset '{preset.label}' creado"
         except VoicePresetValidationError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         except VoicePresetNotFoundError as exc:
-            self._set_status(f"✖ {exc}", error=True)
+            self._set_status(f"{ERROR} {exc}", error=True)
             return
         self._set_status(msg)
         await self._refresh_table()

@@ -157,7 +157,61 @@ audio       : max 100 MB, max 5 min, formatos mpeg/wav/x-wav/aac/mp4/ogg
 prompt      : max 5000 chars
 ```
 
-## 4. Consultar task
+## 5. Crear task Nano Banana 2 (Google — generación de imagen)
+
+Mismo endpoint `createTask`, distinto `model` y `input`:
+
+```json
+{
+  "model": "nano-banana-2",
+  "input": {
+    "prompt": "Comic poster: cool banana hero in shades …",
+    "image_input": [
+      "https://tempfile.redpandaai.co/.../ref1.png"
+    ],
+    "aspect_ratio": "16:9",
+    "resolution": "2K",
+    "output_format": "png"
+  }
+}
+```
+
+Restricciones del input:
+
+| Campo | Tipo | Rango | Default Kie | Notas |
+|---|---|---|---|---|
+| `prompt` | string | max **20000 chars** | required | Mucho más generoso que TTS/avatar (5000) |
+| `image_input` | array de URLs | max **14** items | `[]` (text-to-image) | URLs públicas; cada archivo jpg/png/webp ≤ 30 MB. Típicamente `downloadUrl` de uploads o `kie_url` de generadas |
+| `aspect_ratio` | string enum | `auto, 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 1:4, 1:8, 4:1, 8:1` | `auto` | El modelo decide cuando es `auto` |
+| `resolution` | string enum | `1K, 2K, 4K` | `1K` | — |
+| `output_format` | string enum | `jpg, png` | `jpg` | — |
+
+Respuesta y polling: idénticos al resto (`{ "data": { "taskId": "..." } }` + `recordInfo`).
+
+Curl mínimo (text-to-image puro):
+
+```bash
+curl -X POST "https://api.kie.ai/api/v1/jobs/createTask" \
+  -H "Authorization: Bearer $KIE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nano-banana-2",
+    "input": {
+      "prompt": "un atardecer con palmeras, estilo polaroid",
+      "image_input": [],
+      "aspect_ratio": "auto",
+      "resolution": "1K",
+      "output_format": "jpg"
+    }
+  }'
+```
+
+Implementado en `KieClient.create_nano_banana_task(...)` (`infra/kie_client.py`).
+La validación de enums + prompt + refs vive en `domain/policies.py`
+(`validate_image_prompt`, `validate_image_settings`, `validate_image_refs`);
+el cliente HTTP no valida nada (CR-2.1).
+
+## 6. Consultar task
 
 ```http
 GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<TASK_ID>
@@ -209,18 +263,21 @@ Importante a conocer al diseñar la UX. La documentación oficial
 - **Archivos subidos via File Upload API** (imágenes que el usuario sube):
   **24 horas**. Aplicable a la pantalla `Imágenes`. Constante en código:
   `KIE_UPLOAD_RETENTION_HOURS = 24`.
-- **Media generada por los modelos** (audios TTS, videos avatar, imágenes
-  generadas): **14 días**. Aplicable a la pantalla `Audios` (TTS) y a los
-  videos del flow principal. Constante: `KIE_GENERATED_RETENTION_DAYS = 14`.
+- **Media generada por los modelos** (audios TTS, videos avatar, **imágenes
+  generadas por Nano Banana 2**): **14 días**. Aplicable a la pantalla `Audios`
+  (TTS), a las imágenes generadas (`GeneratedImage` en la pantalla `Imágenes`)
+  y a los videos del flow principal. Constante: `KIE_GENERATED_RETENTION_DAYS = 14`.
 - **Log records** (texto + metadata de tasks): retenidos **2 meses**.
 - URLs efímeras en `tempfile.redpandaai.co` heredan la ventana del recurso
   que las generó.
 
-> ⚠️ **Inconsistencia histórica conocida**: las pantallas Imágenes y Audios
-> actualmente comparten el mismo `KIE_FILE_RETENTION_DAYS = 14` (alias
-> apuntando a `KIE_GENERATED_RETENTION_DAYS`). Para uploads de imágenes
-> el valor real es **24h**, no 14 días. Migración pendiente — ver ADR-0005
-> y ADR-0006.
+> ⚠️ **Inconsistencia histórica conocida (pre-Nano Banana 2)**: las
+> pantallas `Imágenes` (uploads) y `Audios` (TTS) compartían un alias
+> `KIE_FILE_RETENTION_DAYS = 14`. Para uploads de imágenes el valor real
+> es **24h**, no 14 días. El alias se eliminó al introducir la
+> separación uploaded/generated; ahora cada caller usa la constante
+> correcta. La pantalla `Imágenes` mezcla ambos tipos pero formatea cada
+> fila con su TTL correspondiente.
 
 Consecuencia: el botón **Eliminar** en las pantallas `Imágenes` y `Audios`
 **solo borra el registro local** (`data/jobs.db`). El archivo en Kie sigue
