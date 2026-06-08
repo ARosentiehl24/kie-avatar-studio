@@ -121,18 +121,13 @@ class WorkflowExecutionContext:
     def resolved_voice_settings(self) -> VoiceSettings | None:
         """Devuelve voice_settings con `language_code` ajustado.
 
-        Precedencia: `voice_settings.language_code` del preset > el
-        `audio_language` del JSON. Si el preset ya tiene language_code,
-        respetamos al preset (que el usuario configuró explícitamente).
-        Si no, y el JSON trae `audio_language`, lo inyectamos como
-        fallback.
+        Precedencia: el `audio_language` del JSON (específico del workflow)
+        tiene prioridad sobre el `voice_settings.language_code` del preset.
         """
-        if self.voice_settings is not None and self.voice_settings.language_code:
-            return self.voice_settings
-        if self.audio_language is None:
-            return self.voice_settings
-        base = self.voice_settings or VoiceSettings()
-        return base.model_copy(update={"language_code": self.audio_language})
+        if self.audio_language is not None:
+            base = self.voice_settings or VoiceSettings()
+            return base.model_copy(update={"language_code": self.audio_language})
+        return self.voice_settings
 
 
 # --- progress helpers (no state) ---------------------------------------

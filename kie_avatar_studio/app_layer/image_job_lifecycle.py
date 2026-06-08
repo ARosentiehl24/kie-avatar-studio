@@ -52,4 +52,7 @@ class ImageJobLifecycle:
         # en Kie. Si lo dejáramos, el polling podría caer sobre un task
         # que ya expiró (Kie tiene TTL de ~24h para tasks).
         job.task_id = None
+        # Limpiamos salidas previas para comenzar desde cero
+        job.kie_url = None
+        job.kie_file_path = None
         await self._repository.upsert(job)

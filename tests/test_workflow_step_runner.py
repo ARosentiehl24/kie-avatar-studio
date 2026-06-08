@@ -614,8 +614,8 @@ async def test_resolved_voice_settings_respects_preset_language_code() -> None:
     )
     settings = ctx.resolved_voice_settings()
     assert settings is not None
-    # El preset gana: language_code='es-419' (no 'pt-BR' del JSON).
-    assert settings.language_code == "es-419"
+    # El JSON gana: language_code='pt-BR' (no 'es-419' del preset) — override de workflow.
+    assert settings.language_code == "pt-BR"
 
 
 # --- producto promocional (Round 6) -----------------------------------

@@ -195,10 +195,7 @@ class WorkflowStepRunner:
     ) -> None:
         output_path = context.step_dir(step) / A_ROLL_VIDEO_FILENAME
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        step.status = WorkflowStepStatus.DOWNLOADING
-        set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.COMPLETED)
-        set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.RUNNING)
-        await on_transition(step)
+        # El step permanece en RENDERING / VIDEO=RUNNING mientras se pollea/genera el video en Kie.
         task_id, video_path = await render_avatar_video(
             client=self._client,
             settings=self._settings,
@@ -211,6 +208,13 @@ class WorkflowStepRunner:
         )
         step.video_task_id = task_id
         step.video_path = video_path
+
+        # Una vez generado y descargado exitosamente, hacemos la transición de progreso.
+        step.status = WorkflowStepStatus.DOWNLOADING
+        set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.COMPLETED)
+        set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.RUNNING)
+        await on_transition(step)
+
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.COMPLETED)
 
     # --- b-roll with audio (silent video + standalone audio) --------------
@@ -246,15 +250,21 @@ class WorkflowStepRunner:
         step_dir.mkdir(parents=True, exist_ok=True)
         video_path = step_dir / B_ROLL_VIDEO_FILENAME
         audio_path = step_dir / AUDIO_FILENAME
-        step.status = WorkflowStepStatus.DOWNLOADING
-        set_progress(step, WorkflowProgressKey.DOWNLOAD_VIDEO, WorkflowProgressStatus.RUNNING)
-        set_progress(step, WorkflowProgressKey.DOWNLOAD_AUDIO, WorkflowProgressStatus.RUNNING)
-        await on_transition(step)
+
+        # El step permanece en RENDERING / VIDEO=RUNNING mientras se pollea/genera el video en Kie.
+        # Ejecutamos la generación y descarga en background.
         await asyncio.gather(
             self._render_i2v(step, context, scene_ref, video_path),
             self._download_audio_only(step, audio_url, audio_path),
         )
+
+        # Hacemos la transición oficial a DOWNLOADING tras el renderizado exitoso.
+        step.status = WorkflowStepStatus.DOWNLOADING
         set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.COMPLETED)
+        set_progress(step, WorkflowProgressKey.DOWNLOAD_VIDEO, WorkflowProgressStatus.RUNNING)
+        set_progress(step, WorkflowProgressKey.DOWNLOAD_AUDIO, WorkflowProgressStatus.RUNNING)
+        await on_transition(step)
+
         set_progress(step, WorkflowProgressKey.DOWNLOAD_VIDEO, WorkflowProgressStatus.COMPLETED)
         set_progress(step, WorkflowProgressKey.DOWNLOAD_AUDIO, WorkflowProgressStatus.COMPLETED)
 
@@ -357,11 +367,16 @@ class WorkflowStepRunner:
         step_dir = context.step_dir(step)
         step_dir.mkdir(parents=True, exist_ok=True)
         output_path = step_dir / B_ROLL_VIDEO_FILENAME
+
+        # El step permanece en RENDERING mientras se pollea la generación de video en Kie.
+        await self._render_i2v(step, context, scene_ref, output_path, sound=sound)
+
+        # Transicionamos de RENDERING a DOWNLOADING tras render exitoso.
         step.status = WorkflowStepStatus.DOWNLOADING
         set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.COMPLETED)
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
-        await self._render_i2v(step, context, scene_ref, output_path, sound=sound)
+
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.COMPLETED)
 
     # --- scene image preparation ------------------------------------------

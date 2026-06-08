@@ -47,8 +47,13 @@ class WorkflowLifecycle:
         return job.status in _RETRYABLE_STATUSES
 
     async def mark_cancelled(self, job: WorkflowJob) -> None:
+        original = job.status
         job.status = WorkflowStatus.CANCELLED
-        await self._repository.update_workflow_header(job)
+        try:
+            await self._repository.update_workflow_header(job)
+        except Exception:
+            job.status = original
+            raise
 
     async def reset_for_retry(self, job: WorkflowJob) -> None:
         """Resetea el header y todos los steps FAILED / CANCELLED a QUEUED.
@@ -59,13 +64,31 @@ class WorkflowLifecycle:
         """
         from ..domain.models import WorkflowStepStatus
 
+        original_status = job.status
+        original_error = job.error
+        original_manifest = job.manifest_write_failed
+
         job.status = WorkflowStatus.QUEUED
         job.error = None
         job.manifest_write_failed = False
-        await self._repository.update_workflow_header(job)
+        try:
+            await self._repository.update_workflow_header(job)
+        except Exception:
+            job.status = original_status
+            job.error = original_error
+            job.manifest_write_failed = original_manifest
+            raise
 
         for step in job.steps:
             if step.status in (WorkflowStepStatus.FAILED, WorkflowStepStatus.CANCELLED):
+                original_step_status = step.status
+                original_step_error = step.error
+                original_step_completed = step.completed_at
+                original_step_started = step.started_at
+                original_step_progress = step.progress.copy()
+                original_step_audio = step.audio_job_id
+                original_step_video = step.video_task_id
+
                 step.status = WorkflowStepStatus.QUEUED
                 step.error = None
                 step.completed_at = None
@@ -74,4 +97,14 @@ class WorkflowLifecycle:
                 # Forzar recreación de tareas fallidas (audio, video)
                 step.audio_job_id = None
                 step.video_task_id = None
-                await self._repository.upsert_step(job.id, step)
+                try:
+                    await self._repository.upsert_step(job.id, step)
+                except Exception:
+                    step.status = original_step_status
+                    step.error = original_step_error
+                    step.completed_at = original_step_completed
+                    step.started_at = original_step_started
+                    step.progress = original_step_progress
+                    step.audio_job_id = original_step_audio
+                    step.video_task_id = original_step_video
+                    raise

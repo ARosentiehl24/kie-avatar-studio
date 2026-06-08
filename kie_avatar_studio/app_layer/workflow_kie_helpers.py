@@ -55,7 +55,8 @@ async def render_avatar_video(
             timeout_seconds=settings.task_timeout_seconds,
         )
 
-    await client.download_file(video_url, output_path)
+    async with limiter:
+        await client.download_file(video_url, output_path)
     return task_id, str(output_path)
 
 
@@ -104,7 +105,8 @@ async def render_i2v_video(
             timeout_seconds=settings.task_timeout_seconds,
         )
 
-    await client.download_file(video_url, output_path)
+    async with limiter:
+        await client.download_file(video_url, output_path)
     return task_id, str(output_path)
 
 

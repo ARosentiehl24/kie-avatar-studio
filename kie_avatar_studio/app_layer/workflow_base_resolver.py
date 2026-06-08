@@ -336,6 +336,10 @@ class WorkflowBaseResolver:
             raise WorkflowValidationError(
                 f"imagen subida '{creation.asset_id}' no existe en el catálogo"
             )
+        if uploaded.is_expired(KIE_UPLOAD_RETENTION_HOURS):
+            raise WorkflowValidationError(
+                f"imagen subida '{creation.asset_id}' está expirada en Kie"
+            )
         ref = ImageAssetRef(
             kind=ImageAssetKind.UPLOADED,
             id=uploaded.id,
@@ -353,6 +357,10 @@ class WorkflowBaseResolver:
         if generated is None:
             raise WorkflowValidationError(
                 f"imagen generada '{creation.asset_id}' no existe en el catálogo"
+            )
+        if generated.is_expired(KIE_GENERATED_RETENTION_DAYS):
+            raise WorkflowValidationError(
+                f"imagen generada '{creation.asset_id}' está expirada en Kie"
             )
         ref = ImageAssetRef(
             kind=ImageAssetKind.GENERATED,

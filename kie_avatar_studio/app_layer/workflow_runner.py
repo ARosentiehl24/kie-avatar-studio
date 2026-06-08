@@ -130,6 +130,9 @@ class WorkflowRunner:
         except Exception as exc:
             logger.exception("WorkflowJob {} falló con error no manejado", job.id)
             await self._fail_workflow(job, exc)
+        finally:
+            # Limpiamos el lock del workflow al terminar (evita fugas de memoria)
+            self._locks.pop(job.id, None)
         return job
 
     @staticmethod
@@ -194,7 +197,16 @@ class WorkflowRunner:
             asyncio.create_task(_run_one(s), name=f"wf-{job.id}-step-{s.step}")
             for s in pending_steps
         ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Inspeccionar si hubo excepciones inesperadas (excluyendo cancelaciones)
+        # para no tragarnos errores del propio runner.
+        unexpected = [
+            r
+            for r in results
+            if isinstance(r, Exception) and not isinstance(r, asyncio.CancelledError)
+        ]
+        if unexpected:
+            raise unexpected[0]
         return paused
 
     def _build_step_transition(self, job: WorkflowJob) -> Callable[[WorkflowStep], Awaitable[None]]:

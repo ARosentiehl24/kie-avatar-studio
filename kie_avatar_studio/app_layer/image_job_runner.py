@@ -201,7 +201,9 @@ class ImageJobRunner:
             return []
         raw = json.loads(job.refs_json)
         if not isinstance(raw, list):
-            return []
+            raise JobValidationError(
+                f"refs_json debe ser una lista de ImageAssetRef (recibí: {type(raw).__name__})"
+            )
         return [ImageAssetRef.model_validate(item) for item in raw]
 
     async def _revalidate_refs_freshness(self, refs: list[ImageAssetRef]) -> None:
