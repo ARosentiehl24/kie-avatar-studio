@@ -5,4 +5,4 @@ de verdad para el updater (`UpdateChecker`) y para el SUB_TITLE de la TUI.
 Bump según CR-13 (L/M/S → MAJOR/MINOR/PATCH).
 """
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"

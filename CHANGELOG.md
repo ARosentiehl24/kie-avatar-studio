@@ -6,6 +6,12 @@ MINOR, **S** → PATCH.
 
 ## [Unreleased]
 
+### Added (M)
+
+- ...
+
+## [1.1.0] — 2026-06-08
+
 ### Added (L)
 
 - **Subsistema de Automatización: workflows JSON declarativos end-to-end**.
