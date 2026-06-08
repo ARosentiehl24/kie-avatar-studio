@@ -98,7 +98,7 @@ MINOR, **S** → PATCH.
     scene pero nunca pausan.
   - Validación cruzada: `include_product=true` exige
     `promote_product=true`. Ejemplo en `workflows/example_product_promo.json`.
-- **Endpoint Kie nuevo**: `kling-2.6/image-to-video` (b-roll silencioso).
+- **Endpoint Kie nuevo**: `kling-3.0/video` (b-roll con sound effects opcionales).
   Implementado en `KieClient.create_image_to_video_task`. Documentado
   en `docs/API_KIE.md` §6.
 - Nuevo hotkey global `F` (Automatización) + icono `🤖` en `_icons.py`.
