@@ -4,11 +4,11 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
-## [Unreleased]
+## [1.1.1] — 2026-06-08
 
-### Added (M)
+### Added (S)
 
-- ...
+- **Modelos de imagen divididos (Base GPT + Escenas Nano Banana)**: Se implementó un flujo asimétrico de generación de imágenes de Kie.ai. Ahora se usa GPT Image 2 (`gpt-image-2-text-to-image`) exclusivamente para la generación inicial de la modelo base (método `prompt`), mientras que las demás generaciones (fondos, refits de escenas secundarias y composición de productos promocionales) continúan funcionando de manera eficiente usando Nano Banana 2 (`nano-banana-2`).
 
 ## [1.1.0] — 2026-06-08
 

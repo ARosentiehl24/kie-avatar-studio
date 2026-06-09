@@ -159,6 +159,7 @@ class ImageGenerationSettings(BaseModel):
     aspect_ratio: str = "auto"
     resolution: str = "1K"
     output_format: str = "jpg"
+    model: str | None = None
 
 
 class ImageJob(BaseModel):

@@ -115,7 +115,7 @@ class _MockKieHandler:
             return f"https://tempfile.kie.ai/avatar/{task_id}.mp4"
         if "image-to-video" in model:
             return f"https://tempfile.kie.ai/i2v/{task_id}.mp4"
-        if "nano-banana" in model:
+        if "nano-banana" in model or "gpt-image" in model:
             return f"https://tempfile.kie.ai/img/{task_id}.png"
         if "text-to-speech" in model:
             return f"https://tempfile.kie.ai/audio/{task_id}.mp3"
@@ -550,9 +550,13 @@ async def test_b_roll_repause_without_regeneration_keeps_step_in_awaiting_approv
         f"Bug crítico round 2: el branch de re-pause no restaura el status."
     )
     assert step.status == WorkflowStepStatus.AWAITING_APPROVAL
-    # NO debe haberse llamado a createTask con nano-banana (sino estaríamos
+    # NO debe haberse llamado a createTask con nano-banana/gpt-image (sino estaríamos
     # regenerando y gastando créditos).
-    nano_calls = [t for t in mock_handler.tasks.values() if "nano-banana" in t["model"]]
+    nano_calls = [
+        t
+        for t in mock_handler.tasks.values()
+        if "nano-banana" in t["model"] or "gpt-image" in t["model"]
+    ]
     assert nano_calls == [], (
         f"Se llamó {len(nano_calls)} veces a nano-banana en un re-pause; "
         f"debe reusar la scene_image previa sin gastar créditos. "
@@ -668,7 +672,11 @@ def _make_product_context(
 
 
 def _nano_banana_inputs(mock_handler: _MockKieHandler) -> list[dict]:
-    return [t["input"] for t in mock_handler.tasks.values() if "nano-banana" in t["model"]]
+    return [
+        t["input"]
+        for t in mock_handler.tasks.values()
+        if "nano-banana" in t["model"] or "gpt-image" in t["model"]
+    ]
 
 
 async def test_b_roll_with_product_passes_two_refs_to_nano_banana(

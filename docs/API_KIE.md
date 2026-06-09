@@ -157,13 +157,13 @@ audio       : max 100 MB, max 5 min, formatos mpeg/wav/x-wav/aac/mp4/ogg
 prompt      : max 5000 chars
 ```
 
-## 5. Crear task Nano Banana 2 (Google — generación de imagen)
+## 5. Crear task GPT Image 2 (OpenAI — generación de imagen)
 
 Mismo endpoint `createTask`, distinto `model` y `input`:
 
 ```json
 {
-  "model": "nano-banana-2",
+  "model": "gpt-image-2-text-to-image",
   "input": {
     "prompt": "Comic poster: cool banana hero in shades …",
     "image_input": [
@@ -195,7 +195,7 @@ curl -X POST "https://api.kie.ai/api/v1/jobs/createTask" \
   -H "Authorization: Bearer $KIE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "nano-banana-2",
+    "model": "gpt-image-2-text-to-image",
     "input": {
       "prompt": "un atardecer con palmeras, estilo polaroid",
       "image_input": [],

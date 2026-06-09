@@ -144,12 +144,17 @@ class ImageJobRunner:
         settings: ImageGenerationSettings,
     ) -> str:
         await self._transition(job, ImageJobStatus.CREATING)
+        kwargs = {}
+        if settings.model is not None:
+            kwargs["model"] = settings.model
+
         created = await self._client.create_nano_banana_task(
             job.prompt,
             image_input=[ref.kie_url for ref in refs],
             aspect_ratio=settings.aspect_ratio,
             resolution=settings.resolution,
             output_format=settings.output_format,
+            **kwargs,
         )
         job.task_id = created.task_id
         await self._transition(job, ImageJobStatus.POLLING)

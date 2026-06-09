@@ -25,6 +25,7 @@ DEFAULT_TTS_MODEL: Final[str] = "elevenlabs/text-to-speech-multilingual-v2"
 DEFAULT_TTS_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 DEFAULT_AVATAR_MODEL: Final[str] = "kling/ai-avatar-pro"
 DEFAULT_NANO_BANANA_MODEL: Final[str] = "nano-banana-2"
+DEFAULT_GPT_IMAGE_MODEL: Final[str] = "gpt-image-2-text-to-image"
 # Modelo de b-roll del workflow automation. Migramos de `kling-2.6/image-to-video`
 # a `kling-3.0/video` (2026-06-06) porque 3.0 ofrece:
 #  - Duración 3-15s (vs solo 5 o 10 en 2.6)
