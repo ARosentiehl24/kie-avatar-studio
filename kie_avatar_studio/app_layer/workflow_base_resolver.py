@@ -176,6 +176,8 @@ class WorkflowBaseResolver:
         if not prompt:
             raise WorkflowValidationError("model_creation.method='prompt' requiere prompt no vacío")
         effective_settings = settings or ImageGenerationSettings()
+        if effective_settings.model is None:
+            effective_settings.model = "gpt-image-2-text-to-image"
         image_job = ImageJob(
             id=new_image_job_id(),
             label=f"[wf-preview]{label_hint}",
@@ -274,6 +276,7 @@ class WorkflowBaseResolver:
 
     def _build_base_image_job(self, workflow: WorkflowJob, prompt: str) -> ImageJob:
         settings = ImageGenerationSettings()
+        settings.model = "gpt-image-2-text-to-image"
         if workflow.pre_settings.image_aspect_ratio is not None:
             settings.aspect_ratio = workflow.pre_settings.image_aspect_ratio
         return ImageJob(

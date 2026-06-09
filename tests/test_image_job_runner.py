@@ -163,6 +163,45 @@ async def test_run_sends_settings_in_payload(
     assert body["input"]["image_input"] == []
 
 
+async def test_image_job_runner_respects_settings_model_override(
+    tmp_settings,
+    jobs_repo: ImageJobsDB,
+    generated_store: GeneratedImagesDB,
+    uploaded_store: ImagesDB,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/v1/jobs/createTask":
+            captured["body"] = json.loads(req.read())
+            return httpx.Response(200, json={"data": {"taskId": "custom_model_task"}})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "state": "success",
+                    "resultJson": '{"resultUrls":["https://tempfile.redpandaai.co/x.png"]}',
+                }
+            },
+        )
+
+    tmp_settings = tmp_settings.model_copy(update={"poll_interval_seconds": 0})
+    client = await _client_with_handler(tmp_settings, handler)
+    runner = ImageJobRunner(tmp_settings, client, jobs_repo, generated_store, uploaded_store)
+
+    job = _make_job(
+        prompt="un perro",
+        settings_json=ImageGenerationSettings(model="gpt-image-2-text-to-image").model_dump_json(),
+    )
+    await jobs_repo.upsert(job)
+
+    await runner.run(job)
+    await client.aclose()
+
+    body = captured["body"]
+    assert body["model"] == "gpt-image-2-text-to-image"
+
+
 # --- validation failures -------------------------------------------------
 
 

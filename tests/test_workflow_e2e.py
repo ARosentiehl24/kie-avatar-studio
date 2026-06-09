@@ -356,8 +356,9 @@ async def test_e2e_workflow_steps_run_in_parallel(e2e_setup) -> None:
     assert models_called["elevenlabs/text-to-speech-multilingual-v2"] == 2, (
         "2 TTS para a-roll + b-roll-con-texto (siempre multilingual, nunca turbo)"
     )
-    # 3 nano banana: 1 base + 2 scenes (steps con change_scene=True).
-    assert models_called["nano-banana-2"] == 3, "1 base + 2 scenes"
+    # 1 base (GPT Image 2) + 2 scenes (Nano Banana 2, change_scene=True).
+    assert models_called["gpt-image-2-text-to-image"] == 1, "1 base"
+    assert models_called["nano-banana-2"] == 2, "2 scenes"
 
 
 async def test_e2e_manifest_updated_throughout_execution(e2e_setup) -> None:
@@ -588,11 +589,12 @@ async def test_e2e_workflow_steps_run_sequentially_in_manual_mode(e2e_setup) -> 
 
     # Step 1 (a-roll): corre completo -> 1 TTS (multilingual) y 1 avatar-pro.
     assert models_called["kling/ai-avatar-pro"] == 1
-    # Step 2 (b-roll): genera su scene_image con Nano Banana y de inmediato lanza
+    # Step 2 (b-roll): genera su scene_image con Nano Banana 2 y de inmediato lanza
     # StepAwaitingApprovalSignal.
-    # Total Nano Banana llamadas: 1 (base) + 1 (step 2 scene_image) = 2.
-    # Step 3 nunca arrancó, por lo que NO hay 3ª llamada a Nano Banana (para su escena).
-    assert models_called["nano-banana-2"] == 2
+    # Total llamadas: 1 (base con GPT) + 1 (step 2 scene_image con Nano Banana) = 2.
+    # Step 3 nunca arrancó, por lo que NO hay llamadas extras.
+    assert models_called["gpt-image-2-text-to-image"] == 1, "1 base"
+    assert models_called["nano-banana-2"] == 1, "1 step 2 scene_image"
     # El video i2v de Kling para step 2 y step 3 NO se debió llamar (step 2 pausó antes
     # del render, step 3 ni arrancó).
     assert models_called["kling-3.0/video"] == 0

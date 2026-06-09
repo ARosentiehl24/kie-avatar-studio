@@ -42,7 +42,7 @@ presionar **R** para refrescar.
 
 | Componente generado | Path en el output dir |
 |---|---|
-| Imagen scene (Nano Banana refit si `change_background=true`, sino reutiliza base) | `step_NN_<slug>/scene.png` |
+| Imagen scene (Nano Banana 2 refit si `change_background=true`, sino reutiliza base) | `step_NN_<slug>/scene.png` |
 | Audio TTS | (no se descarga aparte — queda embebido) |
 | Video Avatar Pro (con audio sincronizado) | `step_NN_<slug>/final.mp4` |
 
@@ -52,7 +52,7 @@ presionar **R** para refrescar.
 
 | Componente generado | Path en el output dir |
 |---|---|
-| Imagen scene (Nano Banana refit si `change_background=true`) | `step_NN_<slug>/scene.png` |
+| Imagen scene (Nano Banana 2 refit si `change_background=true`) | `step_NN_<slug>/scene.png` |
 | Audio TTS (para post-producción) | `step_NN_<slug>/audio.mp3` |
 | Video Kling 2.6 i2v (silencioso) | `step_NN_<slug>/video.mp4` |
 
@@ -65,7 +65,7 @@ presionar **R** para refrescar.
 
 ## `model_creation.method`
 
-- `prompt`: genera la imagen base con Nano Banana 2 (campo `prompt` requerido).
+- `prompt`: genera la imagen base con GPT Image 2 (campo `prompt` requerido).
 - `local`: sube una imagen del filesystem (campo `local_path` requerido, ej.
   `inputs/modelo.png`). El archivo se valida al encolar Y justo antes del
   upload (mitiga la race del archivo movido).
@@ -128,8 +128,8 @@ refleja el último estado conocido al cierre limpio.
 
 Un workflow de N steps consume:
 
-- 1 imagen Nano Banana 2 para la base (si `method=prompt`).
-- Por cada step con `change_background=true`: 1 imagen Nano Banana adicional.
+- 1 imagen GPT Image 2 para la base (si `method=prompt`).
+- Por cada step con `change_background=true`: 1 imagen Nano Banana 2 adicional.
 - Por cada step `a-roll`: 1 TTS turbo + 1 Avatar Pro.
 - Por cada step `b-roll con text`: 1 TTS turbo + 1 i2v Kling 2.6.
 - Por cada step `b-roll sin text`: 1 i2v Kling 2.6.
