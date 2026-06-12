@@ -4,18 +4,17 @@ Pura orquestación: depende solo de los `Protocol` del dominio (KeyStore,
 KieGateway), nunca de las implementaciones concretas (CR-2.5 DIP).
 
 Política de validación (`test_key`):
-- Se ejecuta una llamada controlada a `GET /api/v1/jobs/recordInfo` con un taskId
-  inexistente. Kie devuelve 200 con `success=false` para keys válidas y 401 para
-  keys inválidas. Cualquier otra excepción se traduce a status `"error"`.
+- Consulta `GET /api/v1/chat/credit` con la key a validar. Este endpoint
+  confirma autenticación y devuelve saldo; `recordInfo` con task inexistente
+  devuelve `code:422 recordInfo is null`, así que no sirve como probe estable.
 - El gateway se construye **por key** (no usa el global) porque la key activa de
   la app puede ser distinta a la que estamos validando.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Final
 
 from loguru import logger
 
@@ -29,8 +28,6 @@ from ..domain.policies import validate_key_label, validate_kie_key
 from ..domain.ports import KeyStore, KieGateway
 
 GatewayFactory = Callable[[str], KieGateway]
-
-_VALIDATION_TASK_ID: Final[str] = "kie-avatar-studio-validation-probe"
 
 
 class KeysController:
@@ -73,10 +70,9 @@ class KeysController:
     async def test_key(self, key_id: str) -> KieKey:
         """Llama a Kie con esta key y persiste el resultado en metadata.
 
-        Hace dos cosas en una sola UX:
-        1. Probe de validez (recordInfo con un taskId inexistente — gratis).
-        2. Si el probe pasa, consulta saldo (`get_account_credits` — gratis).
-           Si el saldo falla por algún motivo, mantiene el valor anterior.
+        Consulta saldo (`get_account_credits` — gratis) como prueba de
+        autenticación. Si falla por 401/403 se marca `"unauthorized"`; otros
+        errores quedan como `"error"`.
         """
         key = await self._require(key_id)
         status, credits = await self._probe_and_check_balance(key.key)
@@ -105,29 +101,15 @@ class KeysController:
         gateway = self._gateway_factory(secret)
         try:
             try:
-                await self._invoke_probe(gateway.get_task_detail(_VALIDATION_TASK_ID))
+                balance = await gateway.get_account_credits()
             except KieClientError as exc:
                 return _classify_client_error(exc), None
             except Exception:
                 logger.exception("Probe de key falló por un error no clasificado")
                 return "error", None
-            balance = await self._try_get_credits(gateway)
             return "ok", balance
         finally:
             await gateway.aclose()
-
-    @staticmethod
-    async def _try_get_credits(gateway: KieGateway) -> float | None:
-        """Consulta saldo sin propagar errores (best-effort para metadata)."""
-        try:
-            return await gateway.get_account_credits()
-        except Exception:
-            logger.exception("Consulta de saldo falló (no bloquea el test de key)")
-            return None
-
-    @staticmethod
-    async def _invoke_probe(awaitable: Awaitable[object]) -> None:
-        await awaitable
 
 
 def _classify_client_error(exc: KieClientError) -> KeyValidationStatus:

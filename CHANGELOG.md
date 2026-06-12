@@ -4,6 +4,15 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [1.2.1] — 2026-06-11
+
+### Fixed (S)
+
+- **Validación de API keys**: la pantalla Configuración ahora valida keys
+  contra `/api/v1/chat/credit`, que confirma autenticación y saldo. Se deja
+  de usar `recordInfo` con un task inexistente porque Kie puede responder
+  `code:422 recordInfo is null` aunque la key sea válida.
+
 ## [1.2.0] — 2026-06-11
 
 ### Added (M)
