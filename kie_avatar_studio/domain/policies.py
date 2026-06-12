@@ -51,6 +51,11 @@ MAX_AUDIO_SECONDS: Final[int] = 5 * 60
 # el tamaño y mimetype reales los enforcea Kie al consumir la URL.
 MAX_IMAGE_PROMPT_CHARS: Final[int] = 5000
 MAX_IMAGE_REFS: Final[int] = 14
+KIE_DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
+KIE_MAX_RETRIES: Final[int] = 3
+KIE_BACKOFF_BASE_SECONDS: Final[float] = 1.0
+KIE_CONNECT_TIMEOUT_SECONDS: Final[float] = 15.0
+KIE_TOTAL_TIMEOUT_SECONDS: Final[float] = 60.0
 
 # Enums del input del endpoint. Mantenemos el orden del spec para que la UI
 # los muestre tal como aparecen en la doc oficial. `auto` es el default del
@@ -535,6 +540,7 @@ I2V_DURATIONS: Final[tuple[int, ...]] = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
 # vive acá; `Settings.default_i2v_duration_seconds` la importa para que .env
 # pueda override-arla sin desincronizarse con la UI (preview del summary).
 DEFAULT_I2V_DURATION_SECONDS: Final[int] = 5
+DEFAULT_I2V_MODEL: Final[str] = "kling-3.0/video"
 
 # Modos de generación de Kling 3.0 (resolución y costo dependen del modo).
 # - `std`  -> 720p (16:9 = 1280x720). Más barato.

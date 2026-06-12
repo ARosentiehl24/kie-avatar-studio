@@ -61,7 +61,9 @@ def _build_resolver(tmp_settings: Settings) -> WorkflowBaseResolver:
     generated_images = MagicMock()
     generated_images.get = AsyncMock(return_value=None)
     image_jobs_repo = MagicMock()
-    capacity_limiter = asyncio.Semaphore(1)
+    image_limiter = asyncio.Semaphore(1)
+    upload_limiter = asyncio.Semaphore(1)
+    download_limiter = asyncio.Semaphore(1)
     runner_factory = WorkflowRunnerFactory(
         image_deps=ImageRunnerDeps(
             settings=tmp_settings,
@@ -84,7 +86,9 @@ def _build_resolver(tmp_settings: Settings) -> WorkflowBaseResolver:
         uploaded_images,
         generated_images,
         image_jobs_repo,
-        capacity_limiter,
+        image_limiter,
+        upload_limiter,
+        download_limiter,
         runner_factory,
     )
 

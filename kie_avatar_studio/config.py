@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     kie_upload_base: str = "https://kieai.redpandaai.co"
 
     max_parallel_jobs: int = 2
+    max_parallel_audio_jobs: int = Field(default=1, ge=1)
+    max_parallel_image_jobs: int = Field(default=3, ge=1)
+    max_parallel_video_jobs: int = Field(default=2, ge=1)
+    max_parallel_upload_jobs: int = Field(default=2, ge=1)
+    max_parallel_download_jobs: int = Field(default=3, ge=1)
     poll_interval_seconds: int = 10
     task_timeout_seconds: int = 1800
 

@@ -126,10 +126,12 @@ Recuperación al arrancar (`QueueManager.restore_pending`):
   diferenciados para upload, json y download.
 - `JobsDB` / `AudioJobsDB` abren y cierran conexión `aiosqlite` por
   operación; `PRAGMA journal_mode=WAL` evita bloqueos lector/escritor.
-- **Paralelismo entre jobs** (TODOS los tipos): un único
-  `asyncio.Semaphore(settings.max_parallel_jobs)` compartido entre
-  `queue` (video) y `audio_queue`. Garantiza que el límite global
-  nunca se viola por tener múltiples colas con counters separados.
+- **Paralelismo selectivo entre jobs Kie**: el composition root crea
+  semáforos separados para video, audio TTS, imágenes, uploads y descargas
+  (`max_parallel_video_jobs`, `max_parallel_audio_jobs`,
+  `max_parallel_image_jobs`, `max_parallel_upload_jobs`,
+  `max_parallel_download_jobs`). Esto permite subir throughput de imagen/video
+  sin saturar TTS, que suele ser el endpoint más frágil.
 
 ## Inversión de dependencias (DIP)
 

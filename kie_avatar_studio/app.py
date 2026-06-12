@@ -28,6 +28,7 @@ from .app_layer.image_job_runner import ImageJobRunner
 from .app_layer.images_controller import ImagesController
 from .app_layer.job_runner import JobRunner
 from .app_layer.keys_controller import KeysController
+from .app_layer.limited_kie_gateway import LimitedKieGateway
 from .app_layer.log_reader import LogReader
 from .app_layer.notification_bridge import JobNotificationBridge
 from .app_layer.presets_controller import VoicePresetsController
@@ -186,22 +187,19 @@ class KieAvatarStudioApp(App[None]):
         self.keys_store = KeysStore(self.settings.data_dir / KEYS_FILE_NAME)
         self.env_writer = DotenvWriter(self.settings.data_dir.parent / _ENV_FILE_NAME)
         self.kie = self._build_kie_client()
-        self.runner = JobRunner(self.settings, self.kie, self.db)
+        self._reset_kie_limiters()
+        self._limited_kie = self._build_limited_kie_gateway()
+        self.runner = JobRunner(self.settings, self._limited_kie, self.db)
         # Lifecycle de VideoJob separado del QueueManager para que el queue
         # sea type-agnostic (reutilizable con AudioJob/ImageJob).
         self.video_lifecycle = VideoJobLifecycle(self.db)
-        # Semáforo único compartido entre las tres colas: garantiza que el
-        # límite global `max_parallel_jobs` no se viole cuando hay video,
-        # audio e imagen corriendo en paralelo. Sin esto, cada queue
-        # tendría su propio contador y podríamos llegar al triple del
-        # límite real.
-        self._capacity_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_jobs))
         self.queue: QueueManager[VideoJob, JobUpdated] = QueueManager(
             self.settings,
             self.runner,
             event_factory=JobUpdated,
             lifecycle=self.video_lifecycle,
-            capacity_limiter=self._capacity_limiter,
+            capacity_limiter=self._video_job_limiter,
+            max_parallel_jobs=self.settings.max_parallel_jobs,
         )
         self.audio_lifecycle = AudioJobLifecycle(self.audio_jobs_db)
         self.audio_runner = AudioJobRunner(
@@ -212,7 +210,8 @@ class KieAvatarStudioApp(App[None]):
             self.audio_runner,
             event_factory=AudioJobUpdated,
             lifecycle=self.audio_lifecycle,
-            capacity_limiter=self._capacity_limiter,
+            capacity_limiter=self._audio_limiter,
+            max_parallel_jobs=self.settings.max_parallel_audio_jobs,
         )
         self.image_lifecycle = ImageJobLifecycle(self.image_jobs_db)
         self.image_runner = ImageJobRunner(
@@ -227,7 +226,8 @@ class KieAvatarStudioApp(App[None]):
             self.image_runner,
             event_factory=ImageJobUpdated,
             lifecycle=self.image_lifecycle,
-            capacity_limiter=self._capacity_limiter,
+            capacity_limiter=self._image_limiter,
+            max_parallel_jobs=self.settings.max_parallel_image_jobs,
         )
         # Workflow subsystem: limiter PROPIO (no comparte el global de Kie)
         # para evitar deadlock cuando el orquestador toma un slot esperando
@@ -252,7 +252,10 @@ class KieAvatarStudioApp(App[None]):
         self.workflow_step_runner = WorkflowStepRunner(
             self.settings,
             self.kie,
-            self._capacity_limiter,
+            self._image_limiter,
+            audio_limiter=self._audio_limiter,
+            video_limiter=self._video_limiter,
+            download_limiter=self._download_limiter,
             image_jobs_repo=self.image_jobs_db,
             generated_images_store=self.generated_images_db,
             runner_factory=self.workflow_runner_factory,
@@ -264,7 +267,9 @@ class KieAvatarStudioApp(App[None]):
             self.images_db,
             self.generated_images_db,
             self.image_jobs_db,
-            self._capacity_limiter,
+            self._image_limiter,
+            self._upload_limiter,
+            self._download_limiter,
             self.workflow_runner_factory,
         )
         self.workflow_runner = WorkflowRunner(
@@ -292,7 +297,7 @@ class KieAvatarStudioApp(App[None]):
         self.workflow_runner.set_notify(self._dispatch_workflow_event)
         self.keys_controller = KeysController(self.keys_store, self._gateway_factory)
         self.settings_controller = SettingsController(self.settings, self.env_writer)
-        self.images_controller = ImagesController(self.images_db, self.kie)
+        self.images_controller = ImagesController(self.images_db, self._limited_kie)
         self.audios_controller = AudiosController(
             self.audios_db,
             self.audio_jobs_db,
@@ -833,6 +838,25 @@ class KieAvatarStudioApp(App[None]):
     def _build_kie_client(self) -> KieClient:
         return KieClient(self.settings)
 
+    def _reset_kie_limiters(self) -> None:
+        """Reconstruye los semáforos selectivos derivados de `Settings`."""
+        self._video_job_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_jobs))
+        self._video_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_video_jobs))
+        self._audio_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_audio_jobs))
+        self._image_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_image_jobs))
+        self._upload_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_upload_jobs))
+        self._download_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_download_jobs))
+
+    def _build_limited_kie_gateway(self) -> LimitedKieGateway:
+        return LimitedKieGateway(
+            self.kie,
+            audio_limiter=self._audio_limiter,
+            image_limiter=self._image_limiter,
+            video_limiter=self._video_limiter,
+            upload_limiter=self._upload_limiter,
+            download_limiter=self._download_limiter,
+        )
+
     def _gateway_factory(self, secret: str) -> KieClient:
         """Construye un `KieClient` ad-hoc con la key dada (para `test_key`)."""
         adhoc_settings = self.settings.model_copy(update={"kie_api_key": secret})
@@ -884,16 +908,19 @@ class KieAvatarStudioApp(App[None]):
         old_image_queue = self.image_queue
         old_workflow_queue = self.workflow_queue
         self.kie = self._build_kie_client()
+        self._reset_kie_limiters()
+        self._limited_kie = self._build_limited_kie_gateway()
         # `JobRunner`, `AudioJobRunner` e `ImageJobRunner` toman el cliente
         # en cada `run()` desde `self._client`, así que solo necesitamos
         # rebindear las referencias que usan.
-        self.runner = JobRunner(self.settings, self.kie, self.db)
+        self.runner = JobRunner(self.settings, self._limited_kie, self.db)
         self.queue = QueueManager(
             self.settings,
             self.runner,
             event_factory=JobUpdated,
             lifecycle=self.video_lifecycle,
-            capacity_limiter=self._capacity_limiter,
+            capacity_limiter=self._video_job_limiter,
+            max_parallel_jobs=self.settings.max_parallel_jobs,
         )
         self.audio_runner = AudioJobRunner(
             self.settings, self.kie, self.audio_jobs_db, self.audios_db
@@ -903,7 +930,8 @@ class KieAvatarStudioApp(App[None]):
             self.audio_runner,
             event_factory=AudioJobUpdated,
             lifecycle=self.audio_lifecycle,
-            capacity_limiter=self._capacity_limiter,
+            capacity_limiter=self._audio_limiter,
+            max_parallel_jobs=self.settings.max_parallel_audio_jobs,
         )
         self.image_runner = ImageJobRunner(
             self.settings,
@@ -917,7 +945,8 @@ class KieAvatarStudioApp(App[None]):
             self.image_runner,
             event_factory=ImageJobUpdated,
             lifecycle=self.image_lifecycle,
-            capacity_limiter=self._capacity_limiter,
+            capacity_limiter=self._image_limiter,
+            max_parallel_jobs=self.settings.max_parallel_image_jobs,
         )
         # Rebuild del workflow subsystem: factory + step_runner + base_resolver
         # + runner + queue + controller, todos apuntan al `self.kie` viejo.
@@ -941,7 +970,10 @@ class KieAvatarStudioApp(App[None]):
         self.workflow_step_runner = WorkflowStepRunner(
             self.settings,
             self.kie,
-            self._capacity_limiter,
+            self._image_limiter,
+            audio_limiter=self._audio_limiter,
+            video_limiter=self._video_limiter,
+            download_limiter=self._download_limiter,
             image_jobs_repo=self.image_jobs_db,
             generated_images_store=self.generated_images_db,
             runner_factory=self.workflow_runner_factory,
@@ -953,7 +985,9 @@ class KieAvatarStudioApp(App[None]):
             self.images_db,
             self.generated_images_db,
             self.image_jobs_db,
-            self._capacity_limiter,
+            self._image_limiter,
+            self._upload_limiter,
+            self._download_limiter,
             self.workflow_runner_factory,
         )
         self.workflow_runner = WorkflowRunner(
@@ -981,7 +1015,7 @@ class KieAvatarStudioApp(App[None]):
         # Hay que recrear el controller con el nuevo queue. Mismo motivo
         # para `HistoryController`, `VideosController` y
         # `GeneratedImagesController` (referencias a los queues).
-        self.images_controller = ImagesController(self.images_db, self.kie)
+        self.images_controller = ImagesController(self.images_db, self._limited_kie)
         self.audios_controller = AudiosController(
             self.audios_db,
             self.audio_jobs_db,

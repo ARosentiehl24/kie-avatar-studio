@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final
 
 from ..config import Settings
+from ..domain.policies import DEFAULT_I2V_ASPECT_RATIO, DEFAULT_I2V_MODE
 from ..domain.ports import KieGateway
 from .polling import poll_task_for_url
 
@@ -27,6 +28,7 @@ async def render_avatar_video(
     client: KieGateway,
     settings: Settings,
     limiter: asyncio.Semaphore,
+    download_limiter: asyncio.Semaphore,
     image_url: str,
     audio_url: str,
     prompt: str,
@@ -55,7 +57,7 @@ async def render_avatar_video(
             timeout_seconds=settings.task_timeout_seconds,
         )
 
-    async with limiter:
+    async with download_limiter:
         await client.download_file(video_url, output_path)
     return task_id, str(output_path)
 
@@ -65,6 +67,7 @@ async def render_i2v_video(
     client: KieGateway,
     settings: Settings,
     limiter: asyncio.Semaphore,
+    download_limiter: asyncio.Semaphore,
     image_url: str,
     prompt: str,
     output_path: Path,
@@ -87,13 +90,17 @@ async def render_i2v_video(
     """
     task_id = existing_task_id
     if task_id is None:
-        kwargs: dict[str, object] = {"duration": duration, "sound": sound}
-        if mode is not None:
-            kwargs["mode"] = mode
-        if aspect_ratio is not None:
-            kwargs["aspect_ratio"] = aspect_ratio
+        resolved_mode = mode or DEFAULT_I2V_MODE
+        resolved_aspect_ratio = aspect_ratio or DEFAULT_I2V_ASPECT_RATIO
         async with limiter:
-            created = await client.create_image_to_video_task(image_url, prompt, **kwargs)  # type: ignore[arg-type]
+            created = await client.create_image_to_video_task(
+                image_url,
+                prompt,
+                duration=duration,
+                sound=sound,
+                mode=resolved_mode,
+                aspect_ratio=resolved_aspect_ratio,
+            )
         task_id = created.task_id
 
     async with limiter:
@@ -105,7 +112,7 @@ async def render_i2v_video(
             timeout_seconds=settings.task_timeout_seconds,
         )
 
-    async with limiter:
+    async with download_limiter:
         await client.download_file(video_url, output_path)
     return task_id, str(output_path)
 

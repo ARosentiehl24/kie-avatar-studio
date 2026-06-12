@@ -469,6 +469,29 @@ class AutomationScreen(Screen[None]):
             _on_product_chosen,
         )
 
+    def _retry_product_selection(
+        self,
+        entry: WorkflowEntry,
+        *,
+        voice_preset_id: str | None,
+        audio_language: str | None,
+        pre_settings: WorkflowPreSettings,
+        base_ref: ImageAssetRef | None,
+        message: str,
+    ) -> None:
+        self._set_status(
+            f"{ERROR} {message}. Reintentá elegir el producto; "
+            "la imagen base aprobada se conserva.",
+            error=True,
+        )
+        self._open_product_picker(
+            entry,
+            voice_preset_id=voice_preset_id,
+            audio_language=audio_language,
+            pre_settings=pre_settings,
+            base_ref=base_ref,
+        )
+
     async def _upload_product_and_open_summary(
         self,
         entry: WorkflowEntry,
@@ -483,10 +506,24 @@ class AutomationScreen(Screen[None]):
         try:
             product_ref = await self._controller.upload_local_product(product_path)
         except (ImageValidationError, WorkflowValidationError, KieError) as exc:
-            self._set_status(f"{ERROR} no pude subir el producto: {exc}", error=True)
+            self._retry_product_selection(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+                base_ref=base_ref,
+                message=f"no pude subir el producto: {exc}",
+            )
             return
         except Exception as exc:
-            self._set_status(f"{ERROR} error inesperado subiendo el producto: {exc}", error=True)
+            self._retry_product_selection(
+                entry,
+                voice_preset_id=voice_preset_id,
+                audio_language=audio_language,
+                pre_settings=pre_settings,
+                base_ref=base_ref,
+                message=f"error inesperado subiendo el producto: {exc}",
+            )
             return
         pre_settings.product_image = ProductImage(
             local_path=str(product_path), resolved_image_ref=product_ref

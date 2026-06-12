@@ -18,9 +18,9 @@ notificación al listener. Esto evita lost updates entre steps paralelos.
 ### Capacity limiter
 
 Para los image/audio sub-jobs, usa `WorkflowRunnerFactory` para
-construir runners ad-hoc y los wrappa con `async with self._limiter`.
-Para Avatar Pro y i2v (llamadas Kie directas sin runner) usa los
-helpers de `workflow_kie_helpers` que adquieren el limiter internamente.
+construir runners ad-hoc y los wrappa con limiters dedicados. Para
+Avatar Pro/i2v y descargas usa limiters separados para no mezclar
+TTS, imagen y video en el mismo cuello de botella.
 
 ### Tamaño del módulo (CR-3.2)
 
@@ -99,15 +99,21 @@ class WorkflowStepRunner:
         self,
         settings: Settings,
         client: KieGateway,
-        capacity_limiter: asyncio.Semaphore,
+        image_limiter: asyncio.Semaphore,
         *,
+        audio_limiter: asyncio.Semaphore,
+        video_limiter: asyncio.Semaphore,
+        download_limiter: asyncio.Semaphore,
         image_jobs_repo: ImageJobRepository,
         generated_images_store: GeneratedImageStore,
         runner_factory: WorkflowRunnerFactory,
     ) -> None:
         self._settings = settings
         self._client = client
-        self._limiter = capacity_limiter
+        self._image_limiter = image_limiter
+        self._audio_limiter = audio_limiter
+        self._video_limiter = video_limiter
+        self._download_limiter = download_limiter
         self._image_jobs_repo = image_jobs_repo
         self._generated_images_store = generated_images_store
         self._runner_factory = runner_factory
@@ -199,7 +205,8 @@ class WorkflowStepRunner:
         task_id, video_path = await render_avatar_video(
             client=self._client,
             settings=self._settings,
-            limiter=self._limiter,
+            limiter=self._video_limiter,
+            download_limiter=self._download_limiter,
             image_url=scene_ref.kie_url,
             audio_url=audio_url,
             prompt=step.prompt,
@@ -300,7 +307,8 @@ class WorkflowStepRunner:
         task_id, path = await render_i2v_video(
             client=self._client,
             settings=self._settings,
-            limiter=self._limiter,
+            limiter=self._video_limiter,
+            download_limiter=self._download_limiter,
             image_url=scene_ref.kie_url,
             prompt=step.prompt,
             output_path=video_path,
@@ -314,7 +322,8 @@ class WorkflowStepRunner:
     async def _download_audio_only(
         self, step: WorkflowStep, audio_url: str, audio_path: Path
     ) -> None:
-        await download_kie_asset(client=self._client, url=audio_url, output_path=audio_path)
+        async with self._download_limiter:
+            await download_kie_asset(client=self._client, url=audio_url, output_path=audio_path)
         step.audio_path = str(audio_path)
 
     # --- b-roll silent (only video) ---------------------------------------
@@ -409,11 +418,12 @@ class WorkflowStepRunner:
         set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
         if not needs_scene_generation(step):
-            await download_kie_asset(
-                client=self._client,
-                url=context.base_image_ref.kie_url,
-                output_path=scene_path,
-            )
+            async with self._download_limiter:
+                await download_kie_asset(
+                    client=self._client,
+                    url=context.base_image_ref.kie_url,
+                    output_path=scene_path,
+                )
             step.scene_image_path = str(scene_path)
             set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
             return context.base_image_ref
@@ -495,7 +505,10 @@ class WorkflowStepRunner:
                 "desde el modal de aprobación para crear una nueva"
             )
         if not scene_path.exists():  # noqa: ASYNC240 - check sync trivial
-            await download_kie_asset(client=self._client, url=ref.kie_url, output_path=scene_path)
+            async with self._download_limiter:
+                await download_kie_asset(
+                    client=self._client, url=ref.kie_url, output_path=scene_path
+                )
         step.scene_image_path = str(scene_path)
         return ref
 
@@ -511,7 +524,7 @@ class WorkflowStepRunner:
         step.bg_image_job_id = image_job.id
         await on_transition(step)
         runner = self._runner_factory.make_image_runner()
-        async with self._limiter:
+        async with self._image_limiter:
             await runner.run(image_job)
         if image_job.status != ImageJobStatus.COMPLETED or not image_job.kie_url:
             raise WorkflowStepError(
@@ -519,7 +532,8 @@ class WorkflowStepRunner:
                 f"({image_job.error or 'sin mensaje'})"
             )
         ref = await self._make_scene_ref(step, image_job)
-        await download_kie_asset(client=self._client, url=ref.kie_url, output_path=scene_path)
+        async with self._download_limiter:
+            await download_kie_asset(client=self._client, url=ref.kie_url, output_path=scene_path)
         step.scene_image_path = str(scene_path)
         set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
         return ref
@@ -607,7 +621,7 @@ class WorkflowStepRunner:
         set_progress(step, WorkflowProgressKey.AUDIO, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
         runner = self._runner_factory.make_audio_runner(tts_model=context.tts_model)
-        async with self._limiter:
+        async with self._audio_limiter:
             await runner.run(audio_job)
         if audio_job.status != AudioJobStatus.COMPLETED or not audio_job.kie_url:
             raise WorkflowStepError(
