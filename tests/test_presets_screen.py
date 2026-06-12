@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from textual.widgets import Button, DataTable, Input
+from textual.widgets import Button, DataTable, Input, Select
 
 from kie_avatar_studio.app import KieAvatarStudioApp
 from kie_avatar_studio.config import Settings
@@ -106,7 +106,7 @@ async def test_modal_edicion_precarga_existente(tmp_path: Path) -> None:
             id="narrador",
             label="narrador",
             voice_id="EkK5I93UQWFDigLMpZcX",
-            voice_settings=VoiceSettings(stability=0.7),
+            voice_settings=VoiceSettings(stability=0.7, language_code="es-419"),
             description="voz grave",
         )
         await app.presets_store.upsert(preset)
@@ -124,6 +124,8 @@ async def test_modal_edicion_precarga_existente(tmp_path: Path) -> None:
         assert label_input.value == "narrador"
         stability_input = app.screen.query_one("#preset-stability", Input)
         assert stability_input.value == "0.7"
+        language_select = app.screen.query_one("#preset-language", Select)
+        assert language_select.value == "es-419"
 
 
 async def test_delete_remueve_del_disco(tmp_path: Path) -> None:

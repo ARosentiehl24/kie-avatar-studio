@@ -3,3 +3,5 @@
 No importa nada de `infra/`, `app_layer/` ni `ui/`. Cumple la regla DIP:
 las capas superiores dependen de estos tipos, no de implementaciones concretas.
 """
+
+from __future__ import annotations

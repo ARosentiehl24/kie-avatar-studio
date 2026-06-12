@@ -1,18 +1,7 @@
 """Modal para crear o editar un `VoicePreset`.
 
-Solo dispatch + render (CR-10.1). Reusa el patrón del modal Generate
-Audio: header + body scrollable + footer sticky con botones. El
-preset se guarda via callback (`on_save`) que el caller le pasa,
-así el modal queda independiente del controller concreto.
-
-### Preview de voces
-
-Igual que `GenerateAudioFormScreen`, este modal recibe un `AudioPlayer`
-inyectado y expone botones **Preview** / **Detener** al lado del
-Select de voz. Reproduce el `preview_url` del catálogo built-in
-(servido por ElevenLabs vía Kie). El stop se dispara también al
-dismiss del modal (cancelar/guardar) para que el usuario no quede
-con un audio sonando.
+Renderiza un form independiente del controller y permite escuchar previews
+de voces built-in cuando recibe un `AudioPlayer` inyectado.
 """
 
 from __future__ import annotations
@@ -24,13 +13,23 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Collapsible, Input, Label, Select, Static, TextArea
+from textual.widgets import Button, Input, Select, Static, TextArea
 
 from ...app_layer.audio_player import AudioPlayer
-from ...domain.errors import UrlValidationError
+from ...domain.errors import UrlValidationError, VoiceSettingsValidationError
 from ...domain.kie_voice_catalog import BUILTIN_VOICES, get_builtin_voice
 from ...domain.models import VoicePreset, VoiceSettings
-from ...domain.policies import MAX_SCRIPT_CHARS
+from ._preset_form_widgets import (
+    compose_advanced_settings,
+    compose_description_field,
+    compose_name_field,
+    compose_voice_selector,
+)
+from ._voice_language_options import (
+    LANGUAGE_AUTO_SENTINEL,
+    selected_language_code,
+)
+from ._voice_settings_form import build_voice_settings
 
 _FORM_TITLE_NEW: Final[str] = "Nuevo preset de voz"
 _FORM_TITLE_EDIT: Final[str] = "Editar preset de voz"
@@ -76,63 +75,19 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
         with Vertical(id="preset-form-dialog"):
             with VerticalScroll(id="preset-form-body"):
                 yield Static(title, id="preset-form-title")
-
-                yield Label("Nombre del preset (ej. 'narrador calmo')")
-                yield Input(
-                    placeholder="narrador calmo",
-                    id="preset-label",
-                    value=self._existing.label if self._existing else "",
+                yield from compose_name_field(self._existing.label if self._existing else "")
+                yield from compose_voice_selector(
+                    self._initial_voice_id(),
+                    with_preview=self._audio_player is not None,
                 )
-
-                yield Label("Voz (catálogo built-in de Kie — 67 voces)")
-                with Horizontal(id="preset-voice-row"):
-                    yield Select(
-                        options=[(voice.display_name, voice.voice_id) for voice in BUILTIN_VOICES],
-                        value=self._initial_voice_id(),
-                        allow_blank=False,
-                        id="preset-voice",
-                    )
-                    # Solo mostramos los botones si tenemos un AudioPlayer
-                    # inyectado (compatibilidad con callers que no lo pasen).
-                    if self._audio_player is not None:
-                        yield Button("Preview", id="preset-preview", classes="btn-info")
-                        yield Button("Detener", id="preset-preview-stop", classes="btn-warning")
-
-                yield Label(f"Descripción opcional (máx {_DESCRIPTION_MAX} chars)")
-                yield TextArea(
+                yield from compose_description_field(
                     self._existing.description or "" if self._existing else "",
-                    id="preset-description",
-                    language=None,
+                    max_chars=_DESCRIPTION_MAX,
                 )
-
-                with Collapsible(title="Avanzado — voice settings", id="preset-advanced"):
-                    yield Label("stability (0.0 - 1.0, vacío = default 0.5)")
-                    yield Input(
-                        placeholder="0.5",
-                        id="preset-stability",
-                        value=self._initial("stability"),
-                    )
-                    yield Label("similarity_boost (0.0 - 1.0, vacío = default 0.75)")
-                    yield Input(
-                        placeholder="0.75",
-                        id="preset-similarity",
-                        value=self._initial("similarity_boost"),
-                    )
-                    yield Label("style (0.0 - 1.0, vacío = default 0)")
-                    yield Input(placeholder="0", id="preset-style", value=self._initial("style"))
-                    yield Label("speed (0.7 - 1.2, vacío = default 1.0)")
-                    yield Input(
-                        placeholder="1.0",
-                        id="preset-speed",
-                        value=self._initial("speed"),
-                    )
-                    yield Label("language_code ISO 639-1 (vacío = auto; solo turbo/flash v2.5)")
-                    yield Input(
-                        placeholder="es",
-                        id="preset-language",
-                        value=self._initial_language_code(),
-                    )
-
+                yield from compose_advanced_settings(
+                    self._initial,
+                    self._initial_language_code(),
+                )
                 yield Static("", id="preset-form-error")
             with Horizontal(id="preset-form-footer"):
                 yield Button("Cancelar", id="cancel", variant="default")
@@ -204,10 +159,7 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
         return value
 
     def _set_error(self, message: str) -> None:
-        try:
-            error = self.query_one("#preset-form-error", Static)
-        except Exception:
-            return
+        error = self.query_one("#preset-form-error", Static)
         error.update(f"[red]{message}[/red]")
 
     # --- internos ---------------------------------------------------------
@@ -226,10 +178,11 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
         if len(description) > _DESCRIPTION_MAX:
             error.update(f"[red]La descripción supera {_DESCRIPTION_MAX} caracteres.[/red]")
             return
-        settings = self._collect_voice_settings()
-        # Si el usuario escribió algo raro en los settings avanzados,
-        # `_collect_voice_settings` puede devolver None; capturamos
-        # ValueError adentro para mostrar en el form.
+        try:
+            settings = self._collect_voice_settings()
+        except VoiceSettingsValidationError as exc:
+            error.update(f"[red]{exc}[/red]")
+            return
         # Stop del preview antes de cerrar: si el usuario guarda mientras
         # un audio sonaba, esperaría silencio inmediato.
         self._stop_preview_async()
@@ -261,36 +214,27 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
             or self._existing.voice_settings is None
             or self._existing.voice_settings.language_code is None
         ):
-            return ""
+            return LANGUAGE_AUTO_SENTINEL
         return self._existing.voice_settings.language_code
 
     def _collect_voice_settings(self) -> VoiceSettings | None:
         """Parsea los 5 inputs avanzados a VoiceSettings o None.
 
-        Si todos vacíos → None (Kie aplica defaults). Si alguno tiene
-        valor, lo parsea con tolerancia: errores de rango caen al
-        Field validator de Pydantic; el modal NO valida acá para no
-        duplicar la lógica que ya está en domain.policies.
+        Si todos vacíos → None (Kie aplica defaults). Si alguno tiene valor,
+        delega el armado y los errores de rango al helper compartido.
         """
         stability = self._parse_float("preset-stability")
         similarity = self._parse_float("preset-similarity")
         style = self._parse_float("preset-style")
         speed = self._parse_float("preset-speed")
-        language = self.query_one("#preset-language", Input).value.strip() or None
-        if all(v is None for v in (stability, similarity, style, speed, language)):
-            return None
-        try:
-            return VoiceSettings(
-                stability=stability,
-                similarity_boost=similarity,
-                style=style,
-                speed=speed,
-                language_code=language,
-            )
-        except ValueError:
-            # Devolvemos None silencioso: el caller (controller) re-valida
-            # via validate_voice_settings y muestra el error al usuario.
-            return None
+        language = selected_language_code(self.query_one("#preset-language", Select).value)
+        return build_voice_settings(
+            stability=stability,
+            similarity_boost=similarity,
+            style=style,
+            speed=speed,
+            language_code=language,
+        )
 
     def _parse_float(self, input_id: str) -> float | None:
         raw = self.query_one(f"#{input_id}", Input).value.strip()
@@ -298,9 +242,5 @@ class PresetFormScreen(ModalScreen[PresetFormResult | None]):
             return None
         try:
             return float(raw)
-        except ValueError:
-            return None
-
-
-# Helper no usado en runtime, solo para que ruff no se queje del import.
-_ = MAX_SCRIPT_CHARS
+        except ValueError as exc:
+            raise VoiceSettingsValidationError(f"{input_id} debe ser numérico") from exc
