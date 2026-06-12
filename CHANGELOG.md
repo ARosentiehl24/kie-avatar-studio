@@ -4,6 +4,15 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [1.2.2] — 2026-06-12
+
+### Changed (S)
+
+- **Selector de idioma en presets de voz**: el campo avanzado
+  `language_code` ahora es un dropdown con códigos BCP-47 comunes aceptados
+  por Kie/ElevenLabs (`es`, `es-419`, `es-ES`, `en`, `pt-BR`, etc.), evitando
+  que el usuario tenga que recordar el formato correcto.
+
 ## [1.2.1] — 2026-06-11
 
 ### Fixed (S)

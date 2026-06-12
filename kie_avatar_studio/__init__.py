@@ -5,4 +5,6 @@ de verdad para el updater (`UpdateChecker`) y para el SUB_TITLE de la TUI.
 Bump según CR-13 (L/M/S → MAJOR/MINOR/PATCH).
 """
 
-__version__ = "1.2.1"
+from __future__ import annotations
+
+__version__ = "1.2.2"

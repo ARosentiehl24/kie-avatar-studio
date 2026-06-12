@@ -3,3 +3,5 @@
 Depende solo de tipos del `domain/` y de los Protocols del `app_layer/`.
 Nunca importa de `infra/` directamente.
 """
+
+from __future__ import annotations
