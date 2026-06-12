@@ -71,12 +71,13 @@ async def test_set_active_missing_raises(store: KeysStore, tmp_settings) -> None
 
 async def test_test_key_ok_marks_validated(store: KeysStore, tmp_settings) -> None:
     def handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": {"status": "pending"}})
+        return httpx.Response(200, json={"code": 200, "data": 123.45})
 
     ctl = KeysController(store, lambda _s: _build_mocked_client(tmp_settings, handler))
     await ctl.add_key("dev", "dev", "sk-12345678")
     tested = await ctl.test_key("dev")
     assert tested.last_validated_status == "ok"
+    assert tested.last_known_credits == 123.45
     assert tested.last_validated_at is not None
 
 
