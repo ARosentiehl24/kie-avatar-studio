@@ -149,6 +149,11 @@ KIE_API_KEY=
 KIE_API_BASE=https://api.kie.ai
 KIE_UPLOAD_BASE=https://kieai.redpandaai.co
 MAX_PARALLEL_JOBS=2
+MAX_PARALLEL_AUDIO_JOBS=1
+MAX_PARALLEL_IMAGE_JOBS=3
+MAX_PARALLEL_VIDEO_JOBS=2
+MAX_PARALLEL_UPLOAD_JOBS=2
+MAX_PARALLEL_DOWNLOAD_JOBS=3
 POLL_INTERVAL_SECONDS=10
 TASK_TIMEOUT_SECONDS=1800
 DEFAULT_VOICE=EkK5I93UQWFDigLMpZcX
@@ -174,8 +179,10 @@ validate ─► upload_image  ┐
 ```
 
 `upload_image` y `create_audio` corren en paralelo dentro del mismo job
-(`asyncio.gather`). Entre jobs, el paralelismo lo limita
-`asyncio.Semaphore(settings.max_parallel_jobs)`.
+(`asyncio.gather`). En workflows, el paralelismo de llamadas Kie se separa
+por tipo (`MAX_PARALLEL_AUDIO_JOBS`, `MAX_PARALLEL_IMAGE_JOBS`,
+`MAX_PARALLEL_VIDEO_JOBS`, `MAX_PARALLEL_UPLOAD_JOBS`,
+`MAX_PARALLEL_DOWNLOAD_JOBS`) para permitir más throughput sin saturar TTS.
 
 ## Estados del job
 

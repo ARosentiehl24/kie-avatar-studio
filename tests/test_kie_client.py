@@ -1,23 +1,10 @@
 import httpx
 import pytest
 
+import kie_avatar_studio.infra.kie_client as kie_client_module
 from kie_avatar_studio.domain.errors import KieClientError, KieServerError
 from kie_avatar_studio.domain.models import VoiceSettings
 from kie_avatar_studio.infra.kie_client import KieClient
-
-
-def _client_with(transport: httpx.MockTransport, tmp_settings) -> KieClient:
-    client = KieClient(tmp_settings)
-    # reemplazamos el http client interno por uno con transporte mockeado
-    # (los tests deben cerrarlo con aclose en finally del caller)
-    import asyncio
-
-    asyncio.get_event_loop().run_until_complete(client.aclose())
-    client._client = httpx.AsyncClient(
-        transport=transport,
-        headers={"Authorization": f"Bearer {tmp_settings.kie_api_key}"},
-    )
-    return client
 
 
 async def test_create_tts_task_happy(tmp_settings) -> None:
@@ -97,6 +84,59 @@ async def test_5xx_then_success(tmp_settings) -> None:
         result = await client.create_tts_task("x", "v")
         assert result.task_id == "t_ok"
         assert calls["n"] == 3
+    finally:
+        await client.aclose()
+
+
+async def test_transport_error_retries_then_success(tmp_settings, monkeypatch) -> None:
+    """Errores transitorios de red/DNS se reintentan antes de fallar."""
+    monkeypatch.setattr(kie_client_module, "_BACKOFF_BASE_SECONDS", 0)
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ConnectError("getaddrinfo failed", request=req)
+        return httpx.Response(200, json={"data": {"taskId": "t_ok"}})
+
+    client = KieClient(tmp_settings)
+    await client.aclose()
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={"Authorization": f"Bearer {tmp_settings.kie_api_key}"},
+    )
+    try:
+        result = await client.create_tts_task("x", "v")
+        assert result.task_id == "t_ok"
+        assert calls["n"] == 3
+    finally:
+        await client.aclose()
+
+
+async def test_200_with_code_500_retries_then_success(tmp_settings, monkeypatch) -> None:
+    """Kie a veces reporta 5xx en el JSON aunque HTTP sea 200; también se reintenta."""
+    monkeypatch.setattr(kie_client_module, "_BACKOFF_BASE_SECONDS", 0)
+    calls = {"n": 0}
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            return httpx.Response(
+                200,
+                json={"code": 500, "msg": "internal error, please try again later", "data": None},
+            )
+        return httpx.Response(200, json={"code": 200, "data": {"taskId": "t_ok"}})
+
+    client = KieClient(tmp_settings)
+    await client.aclose()
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={"Authorization": f"Bearer {tmp_settings.kie_api_key}"},
+    )
+    try:
+        result = await client.create_tts_task("x", "v")
+        assert result.task_id == "t_ok"
+        assert calls["n"] == 2
     finally:
         await client.aclose()
 
@@ -412,5 +452,32 @@ async def test_upload_file_sanitizes_spaces_in_download_url(tmp_settings, tmp_pa
             result.download_url
             == "https://tempfile.kie.ai/uploads/WhatsApp%20Image%202026-06-08%20at%2011.31.43.jpeg"
         )
+    finally:
+        await client.aclose()
+
+
+async def test_download_file_retries_transport_error(tmp_settings, tmp_path, monkeypatch) -> None:
+    """Las descargas por streaming también reintentan fallos transitorios de red."""
+    monkeypatch.setattr(kie_client_module, "_BACKOFF_BASE_SECONDS", 0)
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise httpx.ConnectError("getaddrinfo failed", request=req)
+        return httpx.Response(200, content=b"ok")
+
+    client = KieClient(tmp_settings)
+    await client.aclose()
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={"Authorization": f"Bearer {tmp_settings.kie_api_key}"},
+    )
+    target = tmp_path / "asset.bin"
+    try:
+        result = await client.download_file("https://tempfile.kie.ai/asset.bin", target)
+        assert result == target
+        assert target.read_bytes() == b"ok"
+        assert calls["n"] == 2
     finally:
         await client.aclose()

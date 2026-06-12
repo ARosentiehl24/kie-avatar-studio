@@ -4,6 +4,23 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [1.2.0] — 2026-06-11
+
+### Added (M)
+
+- **Paralelismo selectivo por tipo de llamada Kie**: se agregaron límites
+  independientes para audio, imagen, video, uploads y descargas. Esto permite
+  subir throughput de imagen/video sin saturar el endpoint TTS.
+
+### Fixed (S)
+
+- **Reintentos transitorios de Kie.ai**: el cliente HTTP ahora reintenta
+  errores de red/DNS, respuestas 5xx y respuestas `code: 5xx` embebidas
+  en JSON antes de fallar. También aplica a descargas por streaming.
+- **Flujo de producto promocional**: si falla la subida del producto, la
+  pantalla vuelve a pedir la imagen del producto conservando la modelo base
+  ya aprobada, evitando tener que regenerarla.
+
 ## [1.1.1] — 2026-06-08
 
 ### Added (S)

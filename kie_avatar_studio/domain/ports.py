@@ -120,6 +120,7 @@ class KieGateway(Protocol):
         aspect_ratio: str = ...,
         resolution: str = ...,
         output_format: str = ...,
+        model: str = ...,
     ) -> KieTaskCreated: ...
 
     async def create_image_to_video_task(
@@ -129,6 +130,9 @@ class KieGateway(Protocol):
         *,
         model: str = ...,
         duration: int = ...,
+        sound: bool = ...,
+        mode: str = ...,
+        aspect_ratio: str = ...,
     ) -> KieTaskCreated: ...
 
     async def get_task_detail(self, task_id: str) -> dict[str, Any]: ...

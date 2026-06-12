@@ -77,7 +77,9 @@ class WorkflowBaseResolver:
         uploaded_images: ImageStore,
         generated_images: GeneratedImageStore,
         image_jobs_repo: ImageJobRepository,
-        capacity_limiter: asyncio.Semaphore,
+        image_limiter: asyncio.Semaphore,
+        upload_limiter: asyncio.Semaphore,
+        download_limiter: asyncio.Semaphore,
         runner_factory: WorkflowRunnerFactory,
     ) -> None:
         self._settings = settings
@@ -86,7 +88,9 @@ class WorkflowBaseResolver:
         self._uploaded_images = uploaded_images
         self._generated_images = generated_images
         self._image_jobs_repo = image_jobs_repo
-        self._capacity_limiter = capacity_limiter
+        self._image_limiter = image_limiter
+        self._upload_limiter = upload_limiter
+        self._download_limiter = download_limiter
         self._runner_factory = runner_factory
 
     async def resolve_voice(self, workflow: WorkflowJob) -> tuple[str, VoiceSettings | None]:
@@ -146,7 +150,8 @@ class WorkflowBaseResolver:
     async def download_base_locally(self, ref: ImageAssetRef, output_dir: Path) -> None:
         """Descarga la imagen base a `output_dir/base.png` para uso del usuario."""
         target = output_dir / BASE_IMAGE_FILENAME
-        await self._client.download_file(ref.kie_url, target)
+        async with self._download_limiter:
+            await self._client.download_file(ref.kie_url, target)
 
     # --- standalone public helpers (pre-enqueue UI use) -----------------
 
@@ -188,7 +193,7 @@ class WorkflowBaseResolver:
         )
         await self._image_jobs_repo.upsert(image_job)
         runner = self._runner_factory.make_image_runner()
-        async with self._capacity_limiter:
+        async with self._image_limiter:
             await runner.run(image_job)
         if image_job.status != ImageJobStatus.COMPLETED or not image_job.kie_url:
             raise WorkflowValidationError(
@@ -206,7 +211,8 @@ class WorkflowBaseResolver:
         )
         if download_to is not None:
             download_to.parent.mkdir(parents=True, exist_ok=True)
-            await self._client.download_file(ref.kie_url, download_to)
+            async with self._download_limiter:
+                await self._client.download_file(ref.kie_url, download_to)
         return ref
 
     async def upload_local_standalone(self, path: Path) -> ImageAssetRef:
@@ -237,7 +243,8 @@ class WorkflowBaseResolver:
         validado por el caller.
         """
         resolved_path = await asyncio.to_thread(path.resolve)
-        result = await self._client.upload_file(path)
+        async with self._upload_limiter:
+            result = await self._client.upload_file(path)
         uploaded = UploadedImage(
             id=result.file_path,
             label=path.name,
@@ -266,7 +273,7 @@ class WorkflowBaseResolver:
         image_job = self._build_base_image_job(workflow, creation.prompt)
         await self._image_jobs_repo.upsert(image_job)
         runner = self._runner_factory.make_image_runner()
-        async with self._capacity_limiter:
+        async with self._image_limiter:
             await runner.run(image_job)
         if image_job.status != ImageJobStatus.COMPLETED or not image_job.kie_url:
             raise WorkflowValidationError(

@@ -167,7 +167,10 @@ async def step_runner_setup(
             kie_file_path="base.png",
         )
     )
-    limiter = asyncio.Semaphore(2)
+    image_limiter = asyncio.Semaphore(2)
+    audio_limiter = asyncio.Semaphore(1)
+    video_limiter = asyncio.Semaphore(2)
+    download_limiter = asyncio.Semaphore(2)
     runner_factory = WorkflowRunnerFactory(
         image_deps=ImageRunnerDeps(
             settings=tmp_settings,
@@ -186,12 +189,15 @@ async def step_runner_setup(
     runner = WorkflowStepRunner(
         tmp_settings,
         kie_with_handler,
-        limiter,
+        image_limiter,
+        audio_limiter=audio_limiter,
+        video_limiter=video_limiter,
+        download_limiter=download_limiter,
         image_jobs_repo=image_jobs,
         generated_images_store=generated,
         runner_factory=runner_factory,
     )
-    return runner, limiter, tmp_settings.outputs_dir / "wf_test_001"
+    return runner, image_limiter, tmp_settings.outputs_dir / "wf_test_001"
 
 
 def _make_context(output_dir: Path) -> WorkflowExecutionContext:
@@ -425,6 +431,9 @@ async def test_failed_step_marks_remaining_progress_as_failed(tmp_settings: Sett
         settings,
         client,
         asyncio.Semaphore(2),
+        audio_limiter=asyncio.Semaphore(1),
+        video_limiter=asyncio.Semaphore(2),
+        download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs,
         generated_images_store=generated,
         runner_factory=runner_factory,

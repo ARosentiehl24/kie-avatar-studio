@@ -68,15 +68,17 @@ class QueueManager(Generic[T, EventT]):
         event_factory: Callable[[T], EventT],
         lifecycle: JobLifecycle[T],
         capacity_limiter: asyncio.Semaphore | None = None,
+        max_parallel_jobs: int | None = None,
     ) -> None:
         self._settings = settings
         self._runner = runner
         self._event_factory = event_factory
         self._lifecycle = lifecycle
+        self._max_parallel_jobs = max(1, max_parallel_jobs or settings.max_parallel_jobs)
         # Si recibimos un semáforo compartido, lo usamos; si no, creamos uno
         # local. El primer caso es el que respeta el límite global cuando
         # hay múltiples QueueManagers en la app.
-        self._semaphore = capacity_limiter or asyncio.Semaphore(max(1, settings.max_parallel_jobs))
+        self._semaphore = capacity_limiter or asyncio.Semaphore(self._max_parallel_jobs)
         self._pending: deque[T] = deque()
         self._active: dict[str, asyncio.Task[None]] = {}
         self._jobs_by_id: dict[str, T] = {}
@@ -171,7 +173,7 @@ class QueueManager(Generic[T, EventT]):
     # --- ciclo interno -----------------------------------------------------
 
     def _maybe_dispatch(self) -> None:
-        while self._pending and len(self._active) < self._settings.max_parallel_jobs:
+        while self._pending and len(self._active) < self._max_parallel_jobs:
             job = self._pending.popleft()
             task = asyncio.create_task(self._run(job), name=f"job-{job.id}")
             self._active[job.id] = task

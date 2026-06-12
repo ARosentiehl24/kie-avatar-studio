@@ -214,6 +214,9 @@ async def e2e_setup(tmp_settings: Settings):
         settings,
         kie,
         capacity_limiter,
+        audio_limiter=asyncio.Semaphore(1),
+        video_limiter=asyncio.Semaphore(2),
+        download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
         runner_factory=runner_factory,
@@ -227,6 +230,8 @@ async def e2e_setup(tmp_settings: Settings):
         generated_db,
         image_jobs_db,
         capacity_limiter,
+        asyncio.Semaphore(1),
+        asyncio.Semaphore(2),
         runner_factory,
     )
     workflow_runner = WorkflowRunner(
@@ -496,6 +501,9 @@ async def test_e2e_partially_failed_when_some_steps_fail(
         settings,
         kie,
         capacity_limiter,
+        audio_limiter=asyncio.Semaphore(1),
+        video_limiter=asyncio.Semaphore(2),
+        download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
         runner_factory=runner_factory,
@@ -509,6 +517,8 @@ async def test_e2e_partially_failed_when_some_steps_fail(
         generated_db,
         image_jobs_db,
         capacity_limiter,
+        asyncio.Semaphore(1),
+        asyncio.Semaphore(2),
         runner_factory,
     )
     workflow_runner = WorkflowRunner(

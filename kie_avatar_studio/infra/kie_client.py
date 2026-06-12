@@ -19,6 +19,17 @@ from loguru import logger
 from ..config import Settings
 from ..domain.errors import KieClientError, KieInsufficientCreditsError, KieServerError
 from ..domain.models import KieTaskCreated, KieUploadResult, VoiceSettings
+from ..domain.policies import (
+    DEFAULT_I2V_ASPECT_RATIO,
+    DEFAULT_I2V_DURATION_SECONDS,
+    DEFAULT_I2V_MODE,
+    DEFAULT_I2V_MODEL,
+    KIE_BACKOFF_BASE_SECONDS,
+    KIE_CONNECT_TIMEOUT_SECONDS,
+    KIE_DOWNLOAD_CHUNK_BYTES,
+    KIE_MAX_RETRIES,
+    KIE_TOTAL_TIMEOUT_SECONDS,
+)
 
 DEFAULT_UPLOAD_PATH: Final[str] = "images/avatar-models"
 DEFAULT_TTS_MODEL: Final[str] = "elevenlabs/text-to-speech-multilingual-v2"
@@ -33,16 +44,13 @@ DEFAULT_GPT_IMAGE_MODEL: Final[str] = "gpt-image-2-text-to-image"
 #  - Modos std / pro / 4K
 #  - Sound effects nativos generados por la IA (`sound: true`)
 # Spec: https://docs.kie.ai/market/kling/kling-3-0
-DEFAULT_I2V_MODEL: Final[str] = "kling-3.0/video"
-DEFAULT_I2V_DURATION: Final[int] = 5
-DEFAULT_I2V_MODE: Final[str] = "pro"
-DEFAULT_I2V_ASPECT_RATIO: Final[str] = "16:9"
+DEFAULT_I2V_DURATION: Final[int] = DEFAULT_I2V_DURATION_SECONDS
 
-_DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
-_MAX_RETRIES: Final[int] = 3
-_BACKOFF_BASE_SECONDS: Final[float] = 1.0
-_CONNECT_TIMEOUT: Final[float] = 15.0
-_TOTAL_TIMEOUT: Final[float] = 60.0
+_DOWNLOAD_CHUNK_BYTES: Final[int] = KIE_DOWNLOAD_CHUNK_BYTES
+_MAX_RETRIES: Final[int] = KIE_MAX_RETRIES
+_BACKOFF_BASE_SECONDS: Final[float] = KIE_BACKOFF_BASE_SECONDS
+_CONNECT_TIMEOUT: Final[float] = KIE_CONNECT_TIMEOUT_SECONDS
+_TOTAL_TIMEOUT: Final[float] = KIE_TOTAL_TIMEOUT_SECONDS
 _HTTP_CLIENT_ERROR_START: Final[int] = 400
 _HTTP_INSUFFICIENT_CREDITS: Final[int] = 402
 _HTTP_SERVER_ERROR_START: Final[int] = 500
@@ -73,6 +81,13 @@ class KieClient:
         await self.aclose()
 
     # --- API pública -------------------------------------------------------
+
+    def _ensure_api_key(self) -> None:
+        if not self._settings.kie_api_key:
+            raise KieClientError(
+                "No hay API Key configurada o está inactiva. "
+                "Por favor, ve a Configuración (c) para añadir una."
+            )
 
     async def upload_file(
         self,
@@ -276,17 +291,28 @@ class KieClient:
         Abre y escribe el archivo en un thread auxiliar (`asyncio.to_thread`) para no
         bloquear la event loop con IO de disco síncrona (CR-5.1).
         """
+        self._ensure_api_key()
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
-        file_handle = await asyncio.to_thread(out.open, "wb")
-        try:
-            async with self._client.stream("GET", url) as response:
-                self._raise_for_status(response)
-                async for chunk in response.aiter_bytes(chunk_size=_DOWNLOAD_CHUNK_BYTES):
-                    await asyncio.to_thread(file_handle.write, chunk)
-        finally:
-            await asyncio.to_thread(file_handle.close)
-        return out
+        last_server_error: KieServerError | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            file_handle = await asyncio.to_thread(out.open, "wb")
+            try:
+                async with self._client.stream("GET", url) as response:
+                    self._raise_for_status(response)
+                    async for chunk in response.aiter_bytes(chunk_size=_DOWNLOAD_CHUNK_BYTES):
+                        await asyncio.to_thread(file_handle.write, chunk)
+                return out
+            except KieServerError as exc:
+                last_server_error = exc
+            except httpx.TransportError as exc:
+                last_server_error = KieServerError(f"error de red descargando archivo: {exc}")
+            finally:
+                await asyncio.to_thread(file_handle.close)
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+        assert last_server_error is not None  # noqa: S101 (invariante: error transitorio agotado)
+        raise last_server_error
 
     # --- helpers internos --------------------------------------------------
 
@@ -305,12 +331,29 @@ class KieClient:
         Ambas se mapean a `KieInsufficientCreditsError` para que el caller
         las distinga del resto de 4xx.
         """
+        self._ensure_api_key()
         last_server_error: KieServerError | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
-            response = await self._client.request(method, url, **kwargs)
+            try:
+                response = await self._client.request(method, url, **kwargs)
+            except httpx.TransportError as exc:
+                last_server_error = KieServerError(
+                    f"error de red llamando a Kie ({method} {url}): {exc}"
+                )
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+                    continue
+                break
             if response.is_success:
                 parsed: dict[str, Any] = response.json()
-                self._raise_for_business_error(parsed)
+                try:
+                    self._raise_for_business_error(parsed)
+                except KieServerError as exc:
+                    last_server_error = exc
+                    if attempt < _MAX_RETRIES:
+                        await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+                        continue
+                    break
                 return parsed
             if response.status_code == _HTTP_INSUFFICIENT_CREDITS:
                 raise KieInsufficientCreditsError(self._format_credit_error(response))
@@ -334,6 +377,12 @@ class KieClient:
         if code == _HTTP_INSUFFICIENT_CREDITS:
             msg = payload.get("msg") or "saldo insuficiente"
             raise KieInsufficientCreditsError(f"Kie reportó code:402 — {msg}")
+        if isinstance(code, int) and code >= _HTTP_SERVER_ERROR_START:
+            msg = payload.get("msg") or "error de servidor"
+            raise KieServerError(f"Kie reportó code:{code} — {msg}")
+        if isinstance(code, int) and code >= _HTTP_CLIENT_ERROR_START:
+            msg = payload.get("msg") or "error de cliente"
+            raise KieClientError(f"Kie reportó code:{code} — {msg}")
 
     def _raise_for_status(self, response: httpx.Response) -> None:
         """Como `response.raise_for_status` pero usando la jerarquía del dominio."""
