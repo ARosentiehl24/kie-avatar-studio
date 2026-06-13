@@ -57,7 +57,7 @@ from ..domain.ports import (
 )
 from .ids import new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
-from .visual_prompt_guard import append_visual_text_guard
+from .visual_prompt_guard import append_image_visual_guard
 
 BASE_IMAGE_FILENAME: Final[str] = "base.png"
 
@@ -190,7 +190,7 @@ class WorkflowBaseResolver:
         image_job = ImageJob(
             id=new_image_job_id(),
             label=f"[wf-preview]{label_hint}",
-            prompt=append_visual_text_guard(prompt),
+            prompt=append_image_visual_guard(prompt),
             settings_json=effective_settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,
@@ -293,7 +293,7 @@ class WorkflowBaseResolver:
         return ImageJob(
             id=new_image_job_id(),
             label=f"[wf-base]{workflow.slug}",
-            prompt=append_visual_text_guard(prompt),
+            prompt=append_image_visual_guard(prompt),
             settings_json=settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,

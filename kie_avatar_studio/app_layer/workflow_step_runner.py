@@ -68,7 +68,7 @@ from ..domain.policies import KIE_GENERATED_RETENTION_DAYS, MAX_I2V_PROMPT_CHARS
 from ..domain.ports import GeneratedImageStore, ImageJobRepository, KieGateway
 from .ids import new_audio_id, new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
-from .visual_prompt_guard import append_visual_text_guard
+from .visual_prompt_guard import append_video_visual_guard
 from .workflow_execution_context import (
     WorkflowExecutionContext,
     build_scene_prompt,
@@ -225,7 +225,7 @@ class WorkflowStepRunner:
                 download_limiter=self._download_limiter,
                 image_url=plan.scene_ref.kie_url,
                 audio_url=plan.audio_url,
-                prompt=append_visual_text_guard(step.prompt),
+                prompt=append_video_visual_guard(step.prompt),
                 output_path=output_path,
                 existing_task_id=step.video_task_id,
             ),
@@ -337,7 +337,7 @@ class WorkflowStepRunner:
             limiter=self._video_limiter,
             download_limiter=self._download_limiter,
             image_url=scene_ref.kie_url,
-            prompt=append_visual_text_guard(step.prompt, max_chars=MAX_I2V_PROMPT_CHARS),
+            prompt=append_video_visual_guard(step.prompt, max_chars=MAX_I2V_PROMPT_CHARS),
             output_path=video_path,
             duration=duration,
             sound=sound,

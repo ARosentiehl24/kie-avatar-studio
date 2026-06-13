@@ -286,6 +286,26 @@ Si la pregunta o la tarea es **sobre código** (símbolos, callers/callees, fluj
 investigación de un bug, planificación de un refactor), la **primera tool que
 disparás es `codegraph_*`**. No `grep`, no `view`, no `glob`. Punto.
 
+> **MANDATORY pre-flight (no negociable, no opcional, no "esta vez sí").**
+>
+> Antes de **cualquier** batch que toque código, ejecutá este protocolo de 3
+> pasos. Si saltás siquiera uno, estás violando la regla:
+>
+> 1. **Detectá la intención**: ¿la pregunta/tarea es sobre símbolos, flujos,
+>    callers, callees, impacto, ubicación de código, comportamiento de un
+>    módulo, o entender cómo algo funciona? → entonces es "sobre código".
+> 2. **Mapeá a `codegraph_*`** usando la tabla de abajo. Si ninguna excepción
+>    legítima aplica (ver §"Cuándo caer a grep/view/glob"), tu **primera**
+>    tool call de ese batch DEBE ser `codegraph_*`. No `grep` "para arrancar",
+>    no `glob` "para ubicar archivos", no `view` "para echar un vistazo".
+> 3. **Solo después** de que CodeGraph te dio símbolos + ubicaciones, podés
+>    usar `view` para abrir un archivo puntual, o `grep` para confirmar un
+>    string literal. NUNCA al revés.
+>
+> "Ya sé dónde está", "es rápido con grep", "el archivo es chico", "conozco
+> el repo" — **ninguna** de esas frases es una excepción. Si te encontrás
+> escribiendo una justificación así, parate y empezá por `codegraph_*`.
+
 Antes de cada batch de tool calls que toque código, hacé este check mental:
 
 ```
