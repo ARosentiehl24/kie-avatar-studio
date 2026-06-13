@@ -171,6 +171,18 @@ key activa sobrescribe a la del `.env`. La pantalla también permite editar
 endpoints, paralelismo, polling y defaults, todo persistido en `.env` con
 backup `.env.bak`.
 
+## Limpiar estado local
+
+Para empezar con colas/historial limpios sin perder credenciales ni outputs:
+
+```bash
+python scripts/clean_runtime_state.py --yes
+```
+
+Esto elimina solo `data/jobs.db`, `data/jobs.db-wal` y `data/jobs.db-shm`.
+Conserva `data/keys.json`, `outputs/`, `inputs/`, `presets/` y `workflows/`.
+También está disponible desde **Configuración → Mantenimiento → Limpiar DB runtime**.
+
 ## Flujo de un job
 
 ```text

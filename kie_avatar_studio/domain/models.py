@@ -686,7 +686,8 @@ class StepType(StrEnum):
     """Tipo de escena del workflow.
 
     `A_ROLL`: la modelo habla a cámara (lip-sync). Avatar Pro genera un
-    `final.mp4` con audio embebido. No se descarga el audio aparte.
+    `final.mp4` con audio embebido, y la app descarga también `audio.mp3`
+    para edición/post-producción.
 
     `B_ROLL`: video auxiliar (objeto, ilustración, plano). Kling i2v
     genera un video silencioso. Si `text` no es vacío, además se

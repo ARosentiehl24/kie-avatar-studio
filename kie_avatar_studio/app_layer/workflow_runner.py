@@ -38,7 +38,7 @@ from ..domain.models import (
     WorkflowStep,
     WorkflowStepStatus,
 )
-from ..domain.policies import validate_workflow
+from ..domain.policies import is_path_inside, validate_workflow
 from ..domain.ports import (
     KieGateway,
     WorkflowManifestWriter,
@@ -95,10 +95,12 @@ class WorkflowRunner:
     async def run(self, job: WorkflowJob) -> WorkflowJob:
         try:
             validate_workflow(job)
+            output_dir = Path(job.output_dir)
+            if not is_path_inside(output_dir, self._settings.outputs_dir):
+                raise WorkflowValidationError("output_dir del workflow queda fuera de outputs_dir")
             voice_id, voice_settings = await self._base_resolver.resolve_voice(job)
             await self._mark_preparing_base(job)
             base_ref = await self._base_resolver.resolve_base_image(job)
-            output_dir = Path(job.output_dir)
             await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
             await self._base_resolver.download_base_locally(base_ref, output_dir)
             await self._mark_running(job)
@@ -286,6 +288,15 @@ class WorkflowRunner:
         Si la escritura falla permanentemente, marca `manifest_write_failed`
         y persiste solo el header (no toca steps). El runner sigue.
         """
+        if not is_path_inside(Path(job.output_dir), self._settings.outputs_dir):
+            logger.warning(
+                "WorkflowJob {}: manifest omitido porque output_dir queda fuera de outputs_dir",
+                job.id,
+            )
+            if not job.manifest_write_failed:
+                job.manifest_write_failed = True
+                await self._repository.update_workflow_header(job)
+            return
         ok = await self._manifest_writer.write(job)
         if not ok and not job.manifest_write_failed:
             job.manifest_write_failed = True

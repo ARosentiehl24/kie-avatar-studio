@@ -22,6 +22,7 @@ from kie_avatar_studio.app_layer.runner_factories import (
 )
 from kie_avatar_studio.app_layer.workflow_base_resolver import WorkflowBaseResolver
 from kie_avatar_studio.config import Settings
+from kie_avatar_studio.domain.errors import WorkflowValidationError
 from kie_avatar_studio.domain.models import (
     ImageAssetKind,
     ImageAssetRef,
@@ -115,6 +116,22 @@ async def test_resolve_base_image_reuses_fresh_resolved_ref(
     assert result is fresh_ref
     # NO se debe llamar a Kie ni al store local.
     resolver._client.upload_file.assert_not_called()
+
+
+async def test_preview_download_to_outside_outputs_fails_before_generating(
+    tmp_settings: Settings, tmp_path: Path
+) -> None:
+    resolver = _build_resolver(tmp_settings)
+    outside = tmp_path / "outside" / "preview.png"
+
+    with pytest.raises(WorkflowValidationError, match="preview de imagen base fuera"):
+        await resolver.generate_from_prompt_standalone(
+            "persona mirando a cámara",
+            label_hint="demo",
+            download_to=outside,
+        )
+
+    resolver._image_jobs_repo.upsert.assert_not_called()
 
 
 async def test_resolve_base_image_drops_expired_resolved_ref_for_local(

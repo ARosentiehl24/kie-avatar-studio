@@ -19,6 +19,8 @@ def _build_app(tmp_path) -> KieAvatarStudioApp:
         outputs_dir=tmp_path / "outputs",
         inputs_dir=tmp_path / "inputs",
         presets_dir=tmp_path / "presets",
+        batch_jobs_dir=tmp_path / "batch_jobs",
+        workflows_dir=tmp_path / "workflows",
         logs_dir=tmp_path / "logs",
     )
     settings.ensure_dirs()
@@ -121,12 +123,13 @@ async def test_all_buttons_render_with_full_label(tmp_path) -> None:
             btn = app.screen.query_one(f"#{btn_id}", Button)
             assert btn.region.width >= 9, f"{btn_id} colapsó a width={btn.region.width}"
             assert str(btn.label).strip(), f"{btn_id} sin label visible"
-        # Las otras tabs cada una con un "Guardar X" cuyo label cabe en 28 chars.
+        # Las otras tabs cada una con un botón crítico cuyo label cabe.
         tc = app.screen.query_one(TabbedContent)
         for tab_id, btn_id, label in (
             ("tab-endpoints", "save-endpoints", "Guardar endpoints"),
             ("tab-execution", "save-execution", "Guardar ejecución"),
             ("tab-defaults", "save-defaults", "Guardar defaults"),
+            ("tab-maintenance", "cleanup-runtime-db", "Limpiar DB runtime"),
         ):
             tc.active = tab_id
             await pilot.pause()

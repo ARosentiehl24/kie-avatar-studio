@@ -38,6 +38,7 @@ from .app_layer.runner_factories import (
     ImageRunnerDeps,
     WorkflowRunnerFactory,
 )
+from .app_layer.runtime_state_cleaner import RuntimeStateCleaner
 from .app_layer.settings_controller import SettingsController
 from .app_layer.system_opener import open_local_path, open_url
 from .app_layer.update_checker import UpdateChecker
@@ -49,6 +50,7 @@ from .app_layer.workflow_lifecycle import WorkflowLifecycle
 from .app_layer.workflow_runner import WorkflowRunner, WorkflowRunnerDeps
 from .app_layer.workflow_step_runner import WorkflowStepRunner
 from .config import Settings, load_settings
+from .domain.errors import JobValidationError
 from .domain.events import (
     AudioJobUpdated,
     ImageJobUpdated,
@@ -674,6 +676,7 @@ class KieAvatarStudioApp(App[None]):
                     settings_controller=self.settings_controller,
                     on_kie_credentials_changed=self._reload_kie_client,
                     on_endpoints_changed=self._reload_kie_client_after_env_change,
+                    on_runtime_cleanup=self._cleanup_runtime_state,
                 )
             )
             return
@@ -895,6 +898,20 @@ class KieAvatarStudioApp(App[None]):
             title="Configuración",
             timeout=_NOTIFY_RELOAD_TIMEOUT,
         )
+
+    async def _cleanup_runtime_state(self) -> str:
+        """Elimina la DB runtime preservando keys, outputs y configuración."""
+        queues = (self.queue, self.audio_queue, self.image_queue, self.workflow_queue)
+        if not all(queue.is_idle() for queue in queues):
+            raise JobValidationError(
+                "hay jobs activos o pendientes; esperá a que terminen o cancelalos antes de limpiar"
+            )
+        result = await RuntimeStateCleaner(self.settings.db_path).cleanup()
+        await self._init_stores()
+        removed = len(result.removed)
+        if removed == 0:
+            return "DB runtime ya estaba limpia; keys y outputs conservados"
+        return f"DB runtime limpiada ({removed} archivos eliminados); keys y outputs conservados"
 
     async def _rebuild_kie_client(self) -> None:
         old = self.kie

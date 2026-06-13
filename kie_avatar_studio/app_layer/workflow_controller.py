@@ -41,7 +41,7 @@ from ..domain.models import (
     WorkflowStep,
     WorkflowStepStatus,
 )
-from ..domain.policies import validate_image_path
+from ..domain.policies import is_path_inside, validate_image_path
 from ..domain.ports import (
     GeneratedImageStore,
     ImageStore,
@@ -375,7 +375,16 @@ class WorkflowController:
         step = self._require_awaiting_step(workflow, step_number)
         # Cleanup del archivo viejo (best-effort; no bloqueante).
         if step.scene_image_path:
-            await asyncio.to_thread(_unlink_silent, Path(step.scene_image_path))
+            scene_path = Path(step.scene_image_path)
+            if is_path_inside(scene_path, self._settings.outputs_dir):
+                await asyncio.to_thread(_unlink_silent, scene_path)
+            else:
+                logger.warning(
+                    "Workflow {} step {}: no borro scene_image_path fuera de outputs_dir: {}",
+                    workflow.id,
+                    step_number,
+                    scene_path,
+                )
         step.bg_image_job_id = None
         step.scene_image_path = None
         step.scene_image_approved_at = None

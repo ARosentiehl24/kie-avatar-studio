@@ -4,6 +4,22 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [1.3.0] — 2026-06-12
+
+### Added (M)
+
+- **Audio separado para a-roll**: los steps `a-roll` ahora descargan también
+  `audio.mp3` junto a `final.mp4`, igual que los b-roll con voiceover.
+- **Limpieza segura de estado local**: se agrega script y opción en
+  Configuración para limpiar la DB runtime (`jobs.db*`) conservando API keys,
+  outputs, inputs, presets y workflows.
+
+### Fixed (S)
+
+- **Guard anti-letreros en prompts visuales**: se añade una política global
+  anti text overlays/captions/signage a prompts de modelo base, escenas,
+  Avatar Pro y Kling i2v para reducir texto inventado en a-roll y b-roll.
+
 ## [1.2.2] — 2026-06-12
 
 ### Changed (S)
