@@ -42,6 +42,8 @@ def compose_settings_layout(snapshot: EditableSettings) -> ComposeResult:
                 yield from compose_endpoints_tab(snapshot)
             with TabPane("Ejecución", id="tab-execution"):
                 yield from compose_execution_tab(snapshot)
+            with TabPane("Concurrencia", id="tab-concurrency"):
+                yield from compose_concurrency_tab(snapshot)
             with TabPane("Defaults", id="tab-defaults"):
                 yield from compose_defaults_tab(snapshot)
             with TabPane("Mantenimiento", id="tab-maintenance"):
@@ -58,7 +60,7 @@ def compose_keys_tab() -> ComposeResult:
     with Horizontal(classes="actions-row actions-row-keys"):
         yield Button("Agregar", id="key-add", variant="primary")
         yield Button("Activar", id="key-activate", classes="btn-info")
-        yield Button("Probar", id="key-test", classes="btn-warning")
+        yield Button("Probar", id="key-test", classes="btn-info")
         yield Button("Eliminar", id="key-delete", variant="error")
 
 
@@ -74,7 +76,7 @@ def compose_endpoints_tab(snapshot: EditableSettings) -> ComposeResult:
 
 def compose_execution_tab(snapshot: EditableSettings) -> ComposeResult:
     with Vertical(classes="field-row"):
-        yield Label("MAX_PARALLEL_JOBS")
+        yield Label("MAX_PARALLEL_JOBS (límite global compartido entre subsistemas)")
         yield Input(value=str(snapshot.max_parallel_jobs), id="max-parallel")
         yield Label("POLL_INTERVAL_SECONDS")
         yield Input(value=str(snapshot.poll_interval_seconds), id="poll-interval")
@@ -82,6 +84,27 @@ def compose_execution_tab(snapshot: EditableSettings) -> ComposeResult:
         yield Input(value=str(snapshot.task_timeout_seconds), id="task-timeout")
     with Horizontal(classes="actions-row actions-row-save"):
         yield Button("Guardar ejecución", id="save-execution", variant="primary")
+
+
+def compose_concurrency_tab(snapshot: EditableSettings) -> ComposeResult:
+    yield Static(
+        "Límites de paralelismo por subsistema (1-16). El [b]límite global[/b] "
+        "(pestaña Ejecución) sigue siendo el techo absoluto compartido por todos. "
+        "[yellow]Los cambios requieren reiniciar la app para aplicarse.[/yellow]"
+    )
+    with Vertical(classes="field-row"):
+        yield Label("MAX_PARALLEL_AUDIO_JOBS (TTS ElevenLabs)")
+        yield Input(value=str(snapshot.max_parallel_audio_jobs), id="max-parallel-audio")
+        yield Label("MAX_PARALLEL_IMAGE_JOBS (Nano Banana / GPT Image)")
+        yield Input(value=str(snapshot.max_parallel_image_jobs), id="max-parallel-image")
+        yield Label("MAX_PARALLEL_VIDEO_JOBS (Avatar Pro / Kling 3.0)")
+        yield Input(value=str(snapshot.max_parallel_video_jobs), id="max-parallel-video")
+        yield Label("MAX_PARALLEL_UPLOAD_JOBS (Kie File Upload)")
+        yield Input(value=str(snapshot.max_parallel_upload_jobs), id="max-parallel-upload")
+        yield Label("MAX_PARALLEL_DOWNLOAD_JOBS (descargas a /outputs)")
+        yield Input(value=str(snapshot.max_parallel_download_jobs), id="max-parallel-download")
+    with Horizontal(classes="actions-row actions-row-save"):
+        yield Button("Guardar concurrencia", id="save-concurrency", variant="primary")
 
 
 def compose_defaults_tab(snapshot: EditableSettings) -> ComposeResult:

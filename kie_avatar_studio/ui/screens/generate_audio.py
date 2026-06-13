@@ -35,6 +35,11 @@ from ...domain.policies import (
     validate_voice_settings,
 )
 from .._icons import OK
+from ._voice_language_options import (
+    LANGUAGE_AUTO_SENTINEL,
+    selected_language_code,
+    voice_language_options,
+)
 
 _FORM_TITLE: Final[str] = "Generar audio TTS (ElevenLabs vía Kie)"
 
@@ -179,11 +184,14 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
                         id="audio-speed",
                         value=self._initial("speed"),
                     )
-                    yield Label("language_code ISO 639-1 (vacío = auto; solo turbo/flash v2.5)")
-                    yield Input(
-                        placeholder="es",
+                    yield Label("language_code (vacío = auto; solo turbo/flash v2.5)")
+                    yield Select(
+                        options=voice_language_options(
+                            self._initial_language_code() or LANGUAGE_AUTO_SENTINEL
+                        ),
+                        value=(self._initial_language_code() or LANGUAGE_AUTO_SENTINEL),
+                        allow_blank=False,
                         id="audio-language",
-                        value=self._initial_language_code(),
                     )
                 yield Static("", id="audio-form-error")
             with Horizontal(id="audio-form-footer"):
@@ -253,9 +261,11 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
         )
         self.query_one("#audio-style", Input).value = _opt_str(settings.style if settings else None)
         self.query_one("#audio-speed", Input).value = _opt_str(settings.speed if settings else None)
-        self.query_one("#audio-language", Input).value = (
-            settings.language_code if settings and settings.language_code else ""
-        )
+        language_select = self.query_one("#audio-language", Select)
+        language_code = settings.language_code if settings and settings.language_code else ""
+        language_value = language_code or LANGUAGE_AUTO_SENTINEL
+        language_select.set_options(voice_language_options(language_value))
+        language_select.value = language_value
         self._set_error(
             f"[dim]{OK} preset '{preset.label}' cargado (podés ajustar antes de generar)[/dim]"
         )
@@ -402,7 +412,7 @@ class GenerateAudioFormScreen(ModalScreen[GenerateAudioFormResult | None]):
         similarity = self._parse_float_input("#audio-similarity", "similarity_boost")
         style = self._parse_float_input("#audio-style", "style")
         speed = self._parse_float_input("#audio-speed", "speed")
-        language_code = self.query_one("#audio-language", Input).value.strip() or None
+        language_code = selected_language_code(self.query_one("#audio-language", Select).value)
         if all(v is None for v in (stability, similarity, style, speed, language_code)):
             return None
         try:

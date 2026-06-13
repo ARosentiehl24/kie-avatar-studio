@@ -213,9 +213,9 @@ ambientales generados nativamente.
 
 | `voiceover` | `text` | Operaciones | Output |
 |---|---|---|---|
-| `true` (default) | no vacío | scene_image (si change_scene) + 1 TTS + 1 Kling i2v silencioso | `scene.png` + `video.mp4` (silencioso) + `audio.mp3` aparte |
-| `true` (default) | vacío `""` | scene_image (si change_scene) + 1 Kling i2v silencioso | `scene.png` + `video.mp4` (silencioso) |
-| `false` | (ignorado, warning) | scene_image (si change_scene) + 1 Kling i2v **con sound efx nativos** | `scene.png` + `video.mp4` (con sound efx embebidos) |
+| `true` (default) | no vacío | scene_image (si change_scene) + 1 TTS + 1 Kling 3.0 video silencioso | `scene.png` + `video.mp4` (silencioso) + `audio.mp3` aparte |
+| `true` (default) | vacío `""` | scene_image (si change_scene) + 1 Kling 3.0 video silencioso | `scene.png` + `video.mp4` (silencioso) |
+| `false` | (ignorado, warning) | scene_image (si change_scene) + 1 Kling 3.0 video **con sound efx nativos** | `scene.png` + `video.mp4` (con sound efx embebidos) |
 
 **Sobre `voiceover: false`**:
 - Kling 3.0 genera sound effects ambientales (NO voz hablada) basados en el `prompt` del step.
@@ -298,7 +298,7 @@ Calculá total = base + scene_images + tts + videos.
 | Nano Banana 2 (scene image) | step con `change_scene=true` **o** `include_product=true` | 1 por step que genere escena (se dispara una sola vez por step aunque tenga ambos flags) |
 | TTS ElevenLabs | a-roll siempre + b-roll con `text` no vacío | 1 por evento |
 | Avatar Pro (Kling lip-sync) | cada step `type=a-roll` | 1 por a-roll |
-| Kling i2v (b-roll, `kling-3.0/video`) | cada step `type=b-roll` | 1 por b-roll. Costo varía según `mode` (std/pro/4K). |
+| Kling 3.0 video (b-roll, `kling-3.0/video`) | cada step `type=b-roll` | 1 por b-roll. Costo varía según `mode` (std/pro/4K). |
 
 **Ejemplo de cálculo**:
 Workflow con `method=catalog` + 1 a-roll (`change_scene=true`, `text="x"`) + 1 b-roll (`change_scene=true`, `text="y"`, `duration=10`):
@@ -306,7 +306,7 @@ Workflow con `method=catalog` + 1 a-roll (`change_scene=true`, `text="x"`) + 1 b
 - Nano Banana scene: 2 (1 por step)
 - TTS: 2 (1 a-roll + 1 b-roll con text)
 - Avatar Pro: 1
-- Kling i2v: 1
+- Kling 3.0 video: 1
 - **Total: 6 llamadas Kie**
 
 ---
@@ -459,7 +459,7 @@ Total Kie: 3 llamadas (1 Nano Banana base + 1 TTS + 1 Avatar Pro).
 }
 ```
 
-Total Kie: 5 llamadas (0 Nano Banana base + 1 Nano Banana scene + 2 TTS + 1 Avatar Pro + 1 Kling i2v).
+Total Kie: 5 llamadas (0 Nano Banana base + 1 Nano Banana scene + 2 TTS + 1 Avatar Pro + 1 Kling 3.0 video).
 
 ### 7.2b. Workflow b-roll con sound effects nativos (Kling 3.0 `sound=true`)
 
@@ -491,7 +491,7 @@ Total Kie: 5 llamadas (0 Nano Banana base + 1 Nano Banana scene + 2 TTS + 1 Avat
 }
 ```
 
-Total Kie: 2 llamadas (0 base + 1 Nano Banana scene + 0 TTS + 1 Kling i2v con sound efx embebidos).
+Total Kie: 2 llamadas (0 base + 1 Nano Banana scene + 0 TTS + 1 Kling 3.0 video con sound efx embebidos).
 **No hay `audio.mp3` aparte**: el sonido de olas viene dentro del `video.mp4`.
 
 ### 7.2c. Workflow con producto promocional (`promote_product` + `include_product`)
@@ -541,7 +541,7 @@ Ver `workflows/example_product_promo.json`. Promociona un producto global
 ```
 
 Total Kie: 5 llamadas (0 base catalog + 2 Nano Banana scene/producto + 2 TTS
-+ 1 Avatar Pro + 1 Kling i2v). Nota: el a-roll genera scene (por
++ 1 Avatar Pro + 1 Kling 3.0 video). Nota: el a-roll genera scene (por
 `include_product`) aunque `change_scene=false`; mantiene el fondo de la base.
 **Importante**: la foto del producto NO va en el JSON — la elegís en la UI
 al encolar (file picker desde `inputs/`).
@@ -592,7 +592,7 @@ al encolar (file picker desde `inputs/`).
 }
 ```
 
-Total Kie: 7 llamadas (0 base + 2 scene + 2 TTS + 2 Avatar Pro + 1 Kling i2v).
+Total Kie: 7 llamadas (0 base + 2 scene + 2 TTS + 2 Avatar Pro + 1 Kling 3.0 video).
 
 ---
 

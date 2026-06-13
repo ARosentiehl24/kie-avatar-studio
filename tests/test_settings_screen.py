@@ -128,6 +128,7 @@ async def test_all_buttons_render_with_full_label(tmp_path) -> None:
         for tab_id, btn_id, label in (
             ("tab-endpoints", "save-endpoints", "Guardar endpoints"),
             ("tab-execution", "save-execution", "Guardar ejecución"),
+            ("tab-concurrency", "save-concurrency", "Guardar concurrencia"),
             ("tab-defaults", "save-defaults", "Guardar defaults"),
             ("tab-maintenance", "cleanup-runtime-db", "Limpiar DB runtime"),
         ):
@@ -137,4 +138,29 @@ async def test_all_buttons_render_with_full_label(tmp_path) -> None:
             assert str(btn.label) == label
             assert btn.region.width >= len(label) + 2, (
                 f"{btn_id} width={btn.region.width} no cubre label={label!r}"
+            )
+
+
+async def test_concurrency_tab_exposes_all_subsystem_limits(tmp_path) -> None:
+    """La pestaña Concurrencia muestra los 5 spinners + el botón Guardar."""
+    from textual.widgets import Input, TabbedContent
+
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(80, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        tc = app.screen.query_one(TabbedContent)
+        tc.active = "tab-concurrency"
+        await pilot.pause()
+        for input_id, expected in (
+            ("#max-parallel-audio", str(app.settings.max_parallel_audio_jobs)),
+            ("#max-parallel-image", str(app.settings.max_parallel_image_jobs)),
+            ("#max-parallel-video", str(app.settings.max_parallel_video_jobs)),
+            ("#max-parallel-upload", str(app.settings.max_parallel_upload_jobs)),
+            ("#max-parallel-download", str(app.settings.max_parallel_download_jobs)),
+        ):
+            field = app.screen.query_one(input_id, Input)
+            assert field.value == expected, (
+                f"{input_id} value={field.value!r} expected={expected!r}"
             )

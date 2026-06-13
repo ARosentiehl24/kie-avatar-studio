@@ -187,6 +187,31 @@ class SettingsScreen(Screen[None]):
             f"{OK} ejecución guardada en .env (reiniciá la app para aplicar el paralelismo)"
         )
 
+    async def _handle_save_concurrency(self) -> None:
+        try:
+            audio = int(self.query_one("#max-parallel-audio", Input).value)
+            image = int(self.query_one("#max-parallel-image", Input).value)
+            video = int(self.query_one("#max-parallel-video", Input).value)
+            upload = int(self.query_one("#max-parallel-upload", Input).value)
+            download = int(self.query_one("#max-parallel-download", Input).value)
+        except ValueError:
+            self._set_status(f"{ERROR} los valores deben ser enteros", error=True)
+            return
+        try:
+            self._settings.update_concurrency(
+                audio=audio,
+                image=image,
+                video=video,
+                upload=upload,
+                download=download,
+            )
+        except JobValidationError as exc:
+            self._set_status(f"{ERROR} {exc}", error=True)
+            return
+        self._set_status(
+            f"{OK} concurrencia guardada en .env (reiniciá la app para aplicar los límites)"
+        )
+
     async def _handle_save_defaults(self) -> None:
         voice = self.query_one("#default-voice", Input).value
         prompt = self.query_one("#default-prompt", Input).value
@@ -269,6 +294,7 @@ _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
     "key-test": SettingsScreen._handle_test_key,
     "save-endpoints": SettingsScreen._handle_save_endpoints,
     "save-execution": SettingsScreen._handle_save_execution,
+    "save-concurrency": SettingsScreen._handle_save_concurrency,
     "save-defaults": SettingsScreen._handle_save_defaults,
     "cleanup-runtime-db": SettingsScreen._handle_cleanup_runtime_db,
 }

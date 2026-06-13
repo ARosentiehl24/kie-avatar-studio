@@ -7,4 +7,4 @@ Bump según CR-13 (L/M/S → MAJOR/MINOR/PATCH).
 
 from __future__ import annotations
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"

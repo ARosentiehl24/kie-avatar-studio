@@ -1,18 +1,17 @@
 # Kie Avatar Studio
 
 App local **TUI en Python** para automatizar la generación de videos con avatar/lip-sync
-usando las APIs de Kie.ai:
+usando las APIs de Kie.ai. Cubre cuatro subsistemas con cola independiente,
+persistencia en SQLite y límites de paralelismo configurables:
 
-- Kie File Upload API
-- Kie ElevenLabs Text-to-Speech
-- Kie Kling AI Avatar Pro
+- **Video con avatar** (Kling AI Avatar Pro): imagen + voz + script ⇒ lip-sync.
+- **B-roll con Kling 3.0** (`kling-3.0/video`): imagen + prompt ⇒ video animado (con o sin sound effects ambientales nativos).
+- **Audio TTS** (ElevenLabs vía Kie): voiceovers reusables como presets.
+- **Imágenes** (Nano Banana 2 / GPT Image 2): bases para video y escenas b-roll.
+- **Workflows declarativos** (JSON): orquesta a-rolls y b-rolls end-to-end con
+  manifest atómico para consumir desde scripts externos.
 
-## Estado
-
-**v1.0.0** — primera versión funcional completa. Las 10 pantallas del menú
-principal están implementadas y operativas, pipeline end-to-end probado,
-notificaciones del SO cross-platform, updater in-app. Suite de tests
-verde (ver `CHANGELOG.md` para detalles).
+Ver `CHANGELOG.md` para versión actual e historial de cambios.
 
 ## Stack
 
@@ -98,7 +97,7 @@ docs/
   adr/                         registros de decisiones
 .opencode/agents/, .github/agents/                copias verificadas por hash
 .importlinter, .pre-commit-config.yaml, Makefile, scripts/
-data/, outputs/, inputs/, presets/, logs/, batch_jobs/
+data/, outputs/, inputs/, presets/, logs/, batch_jobs/, workflows/
 tests/
   agent_fixtures/{bad,good}_feature.py
   test_agent_smoke.py + suite de domain/infra/app_layer/ui
@@ -142,28 +141,13 @@ CLI (Copilot):   /agent code-quality-reviewer   ← lee .github/agents/
 
 ## Variables de entorno
 
-Ver `.env.example`.
-
-```env
-KIE_API_KEY=
-KIE_API_BASE=https://api.kie.ai
-KIE_UPLOAD_BASE=https://kieai.redpandaai.co
-MAX_PARALLEL_JOBS=2
-MAX_PARALLEL_AUDIO_JOBS=1
-MAX_PARALLEL_IMAGE_JOBS=3
-MAX_PARALLEL_VIDEO_JOBS=2
-MAX_PARALLEL_UPLOAD_JOBS=2
-MAX_PARALLEL_DOWNLOAD_JOBS=3
-POLL_INTERVAL_SECONDS=10
-TASK_TIMEOUT_SECONDS=1800
-DEFAULT_VOICE=EkK5I93UQWFDigLMpZcX
-LOG_LEVEL=INFO
-DATA_DIR=./data
-OUTPUTS_DIR=./outputs
-INPUTS_DIR=./inputs
-PRESETS_DIR=./presets
-LOGS_DIR=./logs
-```
+La fuente de verdad es `.env.example` — copialo a `.env` y editá lo que
+necesites. Las variables más relevantes son las credenciales
+(`KIE_API_KEY`), los endpoints (`KIE_API_BASE`, `KIE_UPLOAD_BASE`), los
+límites de paralelismo (`MAX_PARALLEL_JOBS`, `MAX_PARALLEL_WORKFLOWS` y
+los específicos por subsistema) y los paths de almacenamiento
+(`DATA_DIR`, `OUTPUTS_DIR`, `INPUTS_DIR`, `PRESETS_DIR`,
+`BATCH_JOBS_DIR`, `WORKFLOWS_DIR`, `LOGS_DIR`).
 
 `KIE_API_KEY` queda como **fallback**: si configurás keys en la pantalla
 **Configuración** (`/C`), se guardan en `data/keys.json` (`chmod 0o600`) y la
@@ -183,28 +167,34 @@ Esto elimina solo `data/jobs.db`, `data/jobs.db-wal` y `data/jobs.db-shm`.
 Conserva `data/keys.json`, `outputs/`, `inputs/`, `presets/` y `workflows/`.
 También está disponible desde **Configuración → Mantenimiento → Limpiar DB runtime**.
 
-## Flujo de un job
+## Flujos por subsistema
+
+Cada subsistema tiene su propia state machine, su tabla en SQLite y su
+limitador de concurrencia. El composition root (`app.py`) las cablea con dos
+semáforos compartidos:
+
+- `MAX_PARALLEL_JOBS` — capacidad global compartida entre video / audio /
+  image / sub-jobs de workflows.
+- `MAX_PARALLEL_WORKFLOWS` — slot exclusivo de la cola de workflows para
+  evitar deadlocks (un workflow no se queda esperando un slot que él mismo
+  necesita para sus sub-jobs).
+
+Las state machines completas (estados, transiciones, contratos de
+persistencia, eventos emitidos) viven en:
+
+- `docs/SPEC.md` — spec maestra de comportamiento.
+- `docs/ARCHITECTURE.md` — capas, ports, ciclo de vida del job.
+
+Ejemplo del flujo más rico — un video con avatar:
 
 ```text
 validate ─► upload_image  ┐
             create_audio  ┘─► wait_audio ─► create_avatar ─► wait_video ─► download ─► completed
 ```
 
-`upload_image` y `create_audio` corren en paralelo dentro del mismo job
-(`asyncio.gather`). En workflows, el paralelismo de llamadas Kie se separa
-por tipo (`MAX_PARALLEL_AUDIO_JOBS`, `MAX_PARALLEL_IMAGE_JOBS`,
-`MAX_PARALLEL_VIDEO_JOBS`, `MAX_PARALLEL_UPLOAD_JOBS`,
-`MAX_PARALLEL_DOWNLOAD_JOBS`) para permitir más throughput sin saturar TTS.
-
-## Estados del job
-
-```text
-queued, validating, uploading_image, creating_audio, waiting_audio,
-creating_avatar, waiting_video, downloading, completed, failed, cancelled
-```
-
-Solo `JobRunner` muta `VideoJob.status`. Patrón write-ahead:
-asignar → `await repository.upsert(job)` → notificar listeners.
+Solo el runner de cada subsistema muta el `status` de sus jobs, siempre
+con patrón write-ahead: asignar → `await repository.upsert(job)` →
+notificar listeners.
 
 ## Restricciones de Kie
 

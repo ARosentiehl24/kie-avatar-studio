@@ -144,7 +144,7 @@ class AutomationScreen(Screen[None]):
             with Horizontal(classes="actions-row actions-row-keys"):
                 yield Button("Configurar y ejecutar", id="automation-configure", variant="primary")
                 yield Button("Ver detalle", id="automation-detail", classes="btn-info")
-                yield Button("Reintentar", id="automation-retry", classes="btn-info")
+                yield Button("Reintentar", id="automation-retry", classes="btn-warning")
                 yield Button(
                     "Revisar aprobación",
                     id="automation-approve",

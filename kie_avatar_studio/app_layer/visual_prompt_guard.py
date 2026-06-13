@@ -8,7 +8,7 @@ Dos variantes con políticas distintas:
 
 - `append_video_visual_guard` (animación): "REMOVER" cualquier texto/UI
   que aparezca durante la animación. Aplica a Kling Avatar Pro (a-roll)
-  e Image-to-Video (b-roll). Crítico porque Kling es un modelo entrenado
+  y Kling 3.0 video (b-roll). Crítico porque Kling es un modelo entrenado
   por Kuaishou y tiende a inyectar UI Douyin/TikTok, captions auto-generados,
   caracteres CJK y watermarks — independientemente del contenido de la
   imagen de referencia.
@@ -77,7 +77,7 @@ def append_image_visual_guard(prompt: str, *, max_chars: int = MAX_PROMPT_CHARS)
 
 
 def append_video_visual_guard(prompt: str, *, max_chars: int = MAX_PROMPT_CHARS) -> str:
-    """Guard para generación de video (Avatar Pro / Kling i2v).
+    """Guard para generación de video (Avatar Pro / Kling 3.0 b-roll).
 
     Política: REMOVER cualquier texto/UI/iconos que aparezca durante la
     animación. A diferencia del guard de imagen, este instruye al modelo

@@ -114,7 +114,7 @@ class _MockKieHandler:
     def _result_url_for_model(model: str, task_id: str) -> str:
         if "kling/ai-avatar-pro" in model:
             return f"https://tempfile.kie.ai/avatar/{task_id}.mp4"
-        if "image-to-video" in model:
+        if "kling-3.0/video" in model:
             return f"https://tempfile.kie.ai/i2v/{task_id}.mp4"
         if "nano-banana" in model or "gpt-image" in model:
             return f"https://tempfile.kie.ai/img/{task_id}.png"

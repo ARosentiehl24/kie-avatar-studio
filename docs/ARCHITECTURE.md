@@ -241,9 +241,15 @@ Validación de dominio      → JobValidationError | AudioValidationError
   `_notify`. Para evitar re-entrada, las pantallas convierten el
   evento en un `Message` de Textual via `post_message` y manejan el
   refresh en su propio turno del event loop.
-- `MAIN_MENU` es un registry (`list[MenuItem]`). Agregar opciones
-  nuevas se hace declarando un `MenuItem` más; nunca editando el
-  dispatcher.
+- El menú principal vive en `ui/menu.py` como **registry declarativo**.
+  La fuente de verdad es `MAIN_MENU_GROUPS: tuple[MenuSection, ...]`
+  (4 secciones: Crear / Monitoreo / Biblioteca / Sistema). Cada
+  `MenuSection` agrupa items relacionados y aporta su `label` para
+  renderizar un header visual. `MAIN_MENU: tuple[MenuItem, ...]` es la
+  vista flat derivada (orden de aparición) que `app.py` consume para
+  registrar atajos globales vía `MENU_BY_ID`. Agregar opciones se hace
+  declarando un `MenuItem` más dentro de la `MenuSection` que
+  corresponda; nunca editando el dispatcher.
 - `Ctrl+C` dispara `queue.drain()` y `audio_queue.drain()` antes de
   cerrar; `KieClient.aclose()` se llama en `on_unmount`.
 
