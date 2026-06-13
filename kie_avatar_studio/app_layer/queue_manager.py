@@ -110,6 +110,10 @@ class QueueManager(Generic[T, EventT]):
         self._notify(job)
         self._maybe_dispatch()
 
+    def is_idle(self) -> bool:
+        """True si no hay jobs pendientes ni activos."""
+        return not self._pending and not self._active
+
     def notify_external(self, job: T) -> None:
         """Emite un evento al stream sin re-encolar.
 

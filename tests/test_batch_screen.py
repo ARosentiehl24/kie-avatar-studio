@@ -22,6 +22,7 @@ def _build_app(tmp_path: Path) -> KieAvatarStudioApp:
         inputs_dir=tmp_path / "inputs",
         presets_dir=tmp_path / "presets",
         batch_jobs_dir=tmp_path / "batch_jobs",
+        workflows_dir=tmp_path / "workflows",
         logs_dir=tmp_path / "logs",
     )
     settings.ensure_dirs()

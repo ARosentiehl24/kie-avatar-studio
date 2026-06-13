@@ -16,43 +16,31 @@ from typing import ClassVar, Final
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Button,
     DataTable,
-    Footer,
-    Header,
     Input,
-    Label,
     Static,
-    TabbedContent,
-    TabPane,
 )
 
 from ...app_layer.keys_controller import KeysController
 from ...app_layer.settings_controller import SettingsController
 from ...domain.errors import JobValidationError, KeyValidationError, KieError
-from ...domain.models import KieKey
 from .._icons import ERROR, OK
+from ._settings_widgets import (
+    compose_settings_layout,
+    format_credits_cell,
+    format_test_result,
+    format_validation_cell,
+)
 from .key_form import KeyFormResult, KeyFormScreen
 
 NotifyAsync = Callable[[], Awaitable[None]]
+CleanupAsync = Callable[[], Awaitable[str]]
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
-_KEY_TABLE_COLUMNS: Final[tuple[str, ...]] = (
-    "Activa",
-    "ID",
-    "Label",
-    "Key (masked)",
-    "Última validación",
-    "Saldo",
-)
-# Umbral de "saldo bajo" para resaltar en rojo en la tabla de keys.
-# 5 créditos es < 1 TTS multilingual-v2 (~10 cr observados): si esta key
-# tiene menos, prácticamente cualquier llamada va a fallar con 402.
-_LOW_CREDITS_THRESHOLD: Final[float] = 5.0
 
 
 class SettingsScreen(Screen[None]):
@@ -69,71 +57,20 @@ class SettingsScreen(Screen[None]):
         *,
         on_kie_credentials_changed: NotifyAsync | None = None,
         on_endpoints_changed: NotifyAsync | None = None,
+        on_runtime_cleanup: CleanupAsync | None = None,
     ) -> None:
         super().__init__()
         self._keys = keys_controller
         self._settings = settings_controller
         self._on_credentials_changed = on_kie_credentials_changed
         self._on_endpoints_changed = on_endpoints_changed
+        self._on_runtime_cleanup = on_runtime_cleanup
+        self._cleanup_confirm_pending = False
 
     # --- composición -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        snapshot = self._settings.snapshot()
-        with Vertical(id="settings-box"):
-            yield Static("[b]Configuración[/b]", id="settings-title")
-            with TabbedContent(initial="tab-keys"):
-                with TabPane("API Keys", id="tab-keys"):
-                    yield from self._compose_keys_tab()
-                with TabPane("Endpoints", id="tab-endpoints"):
-                    yield from self._compose_endpoints_tab(snapshot)
-                with TabPane("Ejecución", id="tab-execution"):
-                    yield from self._compose_execution_tab(snapshot)
-                with TabPane("Defaults", id="tab-defaults"):
-                    yield from self._compose_defaults_tab(snapshot)
-            yield Static("", id="status-bar")
-        yield Footer()
-
-    def _compose_keys_tab(self) -> ComposeResult:
-        table: DataTable[str] = DataTable(id="keys-table", cursor_type="row", zebra_stripes=True)
-        for column in _KEY_TABLE_COLUMNS:
-            table.add_column(column, key=column)
-        yield table
-        with Horizontal(classes="actions-row actions-row-keys"):
-            yield Button("Agregar", id="key-add", variant="primary")
-            yield Button("Activar", id="key-activate", classes="btn-info")
-            yield Button("Probar", id="key-test", classes="btn-warning")
-            yield Button("Eliminar", id="key-delete", variant="error")
-
-    def _compose_endpoints_tab(self, snapshot) -> ComposeResult:  # type: ignore[no-untyped-def]
-        with Vertical(classes="field-row"):
-            yield Label("KIE_API_BASE")
-            yield Input(value=snapshot.kie_api_base, id="kie-api-base")
-            yield Label("KIE_UPLOAD_BASE")
-            yield Input(value=snapshot.kie_upload_base, id="kie-upload-base")
-        with Horizontal(classes="actions-row actions-row-save"):
-            yield Button("Guardar endpoints", id="save-endpoints", variant="primary")
-
-    def _compose_execution_tab(self, snapshot) -> ComposeResult:  # type: ignore[no-untyped-def]
-        with Vertical(classes="field-row"):
-            yield Label("MAX_PARALLEL_JOBS")
-            yield Input(value=str(snapshot.max_parallel_jobs), id="max-parallel")
-            yield Label("POLL_INTERVAL_SECONDS")
-            yield Input(value=str(snapshot.poll_interval_seconds), id="poll-interval")
-            yield Label("TASK_TIMEOUT_SECONDS")
-            yield Input(value=str(snapshot.task_timeout_seconds), id="task-timeout")
-        with Horizontal(classes="actions-row actions-row-save"):
-            yield Button("Guardar ejecución", id="save-execution", variant="primary")
-
-    def _compose_defaults_tab(self, snapshot) -> ComposeResult:  # type: ignore[no-untyped-def]
-        with Vertical(classes="field-row"):
-            yield Label("DEFAULT_VOICE")
-            yield Input(value=snapshot.default_voice, id="default-voice")
-            yield Label("DEFAULT_PROMPT")
-            yield Input(value=snapshot.default_prompt, id="default-prompt")
-        with Horizontal(classes="actions-row actions-row-save"):
-            yield Button("Guardar defaults", id="save-defaults", variant="primary")
+        yield from compose_settings_layout(self._settings.snapshot())
 
     # --- ciclo de vida -----------------------------------------------------
 
@@ -216,7 +153,7 @@ class SettingsScreen(Screen[None]):
         except KieError as exc:
             self._set_status(f"{ERROR} {exc}", error=True)
             return
-        message = _format_test_result(tested)
+        message = format_test_result(tested)
         self._set_status(message, error=tested.last_validated_status != "ok")
         await self._refresh_keys_table()
 
@@ -260,6 +197,26 @@ class SettingsScreen(Screen[None]):
             return
         self._set_status(f"{OK} defaults guardados en .env")
 
+    async def _handle_cleanup_runtime_db(self) -> None:
+        if self._on_runtime_cleanup is None:
+            self._set_status(f"{ERROR} limpieza no disponible en esta sesión", error=True)
+            return
+        if not self._cleanup_confirm_pending:
+            self._cleanup_confirm_pending = True
+            self._set_status(
+                f"{ERROR} presioná 'Limpiar DB runtime' otra vez para confirmar; "
+                "keys y outputs se conservan",
+                error=True,
+            )
+            return
+        self._cleanup_confirm_pending = False
+        try:
+            message = await self._on_runtime_cleanup()
+        except JobValidationError as exc:
+            self._set_status(f"{ERROR} {exc}", error=True)
+            return
+        self._set_status(f"{OK} {message}")
+
     # --- helpers internos -------------------------------------------------
 
     async def _refresh_keys_table(self) -> None:
@@ -273,8 +230,8 @@ class SettingsScreen(Screen[None]):
                 key.id,
                 key.label,
                 key.masked(),
-                _format_validation_cell(key),
-                _format_credits_cell(key),
+                format_validation_cell(key),
+                format_credits_cell(key),
                 key=key.id,
             )
 
@@ -290,6 +247,8 @@ class SettingsScreen(Screen[None]):
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
         bar = self.query_one("#status-bar", Static)
+        if not message.startswith(f"{ERROR} presioná 'Limpiar DB runtime'"):
+            self._cleanup_confirm_pending = False
         bar.update(f"[red]{message}[/red]" if error else message)
         timeout = _LONG_NOTIFICATION_TIMEOUT if error else _NOTIFICATION_TIMEOUT
         self.notify(message, severity="error" if error else "information", timeout=timeout)
@@ -303,43 +262,6 @@ class SettingsScreen(Screen[None]):
             await self._on_endpoints_changed()
 
 
-def _format_validation_cell(key: KieKey) -> str:
-    if key.last_validated_status is None or key.last_validated_at is None:
-        return "—"
-    when = key.last_validated_at.strftime("%Y-%m-%d %H:%M")
-    glyph = {"ok": OK, "unauthorized": f"{ERROR} 401", "error": ERROR}.get(
-        key.last_validated_status, "?"
-    )
-    return f"{glyph} {when}"
-
-
-def _format_credits_cell(key: KieKey) -> str:
-    """Formato del saldo en la tabla de keys.
-
-    Devuelve "—" si nunca se midió, y rojo si es bajo (≤ 5 cr) para alertar
-    al usuario antes de que un job falle con 402.
-    """
-    if key.last_known_credits is None:
-        return "—"
-    if key.last_known_credits <= _LOW_CREDITS_THRESHOLD:
-        return f"[red]{key.last_known_credits:.2f} cr[/red]"
-    return f"{key.last_known_credits:.2f} cr"
-
-
-def _format_test_result(key: KieKey) -> str:
-    status = key.last_validated_status
-    if status == "ok":
-        credits_suffix = (
-            f" · saldo {key.last_known_credits:.2f} cr"
-            if key.last_known_credits is not None
-            else ""
-        )
-        return f"{OK} '{key.label}' validada contra Kie{credits_suffix}"
-    if status == "unauthorized":
-        return f"{ERROR} '{key.label}' rechazada por Kie (401/403)"
-    return f"{ERROR} '{key.label}' no se pudo validar (error de red o servidor)"
-
-
 _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
     "key-add": SettingsScreen._handle_add_key,
     "key-activate": SettingsScreen._handle_activate_key,
@@ -348,4 +270,5 @@ _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
     "save-endpoints": SettingsScreen._handle_save_endpoints,
     "save-execution": SettingsScreen._handle_save_execution,
     "save-defaults": SettingsScreen._handle_save_defaults,
+    "cleanup-runtime-db": SettingsScreen._handle_cleanup_runtime_db,
 }

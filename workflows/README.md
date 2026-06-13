@@ -43,7 +43,7 @@ presionar **R** para refrescar.
 | Componente generado | Path en el output dir |
 |---|---|
 | Imagen scene (Nano Banana 2 refit si `change_background=true`, sino reutiliza base) | `step_NN_<slug>/scene.png` |
-| Audio TTS | (no se descarga aparte — queda embebido) |
+| Audio TTS | `step_NN_<slug>/audio.mp3` |
 | Video Avatar Pro (con audio sincronizado) | `step_NN_<slug>/final.mp4` |
 
 **Requiere `text` no vacío** (el script que la modelo dice).
@@ -104,6 +104,7 @@ outputs/wf_20260606_abc123/
 ├── base.png               ← imagen base de la modelo (descargada eager)
 ├── step_01_hook_1/
 │   ├── scene.png
+│   ├── audio.mp3          ← audio TTS separado para post
 │   └── final.mp4          ← a-roll
 ├── step_02_b_roll_pain/
 │   ├── scene.png
@@ -142,4 +143,3 @@ actual de Kie antes de ejecutar.
 Puedes crear tus propios archivos JSON en esta carpeta siguiendo la estructura
 descrita en `workflows/SCHEMA.json` o la guía de referencia detallada en
 `workflows/SCHEMA_REFERENCE.md`.
-

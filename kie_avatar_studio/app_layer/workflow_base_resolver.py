@@ -45,6 +45,7 @@ from ..domain.models import (
 from ..domain.policies import (
     KIE_GENERATED_RETENTION_DAYS,
     KIE_UPLOAD_RETENTION_HOURS,
+    is_path_inside,
     validate_image_path,
 )
 from ..domain.ports import (
@@ -56,6 +57,7 @@ from ..domain.ports import (
 )
 from .ids import new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
+from .visual_prompt_guard import append_visual_text_guard
 
 BASE_IMAGE_FILENAME: Final[str] = "base.png"
 
@@ -180,13 +182,15 @@ class WorkflowBaseResolver:
         """
         if not prompt:
             raise WorkflowValidationError("model_creation.method='prompt' requiere prompt no vacío")
+        if download_to is not None and not is_path_inside(download_to, self._settings.outputs_dir):
+            raise WorkflowValidationError("preview de imagen base fuera de outputs_dir")
         effective_settings = settings or ImageGenerationSettings()
         if effective_settings.model is None:
             effective_settings.model = "gpt-image-2-text-to-image"
         image_job = ImageJob(
             id=new_image_job_id(),
             label=f"[wf-preview]{label_hint}",
-            prompt=prompt,
+            prompt=append_visual_text_guard(prompt),
             settings_json=effective_settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,
@@ -289,7 +293,7 @@ class WorkflowBaseResolver:
         return ImageJob(
             id=new_image_job_id(),
             label=f"[wf-base]{workflow.slug}",
-            prompt=prompt,
+            prompt=append_visual_text_guard(prompt),
             settings_json=settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,

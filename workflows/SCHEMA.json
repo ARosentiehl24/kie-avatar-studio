@@ -183,7 +183,7 @@
           "type": "string",
           "default": "",
           "maxLength": 5000,
-          "description": "Lo que la modelo dice. a-roll: OBLIGATORIO no vacío (audio embebido en video). b-roll: opcional (no vacío + voiceover=true genera audio.mp3 aparte para post; vacío = b-roll silencioso). Si se omite, default ''."
+          "description": "Lo que la modelo dice. a-roll: OBLIGATORIO no vacío (audio embebido en final.mp4 y descargado también como audio.mp3). b-roll: opcional (no vacío + voiceover=true genera audio.mp3 aparte para post; vacío = b-roll silencioso). Si se omite, default ''."
         },
         "duration_seconds": {
           "description": "Solo aplica a b-roll (Kling 3.0 acepta 3-15s). a-roll lo ignora (duración = audio TTS). Si null u omitido, usa pre_settings.i2v_duration_seconds o 5 default.",

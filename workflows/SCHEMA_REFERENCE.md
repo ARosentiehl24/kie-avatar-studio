@@ -181,6 +181,7 @@ Reglas globales del array:
 - Scene image: si `change_scene=true`, **1 Nano Banana** (refit del fondo). Si `false`, reusa la imagen base.
 - **1 TTS** del `text` (siempre).
 - **1 Avatar Pro** (Kling) — lip-sync video + audio embebido.
+- Descarga de `audio.mp3` separado para edición/post-producción.
 
 **Restricciones específicas**:
 | Campo | Restricción a-roll |
@@ -193,6 +194,7 @@ Reglas globales del array:
 ```
 outputs/wf_<id>/step_NN_<scene_slug>/
 ├── scene.png            (si change_scene=true; sino, copia de base.png)
+├── audio.mp3            (audio TTS separado)
 └── final.mp4            (lip-sync con audio embebido)
 ```
 

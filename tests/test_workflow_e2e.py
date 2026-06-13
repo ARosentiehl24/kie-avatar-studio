@@ -307,13 +307,11 @@ async def test_e2e_workflow_with_3_step_types_completes(e2e_setup) -> None:
     assert (output_dir / "base.png").is_file(), "base.png debe existir"
     assert (output_dir / "workflow.json").is_file(), "manifest debe existir"
 
-    # Step 1 (a-roll): solo scene.png + final.mp4 (NO audio.mp3 aparte).
+    # Step 1 (a-roll): scene.png + audio.mp3 + final.mp4.
     step1_dir = output_dir / "step_01_hook_a_roll"
     assert (step1_dir / "scene.png").is_file()
     assert (step1_dir / "final.mp4").is_file()
-    assert not (step1_dir / "audio.mp3").exists(), (
-        "a-roll NO debe descargar audio aparte (queda embebido en final.mp4)"
-    )
+    assert (step1_dir / "audio.mp3").is_file()
 
     # Step 2 (b-roll con text): scene.png + audio.mp3 + video.mp4.
     step2_dir = output_dir / "step_02_b_roll_con_audio"
@@ -337,7 +335,7 @@ async def test_e2e_workflow_with_3_step_types_completes(e2e_setup) -> None:
     # Cada step tiene outputs poblados.
     assert "scene_image" in manifest_data["steps"][0]["outputs"]
     assert "video" in manifest_data["steps"][0]["outputs"]
-    assert "audio" not in manifest_data["steps"][0]["outputs"]  # a-roll no descarga audio
+    assert "audio" in manifest_data["steps"][0]["outputs"]
     assert "audio" in manifest_data["steps"][1]["outputs"]
     assert "video" in manifest_data["steps"][1]["outputs"]
 

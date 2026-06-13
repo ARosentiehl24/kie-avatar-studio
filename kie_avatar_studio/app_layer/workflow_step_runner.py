@@ -3,7 +3,7 @@
 Maneja los 3 tipos de step con métodos separados (CR-3.1: SRP):
 
 - `_run_a_roll`: scene_image (opcional) + audio TTS + Avatar Pro → final.mp4
-  (con audio embebido por Avatar Pro, NO se descarga audio aparte).
+  (con audio embebido) + audio.mp3 separado para post-producción.
 - `_run_b_roll_with_audio`: scene_image + audio TTS + i2v silencioso →
   video.mp4 + audio.mp3 (descargas en paralelo).
 - `_run_b_roll_silent`: scene_image + i2v silencioso → video.mp4 (sin TTS).
@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -63,10 +64,11 @@ from ..domain.models import (
     WorkflowStep,
     WorkflowStepStatus,
 )
-from ..domain.policies import KIE_GENERATED_RETENTION_DAYS
+from ..domain.policies import KIE_GENERATED_RETENTION_DAYS, MAX_I2V_PROMPT_CHARS, is_path_inside
 from ..domain.ports import GeneratedImageStore, ImageJobRepository, KieGateway
 from .ids import new_audio_id, new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
+from .visual_prompt_guard import append_visual_text_guard
 from .workflow_execution_context import (
     WorkflowExecutionContext,
     build_scene_prompt,
@@ -90,6 +92,14 @@ A_ROLL_VIDEO_FILENAME: Final[str] = "final.mp4"
 B_ROLL_VIDEO_FILENAME: Final[str] = "video.mp4"
 
 StepTransition = Callable[[WorkflowStep], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class _ArollRenderPlan:
+    step: WorkflowStep
+    context: WorkflowExecutionContext
+    scene_ref: ImageAssetRef
+    audio_url: str
 
 
 class WorkflowStepRunner:
@@ -189,30 +199,39 @@ class WorkflowStepRunner:
         step.status = WorkflowStepStatus.RENDERING
         set_progress(step, WorkflowProgressKey.VIDEO, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
-        await self._render_avatar_to_step(step, context, scene_ref, audio_url, on_transition)
+        await self._render_avatar_to_step(
+            _ArollRenderPlan(
+                step=step,
+                context=context,
+                scene_ref=scene_ref,
+                audio_url=audio_url,
+            ),
+            on_transition,
+        )
 
     async def _render_avatar_to_step(
         self,
-        step: WorkflowStep,
-        context: WorkflowExecutionContext,
-        scene_ref: ImageAssetRef,
-        audio_url: str,
+        plan: _ArollRenderPlan,
         on_transition: StepTransition,
     ) -> None:
-        output_path = context.step_dir(step) / A_ROLL_VIDEO_FILENAME
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        step = plan.step
+        output_path, audio_path = self._a_roll_output_paths(plan)
         # El step permanece en RENDERING / VIDEO=RUNNING mientras se pollea/genera el video en Kie.
-        task_id, video_path = await render_avatar_video(
-            client=self._client,
-            settings=self._settings,
-            limiter=self._video_limiter,
-            download_limiter=self._download_limiter,
-            image_url=scene_ref.kie_url,
-            audio_url=audio_url,
-            prompt=step.prompt,
-            output_path=output_path,
-            existing_task_id=step.video_task_id,
+        render_result, _ = await asyncio.gather(
+            render_avatar_video(
+                client=self._client,
+                settings=self._settings,
+                limiter=self._video_limiter,
+                download_limiter=self._download_limiter,
+                image_url=plan.scene_ref.kie_url,
+                audio_url=plan.audio_url,
+                prompt=append_visual_text_guard(step.prompt),
+                output_path=output_path,
+                existing_task_id=step.video_task_id,
+            ),
+            self._download_audio_only(step, plan.audio_url, audio_path),
         )
+        task_id, video_path = render_result
         step.video_task_id = task_id
         step.video_path = video_path
 
@@ -223,6 +242,17 @@ class WorkflowStepRunner:
         await on_transition(step)
 
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.COMPLETED)
+
+    def _a_roll_output_paths(self, plan: _ArollRenderPlan) -> tuple[Path, Path]:
+        step_dir = plan.context.step_dir(plan.step)
+        output_path = step_dir / A_ROLL_VIDEO_FILENAME
+        audio_path = step_dir / AUDIO_FILENAME
+        if not is_path_inside(output_path, self._settings.outputs_dir) or not is_path_inside(
+            audio_path, self._settings.outputs_dir
+        ):
+            raise WorkflowStepError(f"step {plan.step.step}: output fuera de outputs_dir")
+        step_dir.mkdir(parents=True, exist_ok=True)
+        return output_path, audio_path
 
     # --- b-roll with audio (silent video + standalone audio) --------------
 
@@ -253,10 +283,7 @@ class WorkflowStepRunner:
         audio_url: str,
         on_transition: StepTransition,
     ) -> None:
-        step_dir = context.step_dir(step)
-        step_dir.mkdir(parents=True, exist_ok=True)
-        video_path = step_dir / B_ROLL_VIDEO_FILENAME
-        audio_path = step_dir / AUDIO_FILENAME
+        video_path, audio_path = self._b_roll_output_paths(step, context, with_audio=True)
 
         # El step permanece en RENDERING / VIDEO=RUNNING mientras se pollea/genera el video en Kie.
         # Ejecutamos la generación y descarga en background.
@@ -310,7 +337,7 @@ class WorkflowStepRunner:
             limiter=self._video_limiter,
             download_limiter=self._download_limiter,
             image_url=scene_ref.kie_url,
-            prompt=step.prompt,
+            prompt=append_visual_text_guard(step.prompt, max_chars=MAX_I2V_PROMPT_CHARS),
             output_path=video_path,
             duration=duration,
             sound=sound,
@@ -373,9 +400,7 @@ class WorkflowStepRunner:
         *,
         sound: bool = False,
     ) -> None:
-        step_dir = context.step_dir(step)
-        step_dir.mkdir(parents=True, exist_ok=True)
-        output_path = step_dir / B_ROLL_VIDEO_FILENAME
+        (output_path,) = self._b_roll_output_paths(step, context, with_audio=False)
 
         # El step permanece en RENDERING mientras se pollea la generación de video en Kie.
         await self._render_i2v(step, context, scene_ref, output_path, sound=sound)
@@ -387,6 +412,17 @@ class WorkflowStepRunner:
         await on_transition(step)
 
         set_progress(step, WorkflowProgressKey.DOWNLOAD, WorkflowProgressStatus.COMPLETED)
+
+    def _b_roll_output_paths(
+        self, step: WorkflowStep, context: WorkflowExecutionContext, *, with_audio: bool
+    ) -> tuple[Path, ...]:
+        step_dir = context.step_dir(step)
+        video_path = step_dir / B_ROLL_VIDEO_FILENAME
+        paths = (video_path, step_dir / AUDIO_FILENAME) if with_audio else (video_path,)
+        if any(not is_path_inside(path, self._settings.outputs_dir) for path in paths):
+            raise WorkflowStepError(f"step {step.step}: output b-roll fuera de outputs_dir")
+        step_dir.mkdir(parents=True, exist_ok=True)
+        return paths
 
     # --- scene image preparation ------------------------------------------
 
@@ -413,8 +449,10 @@ class WorkflowStepRunner:
           pause el workflow.
         """
         step_dir = context.step_dir(step)
-        step_dir.mkdir(parents=True, exist_ok=True)
         scene_path = step_dir / SCENE_IMAGE_FILENAME
+        if not is_path_inside(scene_path, self._settings.outputs_dir):
+            raise WorkflowStepError(f"step {step.step}: scene_image fuera de outputs_dir")
+        step_dir.mkdir(parents=True, exist_ok=True)
         set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
         if not needs_scene_generation(step):

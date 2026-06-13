@@ -26,6 +26,7 @@ from kie_avatar_studio.app_layer.workflow_step_runner import (
     WorkflowStepRunner,
 )
 from kie_avatar_studio.config import Settings
+from kie_avatar_studio.domain.errors import WorkflowStepError
 from kie_avatar_studio.domain.models import (
     ImageAssetKind,
     ImageAssetRef,
@@ -254,7 +255,7 @@ def _b_roll_silent_step() -> WorkflowStep:
     )
 
 
-async def test_a_roll_path_creates_final_mp4_without_separate_audio(
+async def test_a_roll_path_creates_final_mp4_and_separate_audio(
     step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
@@ -269,12 +270,15 @@ async def test_a_roll_path_creates_final_mp4_without_separate_audio(
     assert result.video_path is not None
     assert result.video_path.endswith(A_ROLL_VIDEO_FILENAME)
     assert result.scene_image_path is not None
-    # CRÍTICO: a-roll NO descarga audio aparte (queda embebido en final.mp4).
-    assert result.audio_path is None
+    # A-roll conserva audio embebido en final.mp4 y además descarga audio.mp3 para post.
+    assert result.audio_path is not None
+    assert result.audio_path.endswith(AUDIO_FILENAME)
     # Pero el AudioJob SÍ se creó y persistió (visible en pantalla Audios).
     assert result.audio_job_id is not None
     # Final mp4 existe en filesystem.
     assert Path(result.video_path).is_file()
+    # Audio TTS separado existe en filesystem.
+    assert Path(result.audio_path).is_file()
     # Scene image existe en filesystem.
     assert Path(result.scene_image_path).is_file()
     # Progress completo.
@@ -333,6 +337,39 @@ async def test_b_roll_silent_only_creates_video_no_audio(
     assert result.scene_image_path is not None
     # Progress: solo scene_image + video + download (sin audio key).
     assert WorkflowProgressKey.AUDIO not in result.progress
+
+
+async def test_scene_image_path_outside_outputs_fails_without_creating_dir(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    tmp_path: Path,
+) -> None:
+    runner, _limiter, _output_dir = step_runner_setup
+    outside_output = tmp_path / "outside_outputs"
+    step = _b_roll_silent_step()
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    result = await runner.run(step, _make_context(outside_output), on_transition)
+
+    assert result.status == WorkflowStepStatus.FAILED
+    assert "scene_image fuera de outputs_dir" in (result.error or "")
+    assert not (outside_output / "step_03_product_reveal").exists()
+
+
+def test_b_roll_output_paths_outside_outputs_fails_before_mkdir(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    tmp_path: Path,
+) -> None:
+    runner, _limiter, _output_dir = step_runner_setup
+    outside_output = tmp_path / "outside_outputs"
+    step = _b_roll_with_text_step()
+    context = _make_context(outside_output)
+
+    with pytest.raises(WorkflowStepError, match="output b-roll fuera"):
+        runner._b_roll_output_paths(step, context, with_audio=True)
+
+    assert not (outside_output / "step_02_pain_b_roll").exists()
 
 
 async def test_change_scene_false_reuses_base_image(
