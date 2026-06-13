@@ -25,7 +25,7 @@ from ..domain.models import (
     WorkflowStep,
 )
 from ..domain.policies import expected_progress_keys_for_step, resolve_effective_i2v_duration
-from .visual_prompt_guard import append_visual_text_guard
+from .visual_prompt_guard import append_image_visual_guard
 
 DEFAULT_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 
@@ -197,7 +197,7 @@ def build_scene_prompt(step: WorkflowStep) -> str:
     parts.append(step.prompt.strip())
     if step.include_product and step.product_prompt.strip():
         parts.append(step.product_prompt.strip())
-    return append_visual_text_guard(". ".join(parts))
+    return append_image_visual_guard(". ".join(parts))
 
 
 def ref_dict(ref: ImageAssetRef) -> dict[str, object]:

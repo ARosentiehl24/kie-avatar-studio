@@ -27,7 +27,7 @@ from ..domain.policies import validate_job
 from ..domain.ports import JobRepository, KieGateway
 from .ids import sanitize_filename
 from .polling import poll_task_for_url
-from .visual_prompt_guard import append_visual_text_guard
+from .visual_prompt_guard import append_video_visual_guard
 
 _FINAL_FILE_NAME: Final[str] = "final.mp4"
 
@@ -114,7 +114,7 @@ class JobRunner:
     async def _produce_video(self, job: VideoJob, image_url: str, audio_url: str) -> str:
         await self._transition(job, JobStatus.CREATING_AVATAR)
         created = await self._client.create_avatar_task(
-            image_url, audio_url, append_visual_text_guard(job.prompt)
+            image_url, audio_url, append_video_visual_guard(job.prompt)
         )
         job.video_task_id = created.task_id
         await self._transition(job, JobStatus.WAITING_VIDEO)

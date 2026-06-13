@@ -4,6 +4,22 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [1.3.1] — 2026-06-13
+
+### Fixed (S)
+
+- **Subtítulos en chino e iconos en videos Avatar Pro / Kling i2v**: el guard
+  visual se separó en dos políticas distintas según destino. Generación de
+  imagen (Nano Banana 2, GPT Image 2) usa `IMAGE_VISUAL_GUARD` con política
+  preventiva ("NO incluir"). Generación de video (Kling AI Avatar Pro,
+  Kling i2v) usa `VIDEO_VISUAL_GUARD` con política eliminativa ("REMOVER si
+  aparece, no preservar"). Ambos guards listan ahora explícitamente
+  caracteres CJK (chino/japonés/coreano), UI de apps sociales
+  (TikTok/Douyin/Instagram/WhatsApp), notification badges, brand logos y
+  watermarks. El guard anterior, al pedir "preservar texto naturalmente
+  presente", instruía a Avatar Pro a mantener intactas las alucinaciones
+  de texto que Nano Banana hubiese inyectado en la `scene_image`.
+
 ## [1.3.0] — 2026-06-12
 
 ### Added (M)

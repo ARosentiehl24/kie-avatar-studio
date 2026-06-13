@@ -65,7 +65,7 @@ from ..domain.ports import (
     KieGateway,
 )
 from .polling import poll_task_for_url
-from .visual_prompt_guard import append_visual_text_guard
+from .visual_prompt_guard import append_image_visual_guard
 
 
 class ImageJobRunner:
@@ -150,7 +150,7 @@ class ImageJobRunner:
             kwargs["model"] = settings.model
 
         created = await self._client.create_nano_banana_task(
-            append_visual_text_guard(job.prompt),
+            append_image_visual_guard(job.prompt),
             image_input=[ref.kie_url for ref in refs],
             aspect_ratio=settings.aspect_ratio,
             resolution=settings.resolution,
