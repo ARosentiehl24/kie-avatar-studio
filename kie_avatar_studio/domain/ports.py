@@ -123,7 +123,7 @@ class KieGateway(Protocol):
         model: str = ...,
     ) -> KieTaskCreated: ...
 
-    async def create_image_to_video_task(
+    async def create_kling_video_task(
         self,
         image_url: str,
         prompt: str,

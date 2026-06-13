@@ -92,7 +92,7 @@ class LimitedKieGateway:
                 model=model,
             )
 
-    async def create_image_to_video_task(
+    async def create_kling_video_task(
         self,
         image_url: str,
         prompt: str,
@@ -104,7 +104,7 @@ class LimitedKieGateway:
         aspect_ratio: str = DEFAULT_I2V_ASPECT_RATIO,
     ) -> KieTaskCreated:
         async with self._video_limiter:
-            return await self._inner.create_image_to_video_task(
+            return await self._inner.create_kling_video_task(
                 image_url,
                 prompt,
                 model=model,

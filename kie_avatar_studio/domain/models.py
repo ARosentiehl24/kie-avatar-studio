@@ -601,7 +601,7 @@ class SceneApprovalMode(StrEnum):
     Nano Banana que vale la pena revisar.
 
     - `AUTO` (default): cuando un b-roll genera scene nueva, el workflow
-      continúa inmediatamente al render Kling i2v sin esperar revisión
+      continúa inmediatamente al render Kling 3.0 sin esperar revisión
       humana. Comportamiento histórico.
 
     - `MANUAL`: cuando un b-roll genera scene nueva, el workflow se pausa
@@ -610,7 +610,7 @@ class SceneApprovalMode(StrEnum):
       en la UI y aprueba / regenera / cancela. Sin acción, el workflow
       espera indefinidamente.
 
-    Pensado para evitar gastar créditos en Kling i2v animando una
+    Pensado para evitar gastar créditos en Kling 3.0 animando una
     scene_image que salió mal. NO aplica a b-rolls que reusan la base tal
     cual (`change_scene=false` y `include_product=false`: no hay imagen
     nueva que aprobar) ni a a-rolls (nunca pausan, aunque generen scene
@@ -689,7 +689,7 @@ class StepType(StrEnum):
     `final.mp4` con audio embebido, y la app descarga también `audio.mp3`
     para edición/post-producción.
 
-    `B_ROLL`: video auxiliar (objeto, ilustración, plano). Kling i2v
+    `B_ROLL`: video auxiliar (objeto, ilustración, plano). Kling 3.0
     genera un video silencioso. Si `text` no es vacío, además se
     genera un audio TTS aparte para post-producción.
     """
@@ -797,7 +797,7 @@ class WorkflowStep(BaseModel):
     prompt: str
     text: str = ""
     # Duración del video b-roll en segundos. Solo aplica a steps de tipo
-    # `b-roll` (Kling i2v acepta `duration: 5|10`). Si es `None`, el step
+    # `b-roll` (Kling 3.0 acepta `duration: 5|10`). Si es `None`, el step
     # usa el fallback: `WorkflowPreSettings.i2v_duration_seconds` → si
     # también es None, `Settings.default_i2v_duration_seconds` (5 por
     # default). Steps `a-roll` ignoran este campo (la duración del

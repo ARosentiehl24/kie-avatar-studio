@@ -158,7 +158,7 @@ class StepAwaitingApprovalSignal(Exception):  # noqa: N818 - es señal de contro
 
     NO es un error — el step generó correctamente la scene_image con Nano
     Banana pero el workflow corre en modo `SceneApprovalMode.MANUAL` y
-    necesita revisión humana antes de continuar al render Kling i2v.
+    necesita revisión humana antes de continuar al render Kling 3.0 (b-roll).
 
     El `WorkflowStepRunner._prepare_scene_image` la levanta después de
     persistir el `step.bg_image_job_id` + `step.scene_image_path` y poner

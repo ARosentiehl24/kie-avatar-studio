@@ -750,7 +750,7 @@ def _validate_step_prompt_length(step: WorkflowStep) -> None:
     """Aplica los límites de chars del prompt según `step.type`.
 
     A-roll usa Avatar Pro (límite del prompt = `MAX_PROMPT_CHARS=5000`).
-    B-roll usa Kling i2v (límite del prompt = `MAX_I2V_PROMPT_CHARS=2500`).
+    B-roll usa Kling 3.0 (límite del prompt = `MAX_I2V_PROMPT_CHARS=2500`).
     Si `change_scene=True`, el prompt también alimenta al Nano Banana
     refit con el `scene_description`, pero ese pasa por su propia
     validación en el runner.

@@ -54,14 +54,14 @@ presionar **R** para refrescar.
 |---|---|
 | Imagen scene (Nano Banana 2 refit si `change_background=true`) | `step_NN_<slug>/scene.png` |
 | Audio TTS (para post-producción) | `step_NN_<slug>/audio.mp3` |
-| Video Kling 2.6 i2v (silencioso) | `step_NN_<slug>/video.mp4` |
+| Video Kling 3.0 b-roll (silencioso) | `step_NN_<slug>/video.mp4` |
 
 ### `b-roll` con `text == ""` — solo video silencioso
 
 | Componente generado | Path en el output dir |
 |---|---|
 | Imagen scene | `step_NN_<slug>/scene.png` |
-| Video Kling 2.6 i2v (silencioso) | `step_NN_<slug>/video.mp4` |
+| Video Kling 3.0 b-roll (silencioso) | `step_NN_<slug>/video.mp4` |
 
 ## `model_creation.method`
 
@@ -132,8 +132,8 @@ Un workflow de N steps consume:
 - 1 imagen GPT Image 2 para la base (si `method=prompt`).
 - Por cada step con `change_background=true`: 1 imagen Nano Banana 2 adicional.
 - Por cada step `a-roll`: 1 TTS turbo + 1 Avatar Pro.
-- Por cada step `b-roll con text`: 1 TTS turbo + 1 i2v Kling 2.6.
-- Por cada step `b-roll sin text`: 1 i2v Kling 2.6.
+- Por cada step `b-roll con text`: 1 TTS turbo + 1 b-roll Kling 3.0.
+- Por cada step `b-roll sin text`: 1 b-roll Kling 3.0.
 
 El modal de confirmación muestra el desglose de operaciones + tu saldo
 actual de Kie antes de ejecutar.

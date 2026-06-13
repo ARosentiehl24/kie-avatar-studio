@@ -101,7 +101,7 @@ class _MockKieAllSuccess:
     def _result_url(model: str, task_id: str) -> str:
         if "avatar-pro" in model:
             return f"https://tempfile.kie.ai/avatar/{task_id}.mp4"
-        if "image-to-video" in model or "kling-3.0/video" in model:
+        if "kling-3.0/video" in model:
             return f"https://tempfile.kie.ai/i2v/{task_id}.mp4"
         if "nano-banana" in model:
             return f"https://tempfile.kie.ai/img/{task_id}.png"
@@ -425,7 +425,7 @@ async def test_e2e_partially_failed_when_some_steps_fail(
                 self.task_counter += 1
                 tk = f"tk_{self.task_counter:04d}"
                 body = json.loads(request.content)
-                if "image-to-video" in body["model"] or "kling-3.0/video" in body["model"]:
+                if "kling-3.0/video" in body["model"]:
                     return httpx.Response(400, json={"error": "i2v down"})
                 self.tasks[tk] = {"model": body["model"]}
                 return httpx.Response(200, json={"data": {"taskId": tk}})

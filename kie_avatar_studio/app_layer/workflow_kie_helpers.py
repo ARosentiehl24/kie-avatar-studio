@@ -1,7 +1,7 @@
 """Helpers compartidos para invocar endpoints Kie desde el step runner.
 
 Centraliza el flow `create → poll → download` para Avatar Pro (a-roll)
-e Image-to-Video (b-roll), evitando duplicación entre los tres paths
+y Kling 3.0 video (b-roll), evitando duplicación entre los tres paths
 del `WorkflowStepRunner`.
 
 Cada helper recibe el `KieGateway` y un `Semaphore` global, y devuelve
@@ -77,7 +77,7 @@ async def render_i2v_video(
     aspect_ratio: str | None = None,
     existing_task_id: str | None = None,
 ) -> tuple[str, str]:
-    """Crea (o reusa) un task de Kling 3.0 i2v, pollea, descarga al path dado.
+    """Crea (o reusa) un task de Kling 3.0 (b-roll), pollea, descarga al path dado.
 
     Devuelve `(task_id, str(output_path))`.
 
@@ -93,7 +93,7 @@ async def render_i2v_video(
         resolved_mode = mode or DEFAULT_I2V_MODE
         resolved_aspect_ratio = aspect_ratio or DEFAULT_I2V_ASPECT_RATIO
         async with limiter:
-            created = await client.create_image_to_video_task(
+            created = await client.create_kling_video_task(
                 image_url,
                 prompt,
                 duration=duration,

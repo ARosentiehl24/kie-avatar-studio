@@ -37,12 +37,9 @@ DEFAULT_TTS_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 DEFAULT_AVATAR_MODEL: Final[str] = "kling/ai-avatar-pro"
 DEFAULT_NANO_BANANA_MODEL: Final[str] = "nano-banana-2"
 DEFAULT_GPT_IMAGE_MODEL: Final[str] = "gpt-image-2-text-to-image"
-# Modelo de b-roll del workflow automation. Migramos de `kling-2.6/image-to-video`
-# a `kling-3.0/video` (2026-06-06) porque 3.0 ofrece:
-#  - Duración 3-15s (vs solo 5 o 10 en 2.6)
-#  - Aspect ratio configurable (16:9 / 9:16 / 1:1)
-#  - Modos std / pro / 4K
-#  - Sound effects nativos generados por la IA (`sound: true`)
+# Modelo de b-roll del workflow automation. Kling 3.0 acepta duración 3-15s,
+# aspect ratio configurable (16:9 / 9:16 / 1:1), modos std / pro / 4K y
+# sound effects nativos generados por la IA (`sound: true`).
 # Spec: https://docs.kie.ai/market/kling/kling-3-0
 DEFAULT_I2V_DURATION: Final[int] = DEFAULT_I2V_DURATION_SECONDS
 
@@ -212,7 +209,7 @@ class KieClient:
         }
         return await self._create_task(body)
 
-    async def create_image_to_video_task(
+    async def create_kling_video_task(
         self,
         image_url: str,
         prompt: str,
@@ -223,7 +220,7 @@ class KieClient:
         mode: str = DEFAULT_I2V_MODE,
         aspect_ratio: str = DEFAULT_I2V_ASPECT_RATIO,
     ) -> KieTaskCreated:
-        """POST /api/v1/jobs/createTask — crea task de Kling 3.0 image-to-video.
+        """POST /api/v1/jobs/createTask — crea task de Kling 3.0 video (b-roll).
 
         Endpoint usado para los b-roll del workflow automation: convierte una
         imagen estática en un video (con o sin sound effects ambientales).

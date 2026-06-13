@@ -215,10 +215,9 @@ el cliente HTTP no valida nada (CR-2.1).
 
 Mismo endpoint `createTask`, modelo `kling-3.0/video`. Genera un video a
 partir de una imagen estática + prompt. Usado en el subsistema de
-**automatización** para los steps `type=b-roll`. Migramos de
-`kling-2.6/image-to-video` a `kling-3.0/video` (2026-06-06) porque 3.0
-ofrece duración 3-15s (vs solo 5/10), aspect ratio configurable, modos
-std/pro/4K y sound effects ambientales nativos.
+**automatización** para los steps `type=b-roll`. Kling 3.0 ofrece
+duración 3-15s, aspect ratio configurable, modos std/pro/4K y sound
+effects ambientales nativos.
 
 El b-roll no lleva voz sincronizada (a diferencia de Avatar Pro). El
 comportamiento del audio depende del flag `voiceover` del step:
@@ -269,7 +268,7 @@ Respuesta y polling: idénticos al resto (`{ "data": { "taskId": "..." } }` + `r
 Costos (referencia, sujetos a cambio): varían según `mode` (std < pro < 4K)
 y duración. Validá en https://kie.ai/billing.
 
-Implementado en `KieClient.create_image_to_video_task(...)` (`infra/kie_client.py`).
+Implementado en `KieClient.create_kling_video_task(...)` (`infra/kie_client.py`).
 La validación de `duration` vive en `domain/policies.py:validate_i2v_duration`.
 El cliente HTTP no valida nada (CR-2.1).
 

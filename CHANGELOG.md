@@ -4,6 +4,106 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [1.4.0] — 2026-06-13
+
+### Added (M)
+
+- **Concurrencia configurable desde la UI**: nueva pestaña "Concurrencia"
+  en Configuración que expone los 5 límites por subsistema
+  (`MAX_PARALLEL_AUDIO_JOBS`, `MAX_PARALLEL_IMAGE_JOBS`,
+  `MAX_PARALLEL_VIDEO_JOBS`, `MAX_PARALLEL_UPLOAD_JOBS`,
+  `MAX_PARALLEL_DOWNLOAD_JOBS`) que antes solo se podían tocar editando
+  el `.env` a mano. Los cambios persisten en `.env` y se aplican al
+  reiniciar la app (los semáforos viven en el composition root).
+- **Idioma del audio como dropdown en "Generar Audio"**: el campo
+  `language_code` del modal de generación de audio TTS pasa de Input
+  libre a `Select` con la misma lista curada que `preset_form.py`
+  (Auto, Español 419/ES/es-ES, English US/UK, Português, Français,
+  Deutsch, Italiano, Polski, Türkçe, हिन्दी, العربية, 中文, 日本語,
+  한국어). Códigos custom desconocidos se preservan automáticamente.
+- **Menú principal agrupado por propósito**: las 11 opciones se
+  reorganizan en 4 secciones lógicas con headers visuales
+  (`── CREAR ──`, `── MONITOREO ──`, `── BIBLIOTECA ──`,
+  `── SISTEMA ──`) para escaneo rápido. Las opciones aparecen ahora
+  en un orden fijo razonado (Crear: Automatización → Nuevo video →
+  Procesar lote; Monitoreo: Cola → Historial; Biblioteca: Imágenes
+  → Audios → Presets; Sistema: Configuración → Logs → Salir). Los
+  hotkeys (F/N/B/G/H/I/A/P/C/L/Q) se preservan para no romper memoria
+  muscular. Los headers son `Option(disabled=True)` y el `on_mount`
+  posiciona el highlight inicial en la primera opción real.
+
+### Changed (M)
+
+- **Vocabulario de botones estandarizado**: todos los botones de texto
+  ahora son [b]dinámicos por contenido[/b] vía el base `Button { width:
+  auto; min-width: 12; padding: 0 2 }`. Se eliminaron los anchos fijos
+  legacy (`.actions-row-save Button { width: 28 }`, `#video-form-footer
+  Button { width: 22 }`) y los 7 overrides ad-hoc de `min-width: 16`
+  esparcidos por footers de modales y rows con Input. Las variantes
+  "ghost" (`btn-info`/`btn-success`/`btn-warning`) suben de
+  `background: COLOR 15%` a `30%` (base) y `50%`/`65%` (hover/active)
+  para que el fondo sea claramente visible y deje de parecer
+  transparente.
+- **Familia visual unificada en 3 tiers**: todos los botones del repo
+  ahora comparten un mismo lenguaje visual con `text-style: bold`
+  consistente. Tier 1 (solid fill — `variant="primary"`,
+  `variant="error"`) para acciones principales y destructivas. Tier 2
+  (tinted 40/60/75 — `.btn-info`, `.btn-success`, `.btn-warning`) para
+  acciones secundarias con código de color semántico. Tier 3 (neutral
+  `$boost-lighten-1` — `variant="default"`) para cancelar/cerrar y
+  acciones de baja prioridad (antes era transparente y se perdía
+  visualmente). El helper `.btn-filter` (toggles de pestaña en
+  Cola/Historial) también se alinea al patrón de hover con `$accent`
+  tint en lugar de los rojos/grises sueltos previos. Se corrigieron
+  además 3 inconsistencias semánticas: `key-test` (Probar API key)
+  pasa de `btn-warning` a `btn-info` (es una acción de lectura, no
+  destructiva), `automation-retry` (Reintentar workflow) pasa de
+  `btn-info` a `btn-warning` (re-ejecuta y vuelve a gastar créditos,
+  igual que `queue-retry`/`aud-retry`/`vid-retry`/`img-retry`), y
+  `summary-cancel` ("Volver a editar") pasa de `btn-info` a
+  `variant="default"` (Tier 3) porque es semánticamente un
+  back/dismiss.
+- **Terminología del modelo de b-roll actualizada**: Kling 3.0 dejó de
+  llamar a su endpoint "image-to-video" — el modelo se llama ahora
+  `kling-3.0/video` y la documentación pública lo refiere como
+  "video" / "b-roll". Como consecuencia: el método HTTP
+  `KieClient.create_image_to_video_task` se renombra a
+  `create_kling_video_task` (junto con el `Protocol` `KieGateway` y el
+  wrapper `LimitedKieGateway`), y todas las referencias en docs
+  (`README.md`, `docs/API_KIE.md`, `workflows/README.md`,
+  `workflows/SCHEMA_REFERENCE.md`) y docstrings (`visual_prompt_guard`,
+  `workflow_kie_helpers`) pasan de "image-to-video" / "Kling i2v" a
+  "Kling 3.0 video" o simplemente "b-roll". El campo público
+  `pre_settings.i2v_duration_seconds` del schema de workflows se
+  preserva tal cual para no romper JSONs existentes (sigue siendo el
+  override global de duración del b-roll). Los símbolos Python
+  internos con prefijo `i2v` (constantes `DEFAULT_I2V_*`,
+  `validate_i2v_duration`, file `test_kie_client_i2v.py`) también se
+  mantienen — son abreviación, no nombre del modelo.
+
+### Removed (S)
+
+- **Clase CSS `.btn-glyph` muerta**: se elimina del `styles.tcss` (3
+  reglas: base + `:hover` + `.-active`) porque ningún widget de la app
+  la usaba (`grep btn-glyph` → 0 hits en `*.py`). El caso histórico
+  (botones cuadrados con emoji ⏹ y 🔁) ya había migrado a labels de
+  texto + `btn-warning` en releases anteriores y la clase quedó
+  huérfana.
+
+### Docs (S)
+
+- **README puesto al día**: se elimina la sección "Estado" que
+  estancaba la versión en v1.0.0 ("10 pantallas") y se reemplaza la
+  descripción inicial con los cuatro subsistemas reales del producto
+  (Video con avatar, B-roll con Kling 3.0, Audio TTS, Imágenes, Workflows
+  declarativos). El dump inline de variables de entorno se reemplaza
+  por un pointer a `.env.example` para eliminar el riesgo de drift.
+  Se actualiza la sección de flujos: en vez de listar solo el state
+  machine de video, ahora menciona que cada subsistema tiene el suyo
+  y apunta a `docs/SPEC.md` y `docs/ARCHITECTURE.md`. Se suma
+  `workflows/` a la lista de directorios del repo root y se documenta
+  el limitador exclusivo `MAX_PARALLEL_WORKFLOWS`.
+
 ## [1.3.1] — 2026-06-13
 
 ### Fixed (S)
@@ -166,8 +266,8 @@ MINOR, **S** → PATCH.
   - Validación cruzada: `include_product=true` exige
     `promote_product=true`. Ejemplo en `workflows/example_product_promo.json`.
 - **Endpoint Kie nuevo**: `kling-3.0/video` (b-roll con sound effects opcionales).
-  Implementado en `KieClient.create_image_to_video_task`. Documentado
-  en `docs/API_KIE.md` §6.
+  Implementado en `KieClient.create_kling_video_task` (renombrado en v1.4.0).
+  Documentado en `docs/API_KIE.md` §6.
 - Nuevo hotkey global `F` (Automatización) + icono `🤖` en `_icons.py`.
 - `Settings.workflows_dir` (default `./workflows/`) y
   `Settings.max_parallel_workflows` (default 1).

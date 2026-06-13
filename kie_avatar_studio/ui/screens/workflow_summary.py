@@ -97,7 +97,7 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
                 )
             with Horizontal(classes="actions-row actions-row-keys"):
                 yield Button("Encolar definitivo", id="summary-confirm", variant="primary")
-                yield Button("Volver a editar", id="summary-cancel", classes="btn-info")
+                yield Button("Volver a editar", id="summary-cancel", variant="default")
             yield Static("", id="workflow-summary-status-bar")
         yield Footer()
 
@@ -237,7 +237,7 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
         if counts["avatar"]:
             lines.append(f"  · [green]Avatar Pro (a-roll):[/green] {counts['avatar']}")
         if counts["i2v"]:
-            lines.append(f"  · [green]Kling i2v (b-roll):[/green] {counts['i2v']}")
+            lines.append(f"  · [green]Kling 3.0 (b-roll):[/green] {counts['i2v']}")
         total = sum(counts.values())
         lines.append(f"  · [b]Total:[/b] {total} llamadas Kie")
         lines.append(

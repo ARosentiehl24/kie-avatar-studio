@@ -41,9 +41,11 @@
  *   - `height: 1` en barras de status y counters de 1 línea (texto puro).
  *   - `height: 3` en Button (1 visual + 2 chrome interno de Textual).
  *   - `min-width: 1` / `width: 1fr` en columnas fluidas (no son medidas).
- *   - `width: 4` en `#audio-preview-stop` (glyph único, no label).
  *   - `padding-top: 0` en `.actions-row` (margin-top: 2 ya separa, sumar
  *     padding empuja botones fuera del bounding del padre Vertical).
+ *   - **Botones de texto**: ancho dinámico por contenido vía `Button {
+ *     width: auto, min-width: 12, padding: 0 2 }`. Ningún Button con
+ *     label de texto debe tener `width: NUM` o `min-width > 12`.
  *
  * Tokens reutilizables del theme tokyo-night:
  *   $boost                     → cards y botones default
@@ -70,10 +72,41 @@ Screen {
  *   - Hover y active sutiles via tinte de background, no border.
  * -------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------------
+ * Sistema de variantes de Button (v1.4.0 — familia visual unificada)
+ *
+ * Todos los botones comparten:
+ *   - Mismo height (3), padding (0 2), min-width (12), border (none).
+ *   - text-style: bold en TODA variante con color (tier 1 y 2) para que
+ *     se lean como una familia.
+ *   - Estado :hover / .-active con la MISMA progresión: el color se
+ *     intensifica un nivel arriba (lighten en sólidos, +20% opacity en
+ *     tints).
+ *
+ * Tres tiers, cada uno con un rol visual claro:
+ *
+ *   Tier 1 — fill sólido + bold (call-to-action prominente, 1 por dialog)
+ *     .-primary  → lavanda  → encolar / guardar / generar / confirmar
+ *     .-error    → rojo     → eliminar / cancelar cola / acciones irreversibles
+ *
+ *   Tier 2 — tint colored al 40% + bold (acciones secundarias, semánticas)
+ *     .btn-info     → cyan/accent  → leer / ver / preview / abrir / copiar / refrescar
+ *     .btn-success  → verde        → aprobar / confirmar OK (raro)
+ *     .btn-warning  → amarillo     → reintentar / cancelar job / pausar / detener
+ *
+ *   Tier 3 — fill neutral sutil (acciones de "cerrar" / "volver", sin compromiso)
+ *     .-default  → boost-lighten-1  → Cancelar / Cerrar / dismiss
+ *
+ *   Helpers compactos (no son tier semántico, solo presentación):
+ *     .btn-filter  → toggle tipo radio para filtros (history / queue)
+ * -------------------------------------------------------------------------- */
+
 Button {
     border: none;
     height: 3;          /* 1 visual + 2 chrome interno Textual (excepción) */
-    min-width: 12;
+    width: auto;        /* dinámico por contenido (CR-3.7 consistencia) */
+    min-width: 12;      /* piso para tap targets sin labels muy cortos */
+    padding: 0 2;       /* 2 cells de aire a ambos lados del label */
     text-style: none;
     background: $boost;
     color: $text;
@@ -95,9 +128,12 @@ Button.-active {
     tint: transparent;
 }
 
+/* === Tier 1 — fills sólidos =============================================== */
+
 Button.-primary {
     background: $primary;
     color: $text;
+    text-style: bold;
 }
 
 Button.-primary:hover {
@@ -108,14 +144,10 @@ Button.-primary.-active {
     background: $primary-darken-1;
 }
 
-Button.-default {
-    background: $boost;
-    color: $text;
-}
-
 Button.-error {
     background: $error;
     color: $text;
+    text-style: bold;
 }
 
 Button.-error:hover {
@@ -126,102 +158,82 @@ Button.-error.-active {
     background: $error-darken-1;
 }
 
-/* ----------------------------------------------------------------------------
- * Variantes semánticas adicionales (extensión a las built-in primary/error).
- *
- * Textual define `primary`, `default`, `error`, `success`, `warning` como
- * variantes built-in del Button, pero `success` y `warning` no tienen un
- * estilo consistente con el theme tokyo-night que usamos. Definimos
- * variantes propias como **clases CSS** (no `variant=`) para no chocar con
- * las built-in y mantener control total del color:
- *
- *   .btn-info     → acento      → acciones de lectura no destructivas
- *                                  (ver, copiar, escuchar, abrir, preview)
- *   .btn-success  → verde       → acciones que confirman algo (raro,
- *                                  típicamente uso variant="primary" en su lugar)
- *   .btn-warning  → amarillo    → acciones reversibles que avisan
- *                                  (reintentar, cancelar job, pausar, refrescar)
- *   .btn-glyph    → compacto    → botones de un solo emoji/glifo (⏹, 🔁)
- *                                  con width chico y background sutil
- *
- * Estilo "ghost" (2026-06-08): estas variantes secundarias usan un fondo
- * TENUE teñido con el color semántico (color a baja opacidad) + texto del
- * color, en vez de fills saturados full-color. Los fills saturados se veían
- * "loud" contra el tema tokyo-night; el ghost es más sobrio y deja que solo
- * el botón primary (lavanda sólido) y el destructive (rojo sólido) dominen
- * la jerarquía. Se mantienen planos (sin borde, decisión de diseño ~línea 64).
- *
- * Uso: yield Button("Copiar URL", id="...", classes="btn-info")
- *
- * Mantener semántica consistente entre pantallas: si en una pantalla un
- * tipo de acción es btn-info, en otra debe serlo también. Esto entrena al
- * usuario para escanear visualmente sin leer cada label.
- * -------------------------------------------------------------------------- */
+/* === Tier 2 — tints coloreados ============================================ */
+
+/* Bold compartido para que las 3 variants se lean como familia con tier 1.
+ * Las opacidades 40/60/75 son una progresión perceptual uniforme: 40% es
+ * suficientemente saturado para que el fondo se vea claramente sin
+ * "gritar", 60% en hover comunica intención, 75% en active confirma click. */
+Button.btn-info,
+Button.btn-success,
+Button.btn-warning {
+    text-style: bold;
+}
 
 Button.btn-info {
-    background: $accent 15%;
-    color: $accent-lighten-1;
+    background: $accent 40%;
+    color: $accent-lighten-2;
 }
 
 Button.btn-info:hover {
-    background: $accent 30%;
+    background: $accent 60%;
     color: $text;
 }
 
 Button.btn-info.-active {
-    background: $accent 45%;
+    background: $accent 75%;
     color: $text;
 }
 
 Button.btn-success {
-    background: $success 15%;
-    color: $success-lighten-1;
+    background: $success 40%;
+    color: $success-lighten-2;
 }
 
 Button.btn-success:hover {
-    background: $success 30%;
+    background: $success 60%;
     color: $text;
 }
 
 Button.btn-success.-active {
-    background: $success 45%;
+    background: $success 75%;
     color: $text;
 }
 
 Button.btn-warning {
-    background: $warning 18%;
-    color: $warning-lighten-1;
+    background: $warning 40%;
+    color: $warning-lighten-2;
 }
 
 Button.btn-warning:hover {
-    background: $warning 32%;
+    background: $warning 60%;
     color: $text;
 }
 
 Button.btn-warning.-active {
-    background: $warning 45%;
+    background: $warning 75%;
     color: $text;
 }
 
-/* Glyph buttons: para acciones de 1-2 chars (emojis/símbolos). El
- * background es sutil para que no "grite" más que la acción principal
- * al lado. Suelen vivir en horizontal rows junto a otro botón main
- * (ej. Preview + Stop). */
-Button.btn-glyph {
-    background: $panel-lighten-1;
-    color: $text-muted;
-    min-width: 4;
-}
+/* === Tier 3 — default / cerrar ============================================ */
 
-Button.btn-glyph:hover {
-    background: $panel-lighten-2;
-    color: $error;
-}
-
-Button.btn-glyph.-active {
-    background: $error-darken-1;
+/* Tinte boost-lighten-1 para diferenciarse claramente del background del
+ * panel (que ya es $boost). Sin el lighten, el botón Cancelar quedaba
+ * invisible al lado de los tier 1 / tier 2. */
+Button.-default {
+    background: $boost-lighten-1;
     color: $text;
 }
+
+Button.-default:hover {
+    background: $surface-lighten-1;
+}
+
+Button.-default.-active {
+    background: $surface;
+}
+
+/* === Helpers compactos ==================================================== */
 
 Button:disabled {
     background: $surface;
@@ -263,35 +275,17 @@ Button:disabled {
 }
 
 /* Botones de acciones en filas múltiples. Cada uno se ajusta dinámicamente
- * al ancho de su texto + padding interno simétrico.
+ * al ancho de su texto + padding interno simétrico definido por el base
+ * `Button { padding: 0 2; width: auto }` — esta regla solo override del
+ * `min-width: 12` global para permitir labels muy cortos ("Ver", "Quitar")
+ * en filas densas de tablas.
  *
- * Reglas de simetría (CR-3.7):
- *   - `width: auto` → el botón toma el ancho de su contenido.
- *   - `padding: 0 2` → 2 cells de aire a la IZQUIERDA y 2 a la DERECHA
- *     del texto. El default de Textual es `0 1`, demasiado apretado.
- *   - `min-width: 0` → anula el `min-width: 12` global del Button base,
- *     que estaba forzando aire extra en botones cortos como "Ver" o
- *     "Quitar" y rompiendo la simetría visual.
- *
- * Resultado: cada botón ocupa exactamente `len(texto) + 4` cells, con
- * padding interno idéntico (2 + 2 = 4) en TODOS los botones del row.
- * El row se centra como bloque gracias a `actions-row.align: center middle`.
- *
- * Antes usábamos `width: 1fr; max-width: 24` (estiraba todos los botones
- * al mismo ancho, creando aire interno muy distinto entre textos cortos
- * y largos) y luego `width: auto; min-width: 14` (mantenía un piso fijo
- * que rompía la simetría para textos < 10 chars). El cambio actual elimina
- * ambos compromisos y deja el ancho 100% dinámico. */
+ * Antes había duplicación de `width: auto; padding: 0 2` acá y otras
+ * variantes específicas (`actions-row-save { width: 28 }`,
+ * `#video-form-footer Button { width: 22 }`). Esas reglas fueron removidas
+ * en v1.4.0: el ancho lo decide el contenido SIEMPRE, sin excepciones. */
 .actions-row-keys Button {
-    width: auto;
     min-width: 0;
-    padding: 0 2;
-}
-
-/* 1 botón "Guardar X" largo (Endpoints/Ejecución/Defaults) — ancho fijo
- * generoso para que el label completo siempre se vea. */
-.actions-row-save Button {
-    width: 28;
 }
 
 #status-bar {
@@ -499,7 +493,6 @@ UploadImageFormScreen {
 
 #image-path-row Button {
     margin-left: 2;
-    min-width: 16;
 }
 
 #image-form-error {
@@ -663,20 +656,20 @@ HistoryScreen {
     margin-bottom: 1;
 }
 
-/* Toggle filter buttons: fondo sutil con `panel-lighten-1` para indicar
- * que son botones interactivos sin competir con el primary del filtro
- * activo. Hover en cyan (`accent`) para feedback inmediato. Cuando el
- * filtro está activo el handler les pone `variant=primary` y el
- * Button.-primary del CSS base sobreescribe estos estilos (más
- * específico por la pseudo-clase). */
+/* Toggle filter buttons: misma familia que tier 2 (background tinted +
+ * bold en hover/active) para que no se sientan "extraños" al lado de un
+ * btn-info en la misma fila. Cuando el filtro está activo el handler les
+ * pone `variant=primary` y el Button.-primary del CSS base sobreescribe
+ * estos estilos (más específico por la pseudo-clase). */
 Button.btn-filter {
-    background: $panel-lighten-1;
-    color: $text;
+    background: $boost-lighten-1;
+    color: $text-muted;
 }
 
 Button.btn-filter:hover {
-    background: $accent;
+    background: $accent 60%;
     color: $text;
+    text-style: bold;
 }
 
 Button.btn-filter:focus {
@@ -684,7 +677,9 @@ Button.btn-filter:focus {
 }
 
 Button.btn-filter.-active {
-    background: $accent-darken-1;
+    background: $accent 75%;
+    color: $text;
+    text-style: bold;
 }
 
 #history-table {
@@ -763,10 +758,10 @@ GenerateAudioFormScreen {
 }
 
 #audio-form-dialog {
-    /* Width 120 (antes 100): el footer tiene 4 botones (Cancelar,
-     * Guardar preset, Generar y otro, Generar). Con 4×width:22 + 4×margin:2×2 =
-     * 104 cells solo de botones, no entraban en 100. 120 da aire para
-     * los labels largos sin recortar el "y" de "Generar y otro". */
+    /* Width 120: el footer tiene 4 botones (Cancelar, Guardar preset,
+     * Generar y otro, Generar). Con el ancho dinámico de v1.4.0 (base
+     * `Button { width: auto, padding: 0 2 }`), 120 cells dan aire de
+     * sobra para los labels largos sin recortar. */
     width: 120;
     max-width: 95%;
     height: auto;
@@ -801,13 +796,9 @@ GenerateAudioFormScreen {
 }
 
 #audio-form-footer Button {
-    /* Margin horizontal mínimo entre botones (2 cells). Width auto-
-     * fit con un piso de 16 para que labels cortos ("Generar") no se
-     * desbalanceen con largos ("Guardar preset", "Generar y otro"). */
-    margin: 0 1;
+    /* Solo margen y altura — el ancho lo decide el base Button + contenido. */
+    margin: 0 2;
     height: 3;
-    width: auto;
-    min-width: 18;
 }
 
 #audio-form-title {
@@ -846,15 +837,12 @@ GenerateAudioFormScreen {
 
 #audio-voice-row Button {
     margin-left: 2;
-    min-width: 16;
 }
 
-/* Botón "Detener" del preview de audio: ancho coherente con el botón
- * "Preview" al lado. Antes era width:4 cuando solo mostraba el emoji
- * "⏹" — al cambiar a label "Detener" necesita aire para el texto. */
-#audio-preview-stop {
-    min-width: 12;
-}
+/* Botón "Detener" del preview de audio: usa el base Button (width: auto,
+ * min-width: 12). El comentario histórico documentaba un width:4 para
+ * mostrar solo el emoji "⏹"; al cambiar a label "Detener" alcanza con
+ * el piso base de 12 cells para ambos states. */
 
 #audio-advanced {
     margin-top: 0;
@@ -992,10 +980,9 @@ NewVideoFormScreen {
 }
 
 #video-form-footer Button {
+    /* Solo margen y altura — el ancho lo decide el base Button + contenido. */
     margin: 0 2;
     height: 3;
-    width: 22;
-    min-width: 16;
 }
 
 #video-form-title {
@@ -1028,12 +1015,10 @@ NewVideoFormScreen {
 
 #video-audio-row Button {
     margin-left: 2;
-    min-width: 16;
 }
 
-#video-audio-stop {
-    min-width: 12;
-}
+/* `#video-audio-stop` usa el base Button (width: auto, min-width: 12) —
+ * sin override, coherente con `#audio-preview-stop` y resto de glyphs. */
 
 /* Labels dentro del body: separados del contenido anterior con
  * margin-top, igual que el modal de audio. */
@@ -1133,9 +1118,9 @@ PresetFormScreen {
 }
 
 #preset-form-footer Button {
+    /* Solo margen y altura — el ancho lo decide el base Button + contenido. */
     margin: 0 2;
     height: 3;
-    min-width: 16;
 }
 
 #preset-form-title {
@@ -1159,10 +1144,7 @@ PresetFormScreen {
 }
 
 #preset-voice-row Button {
-    height: 3;
-    width: auto;
-    min-width: 12;
-    margin-left: 1;
+    margin-left: 2;
 }
 
 #preset-description {
@@ -1275,10 +1257,9 @@ GenerateImageFormScreen {
 }
 
 #gen-image-footer Button {
-    margin: 0 1;
+    /* Solo margen y altura — el ancho lo decide el base Button + contenido. */
+    margin: 0 2;
     height: 3;
-    width: auto;
-    min-width: 18;
 }
 
 #gen-image-title {
