@@ -65,23 +65,18 @@ Screen {
 }
 
 /* ----------------------------------------------------------------------------
- * Botones planos: override del default `border: tall` de Textual que daba
- * apariencia 3D + highlight persistente al click. Mantenemos:
- *   - Border `none` en estado base, hover, focus y -active.
- *   - Background diferenciado por variant (default / primary / error).
- *   - Hover y active sutiles via tinte de background, no border.
+ * Botones alto contraste: todos los botones tienen borde visible, texto bold y
+ * foco fuerte. En hover/active invertimos color de texto/fondo para que la
+ * interacción sea clara incluso en terminales con bajo contraste.
  * -------------------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------------------
  * Sistema de variantes de Button (v1.4.0 — familia visual unificada)
  *
  * Todos los botones comparten:
- *   - Mismo height (3), padding (0 2), min-width (12), border (none).
- *   - text-style: bold en TODA variante con color (tier 1 y 2) para que
- *     se lean como una familia.
- *   - Estado :hover / .-active con la MISMA progresión: el color se
- *     intensifica un nivel arriba (lighten en sólidos, +20% opacity en
- *     tints).
+ *   - Mismo height (3), padding (0 2), min-width (12), border tall.
+ *   - text-style: bold en TODA variante para mejorar legibilidad.
+ *   - Estado :hover / .-active con inversión de contraste.
  *
  * Tres tiers, cada uno con un rol visual claro:
  *
@@ -89,42 +84,46 @@ Screen {
  *     .-primary  → lavanda  → encolar / guardar / generar / confirmar
  *     .-error    → rojo     → eliminar / cancelar cola / acciones irreversibles
  *
- *   Tier 2 — tint colored al 40% + bold (acciones secundarias, semánticas)
+ *   Tier 2 — fill sólido semántico (acciones secundarias)
  *     .btn-info     → cyan/accent  → leer / ver / preview / abrir / copiar / refrescar
  *     .btn-success  → verde        → aprobar / confirmar OK (raro)
  *     .btn-warning  → amarillo     → reintentar / cancelar job / pausar / detener
  *
- *   Tier 3 — fill neutral sutil (acciones de "cerrar" / "volver", sin compromiso)
- *     .-default  → boost-lighten-1  → Cancelar / Cerrar / dismiss
+ *   Tier 3 — neutral relleno (cerrar / volver, sin compromiso)
+ *     .-default  → surface-lighten-1  → Cancelar / Cerrar / dismiss
  *
  *   Helpers compactos (no son tier semántico, solo presentación):
  *     .btn-filter  → toggle tipo radio para filtros (history / queue)
  * -------------------------------------------------------------------------- */
 
 Button {
-    border: none;
+    border: tall $primary-background-lighten-2;
     height: 3;          /* 1 visual + 2 chrome interno Textual (excepción) */
     width: auto;        /* dinámico por contenido (CR-3.7 consistencia) */
     min-width: 12;      /* piso para tap targets sin labels muy cortos */
     padding: 0 2;       /* 2 cells de aire a ambos lados del label */
-    text-style: none;
-    background: $boost;
+    text-style: bold;
+    background: $primary-background-lighten-2;
     color: $text;
 }
 
 Button:focus {
-    border: none;
+    border: double $accent;
+    background: $accent;
+    color: $background;
     text-style: bold;
 }
 
 Button:hover {
-    background: $boost-lighten-1;
-    border: none;
+    background: $accent;
+    border: tall $accent;
+    color: $background;
 }
 
 Button.-active {
     background: $accent-darken-1;
-    border: none;
+    border: tall $accent-lighten-2;
+    color: $text;
     tint: transparent;
 }
 
@@ -132,38 +131,44 @@ Button.-active {
 
 Button.-primary {
     background: $primary;
-    color: $text;
+    color: $background;
+    border: tall $primary-lighten-1;
     text-style: bold;
 }
 
 Button.-primary:hover {
     background: $primary-lighten-1;
+    color: $background;
+    border: tall $primary-lighten-1;
 }
 
 Button.-primary.-active {
     background: $primary-darken-1;
+    color: $text;
+    border: tall $primary-lighten-1;
 }
 
 Button.-error {
     background: $error;
-    color: $text;
+    color: $background;
+    border: tall $error-lighten-1;
     text-style: bold;
 }
 
 Button.-error:hover {
     background: $error-lighten-1;
+    color: $background;
+    border: tall $error-lighten-1;
 }
 
 Button.-error.-active {
     background: $error-darken-1;
+    color: $text;
+    border: tall $error-lighten-1;
 }
 
 /* === Tier 2 — tints coloreados ============================================ */
 
-/* Bold compartido para que las 3 variants se lean como familia con tier 1.
- * Las opacidades 40/60/75 son una progresión perceptual uniforme: 40% es
- * suficientemente saturado para que el fondo se vea claramente sin
- * "gritar", 60% en hover comunica intención, 75% en active confirma click. */
 Button.btn-info,
 Button.btn-success,
 Button.btn-warning {
@@ -171,66 +176,75 @@ Button.btn-warning {
 }
 
 Button.btn-info {
-    background: $accent 40%;
-    color: $accent-lighten-2;
+    background: $accent;
+    color: $background;
+    border: tall $accent-lighten-1;
 }
 
 Button.btn-info:hover {
-    background: $accent 60%;
-    color: $text;
+    background: $accent-lighten-1;
+    color: $background;
+    border: tall $accent-lighten-2;
 }
 
 Button.btn-info.-active {
-    background: $accent 75%;
+    background: $accent-darken-1;
     color: $text;
+    border: tall $accent-lighten-2;
 }
 
 Button.btn-success {
-    background: $success 40%;
-    color: $success-lighten-2;
+    background: $success;
+    color: $background;
+    border: tall $success-lighten-1;
 }
 
 Button.btn-success:hover {
-    background: $success 60%;
-    color: $text;
+    background: $success-lighten-1;
+    color: $background;
+    border: tall $success-lighten-2;
 }
 
 Button.btn-success.-active {
-    background: $success 75%;
+    background: $success-darken-1;
     color: $text;
+    border: tall $success-lighten-2;
 }
 
 Button.btn-warning {
-    background: $warning 40%;
-    color: $warning-lighten-2;
+    background: $warning;
+    color: $background;
+    border: tall $warning-lighten-1;
 }
 
 Button.btn-warning:hover {
-    background: $warning 60%;
-    color: $text;
+    background: $warning-lighten-1;
+    color: $background;
+    border: tall $warning-lighten-2;
 }
 
 Button.btn-warning.-active {
-    background: $warning 75%;
+    background: $warning-darken-1;
     color: $text;
+    border: tall $warning-lighten-2;
 }
 
 /* === Tier 3 — default / cerrar ============================================ */
 
-/* Tinte boost-lighten-1 para diferenciarse claramente del background del
- * panel (que ya es $boost). Sin el lighten, el botón Cancelar quedaba
- * invisible al lado de los tier 1 / tier 2. */
 Button.-default {
-    background: $boost-lighten-1;
+    background: $surface-lighten-1;
     color: $text;
+    border: tall $surface-lighten-2;
 }
 
 Button.-default:hover {
-    background: $surface-lighten-1;
+    background: $primary-background-lighten-2;
+    border: tall $accent;
 }
 
 Button.-default.-active {
-    background: $surface;
+    background: $primary-background-lighten-2;
+    border: tall $accent;
 }
 
 /* === Helpers compactos ==================================================== */
@@ -239,6 +253,7 @@ Button:disabled {
     background: $surface;
     color: $text-muted;
     text-style: none;
+    border: tall $primary-background-lighten-2;
 }
 
 /* ----------------------------------------------------------------------------
@@ -656,29 +671,30 @@ HistoryScreen {
     margin-bottom: 1;
 }
 
-/* Toggle filter buttons: misma familia que tier 2 (background tinted +
- * bold en hover/active) para que no se sientan "extraños" al lado de un
- * btn-info en la misma fila. Cuando el filtro está activo el handler les
- * pone `variant=primary` y el Button.-primary del CSS base sobreescribe
- * estos estilos (más específico por la pseudo-clase). */
+/* Toggle filter buttons: rellenos para conservar la misma familia visual que
+ * los botones de acción. */
 Button.btn-filter {
-    background: $boost-lighten-1;
-    color: $text-muted;
+    background: $primary-background-lighten-2;
+    color: $text;
+    border: tall $surface-lighten-2;
 }
 
 Button.btn-filter:hover {
-    background: $accent 60%;
-    color: $text;
+    background: $accent;
+    color: $background;
+    border: tall $accent-lighten-2;
     text-style: bold;
 }
 
 Button.btn-filter:focus {
+    border: double $accent;
     text-style: bold;
 }
 
 Button.btn-filter.-active {
-    background: $accent 75%;
-    color: $text;
+    background: $accent;
+    color: $background;
+    border: tall $accent-lighten-2;
     text-style: bold;
 }
 
@@ -1812,4 +1828,3 @@ SceneImageApprovalScreen {
     height: auto;
     margin-top: 1;
 }
-

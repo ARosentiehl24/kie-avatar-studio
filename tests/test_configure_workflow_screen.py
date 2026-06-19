@@ -11,12 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from textual.containers import VerticalScroll
-from textual.widgets import Button
+from textual.widgets import Button, Static
 
 from kie_avatar_studio.app import KieAvatarStudioApp
 from kie_avatar_studio.config import Settings
-from kie_avatar_studio.domain.models import WorkflowEntry
+from kie_avatar_studio.domain.models import VoiceChangerSettings, WorkflowEntry
 from kie_avatar_studio.ui.screens.configure_workflow import ConfigureWorkflowScreen
+from kie_avatar_studio.ui.screens.voice_changer_selector import ElevenLabsVoicesClient
 
 
 def _build_app(tmp_path: Path) -> KieAvatarStudioApp:
@@ -76,12 +77,18 @@ def _dense_entry() -> WorkflowEntry:
     return WorkflowEntry(name="dense", path=Path("workflows/dense.json"), workflow_payload=payload)
 
 
-def _push_configure(app: KieAvatarStudioApp) -> ConfigureWorkflowScreen:
+def _push_configure(
+    app: KieAvatarStudioApp,
+    *,
+    elevenlabs_client: ElevenLabsVoicesClient | None = None,
+    entry: WorkflowEntry | None = None,
+) -> ConfigureWorkflowScreen:
     screen = ConfigureWorkflowScreen(
-        entry=_dense_entry(),
+        entry=entry or _dense_entry(),
         presets_controller=app.presets_controller,
         audio_player=app.audio_player,
         default_i2v_duration_seconds=app.settings.default_i2v_duration_seconds,
+        elevenlabs_client=elevenlabs_client,
     )
     app.push_screen(screen)
     return screen
@@ -135,3 +142,34 @@ async def test_configure_approval_row_does_not_expand(tmp_path: Path) -> None:
         # se expandiera, su outer_size sería mucho mayor → el bug del hueco.
         assert approval_row.outer_size.height == 3
         assert duration_row.outer_size.height == 3
+
+
+async def test_configure_disables_voice_changer_without_api_key(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        _push_configure(app)
+        await pilot.pause()
+        select_button = app.screen.query_one("#configure-voice-changer-select", Button)
+        hint = app.screen.query_one("#configure-voice-changer-hint", Static)
+        assert select_button.disabled
+        assert "Configura ELEVENLABS_API_KEY en .env para usar el voice changer" in str(hint.content)
+
+
+async def test_configure_shows_existing_voice_changer_selection(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+    entry = _dense_entry()
+    assert entry.workflow_payload is not None
+    assert isinstance(entry.workflow_payload["pre_settings"], dict)
+    entry.workflow_payload["pre_settings"]["voice_changer"] = VoiceChangerSettings(
+        voice_id="voice_123",
+        model_id="eleven_custom",
+    ).model_dump(mode="json")
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        _push_configure(app, entry=entry)
+        await pilot.pause()
+        summary = app.screen.query_one("#configure-voice-changer-value", Static)
+        rendered = str(summary.content)
+        assert "voice_123" in rendered
+        assert "eleven_custom" in rendered

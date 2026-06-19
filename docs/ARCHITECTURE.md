@@ -55,6 +55,29 @@ kie_avatar_studio/
         └── main_menu.py
 ```
 
+## Automatización v2.0.0 (VEO + postproceso)
+
+Layout conceptual del subsistema de workflows tras la migración mayor:
+
+```text
+app_layer/
+├── workflow_runner.py          orquestación global + manifest + notify
+├── workflow_step_runner.py     state machine del step (`_run_veo`)
+├── workflow_concat.py          concat de videos attached + extract audio
+├── workflow_voice_changer.py   speech-to-speech final con ElevenLabs
+└── veo_poller.py               polling dedicado de /api/v1/veo/record-info
+
+infra/
+├── kie_client.py               VEO generate + VEO record-info
+├── elevenlabs_client.py        API directa /v1/speech-to-speech y /v2/voices
+└── ffmpeg.py                   wrapper async del binario FFmpeg
+```
+
+Dependencias externas nuevas del pipeline:
+
+- **ElevenLabs API**: voice selector + speech-to-speech final (`voice_changer`).
+- **FFmpeg** (binario local): concat demuxer + extracción de audio (`final_audio.mp3`).
+
 ## Reglas de dependencia (contractuales)
 
 ```text
@@ -132,6 +155,9 @@ Recuperación al arrancar (`QueueManager.restore_pending`):
   `max_parallel_image_jobs`, `max_parallel_upload_jobs`,
   `max_parallel_download_jobs`). Esto permite subir throughput de imagen/video
   sin saturar TTS, que suele ser el endpoint más frágil.
+- **Límite específico para VEO**: el workflow step runner usa además
+  `max_parallel_veo_jobs` para no disparar demasiados renders caros al mismo
+  tiempo (VEO 3.1 consume muchos más créditos que Nano Banana o uploads).
 
 ## Inversión de dependencias (DIP)
 
@@ -162,6 +188,8 @@ class KieGateway(Protocol):
     async def create_tts_task(self, ...): ...
     async def create_avatar_task(self, ...): ...
     async def get_task_detail(self, ...): ...
+    async def create_veo_video_task(self, ...): ...
+    async def get_veo_task_detail(self, ...): ...
     async def download_file(self, ...): ...
     async def aclose(self): ...
 
@@ -213,6 +241,36 @@ audio_queue = QueueManager(
 Los tests pueden reemplazar `KieClient` / `JobsDB` / `AudioJobsDB`
 por dobles in-memory siempre que cumplan los `Protocol` (validable
 con `isinstance(obj, KieGateway)`).
+
+## Flujo workflow v2.0.0
+
+```text
+WorkflowRunner
+  ├─ resolve voice/base + persist header
+  ├─ lanza N WorkflowStep en paralelo
+  │    └─ WorkflowStepRunner
+  │         ├─ prepara/reusa scene_image
+  │         ├─ opcional: awaiting_approval
+  │         ├─ create_veo_video_task()
+  │         ├─ veo_poller.poll_veo_task_for_url()
+  │         └─ download_kie_asset() -> step_x/video.mp4
+  └─ postproceso final
+       ├─ workflow_concat.concatenate_workflow_videos()
+       │    ├─ FFmpeg concat -> final.mp4
+       │    └─ FFmpeg extract audio -> final_audio.mp3
+       └─ workflow_voice_changer.apply_voice_changer() opcional
+            └─ ElevenLabsClient.speech_to_speech() -> voice_changed_audio.mp3
+```
+
+Notas de diseño:
+
+- `StepType` (`a-roll` / `b-roll`) se mantiene como semántica editorial/UI,
+  pero ambos tipos convergen al mismo backend de render: **VEO 3.1**.
+- `attached` decide si el clip participa del concat final; nunca impide la
+  generación ni la descarga individual del step.
+- El postproceso es **local** y deliberadamente queda fuera de `KieClient`:
+  Kie termina en URL de video; desde ahí manda `workflow_concat` y, si aplica,
+  `workflow_voice_changer`.
 
 ## Manejo de errores
 

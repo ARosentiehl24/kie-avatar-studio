@@ -20,9 +20,12 @@ from ...domain.events import WorkflowJobUpdated
 from ...domain.models import WorkflowJob
 from .._text_format import truncate
 from ._workflow_format import (
+    format_attached_status,
     format_outputs,
     format_progress,
     format_step_status,
+    format_workflow_outputs,
+    format_workflow_pipeline,
     format_workflow_status_label,
 )
 
@@ -32,6 +35,7 @@ _STEP_TABLE_COLUMNS: Final[tuple[str, ...]] = (
     "#",
     "Escena",
     "Tipo",
+    "Adj.",
     "Estado",
     "Progreso",
     "Outputs",
@@ -58,6 +62,8 @@ class WorkflowDetailScreen(Screen[None]):
         with Vertical(id="workflow-detail-box"):
             yield Static("", id="workflow-detail-title")
             yield Static("", id="workflow-detail-meta")
+            yield Static("", id="workflow-detail-pipeline")
+            yield Static("", id="workflow-detail-outputs")
             table: DataTable[str] = DataTable(
                 id="workflow-detail-table", cursor_type="row", zebra_stripes=True
             )
@@ -112,6 +118,12 @@ class WorkflowDetailScreen(Screen[None]):
             f"[b]Status:[/b] {format_workflow_status_label(workflow)}  ·  "
             f"[b]Output:[/b] [dim]{workflow.output_dir}[/dim]{manifest_note}"
         )
+        self.query_one("#workflow-detail-pipeline", Static).update(
+            f"[b]Pipeline:[/b] {format_workflow_pipeline(workflow)}"
+        )
+        self.query_one("#workflow-detail-outputs", Static).update(
+            format_workflow_outputs(workflow)
+        )
 
     def _refresh_steps_table(self, workflow: WorkflowJob) -> None:
         table = self.query_one("#workflow-detail-table", DataTable)
@@ -121,6 +133,7 @@ class WorkflowDetailScreen(Screen[None]):
                 str(step.step),
                 truncate(step.scene_name, 28),
                 step.type.value,
+                format_attached_status(step),
                 format_step_status(step),
                 format_progress(step),
                 format_outputs(step),

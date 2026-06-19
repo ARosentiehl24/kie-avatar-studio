@@ -1,9 +1,11 @@
-"""Modal `Configurar workflow`: pre-llena voice_preset.
+"""Modal `Configurar workflow`: pre-llena preset y voice changer.
 
-El JSON puede traer `voice_preset` y `audio_language` pre-cargados. El
-modal solo expone `voice_preset` (el `language_code` se configura DENTRO
-del preset desde `PresetFormScreen`, así no se duplica el setting). Si
-el JSON trae `audio_language`, se respeta tal cual al ejecutar.
+El JSON puede traer `voice_preset`, `audio_language` y `voice_changer`
+pre-cargados. El modal expone `voice_preset` y un selector opcional de
+voz ElevenLabs para `voice_changer`. El `language_code` se configura
+DENTRO del preset desde `PresetFormScreen`, así no se duplica el
+setting. Si el JSON trae `audio_language`, se respeta tal cual al
+ejecutar.
 
 ### Voice preset
 
@@ -18,11 +20,18 @@ seleccionado automáticamente sin salir del flow del workflow.
 El JSON acepta tanto el `id` (slug) como el `label` (nombre humano) del
 preset; la resolución la hace `WorkflowController._resolve_voice_preset`.
 
+### Voice changer
+
+El selector de voice changer se abre en un modal aparte y consulta
+`ElevenLabsClient.list_voices()` al abrir. El usuario puede elegir una
+voz, o la opción "Sin voice changer" para dejar `voice_changer=None`.
+
 ### Dismiss result
 
-El modal se cierra con `dismiss((voice_preset_id, audio_language))` si
-el usuario confirma, o `dismiss(None)` si cancela. El caller (típicamente
-`AutomationScreen._handle_configure`) registra el callback en el
+El modal se cierra con `dismiss((voice_preset_id, audio_language,
+i2v_duration_override, scene_approval_mode, voice_changer))` si el
+usuario confirma, o `dismiss(None)` si cancela. El caller
+(`AutomationScreen._handle_configure`) registra el callback en el
 `push_screen` original. NO usar `await push_screen()` desde el caller:
 ese patrón espera al mount, no al dismiss, y causa cascadas de
 `InvalidStateError` cuando se intenta dismiss-ear en chain.
@@ -48,6 +57,7 @@ from ...domain.models import (
     ModelCreationMethod,
     SceneApprovalMode,
     StepType,
+    VoiceChangerSettings,
     VoicePreset,
     WorkflowEntry,
     WorkflowPreSettings,
@@ -55,6 +65,11 @@ from ...domain.models import (
 from ...domain.policies import I2V_DURATIONS
 from .._icons import ERROR, OK
 from .preset_form import PresetFormResult, PresetFormScreen
+from .voice_changer_selector import (
+    ElevenLabsVoicesClient,
+    VoiceChangerSelectionResult,
+    VoiceChangerSelectorScreen,
+)
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
@@ -69,9 +84,17 @@ _NO_PRESET_SENTINEL: Final[str] = "__no_preset__"
 _DURATION_AUTO_SENTINEL: Final[str] = "__auto__"
 
 
-# Resultado del modal: tupla (voice_preset_id, audio_language, i2v_duration_override, scene_approval_mode).
+# Resultado del modal:
+# (voice_preset_id, audio_language, i2v_duration_override,
+#  scene_approval_mode, voice_changer).
 # `None` global = cancelado por el usuario.
-ConfigureResult = tuple[str | None, str | None, int | None, "SceneApprovalMode | None"]
+ConfigureResult = tuple[
+    str | None,
+    str | None,
+    int | None,
+    "SceneApprovalMode | None",
+    "VoiceChangerSettings | None",
+]
 
 
 class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
@@ -88,17 +111,24 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
         presets_controller: VoicePresetsController,
         audio_player: AudioPlayer,
         default_i2v_duration_seconds: int,
+        elevenlabs_client: ElevenLabsVoicesClient | None = None,
     ) -> None:
         super().__init__()
         self._entry = entry
         self._presets_controller = presets_controller
         self._audio_player = audio_player
+        self._elevenlabs_client = elevenlabs_client
         self._presets: list[VoicePreset] = []
         pre_payload = (entry.workflow_payload or {}).get("pre_settings", {})
         try:
             self._initial = WorkflowPreSettings.model_validate(pre_payload)
         except Exception:
             self._initial = WorkflowPreSettings(model_creation=_fallback_model_creation())
+        self._voice_changer = (
+            self._initial.voice_changer.model_copy(deep=True)
+            if self._initial.voice_changer is not None
+            else None
+        )
         # El selector de duración del b-roll solo aparece si el workflow
         # tiene al menos un step b-roll. Workflows 100% a-roll no tienen
         # nada que configurar (la duración del avatar la define el audio).
@@ -152,12 +182,30 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
                 yield Static(
                     "[dim]Si no encontrás el preset que buscás, presioná "
                     "'Crear nuevo preset' para registrarlo sin salir de este modal. "
-                    "El idioma TTS (language_code) se configura DENTRO del preset, no acá.[/dim]",
+                    "Si el workflow usa compat legacy, el `language_code` se resuelve "
+                    "dentro del preset; los workflows v2.0.0 usan `voice_changer` "
+                    "directamente desde el JSON.[/dim]",
                     id="configure-preset-hint",
+                )
+                yield Static("[b]Voice changer (ElevenLabs):[/b]")
+                with Horizontal(id="configure-voice-changer-row"):
+                    yield Static(
+                        self._render_voice_changer_value(),
+                        id="configure-voice-changer-value",
+                    )
+                    yield Button(
+                        "Seleccionar voz…",
+                        id="configure-voice-changer-select",
+                        classes="btn-info",
+                        disabled=self._elevenlabs_client is None,
+                    )
+                yield Static(
+                    self._render_voice_changer_hint(),
+                    id="configure-voice-changer-hint",
                 )
                 if self._has_b_rolls:
                     yield Static(
-                        "[b]Duración del b-roll (Kling 3.0 video):[/b]",
+                        "[b]Duración del render VEO 3.1 por step:[/b]",
                         id="configure-duration-label",
                     )
                     with Horizontal(id="configure-duration-row"):
@@ -168,12 +216,12 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
                             id="configure-duration-select",
                         )
                     yield Static(
-                        "[dim]Fuerza la duración de TODOS los b-roll del workflow. "
-                        f"'Usar la del JSON / default' deja que cada step use su "
-                        f"`duration_seconds` propio (o el default global de "
-                        f"{self._default_i2v_duration_seconds}s si no "
-                        f"tiene). Avatar Pro (a-roll) ignora esta opción: el video "
-                        f"dura lo que dura el audio.[/dim]",
+                        "[dim]Compat legacy: fuerza la duración de TODOS los b-roll del "
+                        "workflow. 'Usar la del JSON / default' deja que cada step use "
+                        "su `duration_seconds` propio (o el default global de "
+                        f"{self._default_i2v_duration_seconds}s si no tiene). "
+                        "En workflows v2.0.0 la duración principal vive en "
+                        "`pre_settings.veo.duration`.[/dim]",
                         id="configure-duration-hint",
                     )
                 if self._has_change_scene_b_rolls:
@@ -203,7 +251,7 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
                         "Modo `manual` pausa el workflow después de generar la "
                         "scene_image con Nano Banana y espera que apruebes / "
                         "regeneres / canceles desde la pantalla Automatización. "
-                        "Evita gastar créditos en Kling 3.0 animando una scene "
+                        "Evita gastar créditos en VEO 3.1 animando una scene "
                         "que salió mal.[/dim]",
                         id="configure-approval-hint",
                     )
@@ -250,6 +298,9 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
             return
         if button_id == "configure-preview-stop":
             self._stop_preview_async()
+            return
+        if button_id == "configure-voice-changer-select":
+            self._handle_voice_changer_clicked()
 
     # --- preset select wiring -----------------------------------------
 
@@ -333,7 +384,8 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
         # Si el JSON trae `audio_language`, se respeta tal cual (backdoor).
         duration_override = self._read_duration_override()
         approval_mode = self._read_approval_mode()
-        self.dismiss((voice_preset_id, None, duration_override, approval_mode))
+        voice_changer = self._voice_changer.model_copy(deep=True) if self._voice_changer else None
+        self.dismiss((voice_preset_id, None, duration_override, approval_mode, voice_changer))
 
     def _read_approval_mode(self) -> SceneApprovalMode | None:
         """Lee el Select de scene_approval_mode. `None` = no override (usa el del JSON)."""
@@ -419,6 +471,29 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
         await self._refresh_presets_select(select_preset_id=preset.id)
         self._set_status(f"{OK} preset '{preset.label}' creado y seleccionado")
 
+    def _handle_voice_changer_clicked(self) -> None:
+        if self._elevenlabs_client is None:
+            self._set_status(
+                "Configura ELEVENLABS_API_KEY en .env para usar el voice changer",
+                error=True,
+            )
+            return
+        self.app.push_screen(
+            VoiceChangerSelectorScreen(
+                elevenlabs_client=self._elevenlabs_client,
+                initial_selection=self._voice_changer,
+            ),
+            self._on_voice_changer_dismissed,
+        )
+
+    def _on_voice_changer_dismissed(self, result: VoiceChangerSelectionResult | None) -> None:
+        if result is None:
+            return
+        self._voice_changer = (
+            result.voice_changer.model_copy(deep=True) if result.voice_changer is not None else None
+        )
+        self._refresh_voice_changer_summary()
+
     # --- option renderers ---------------------------------------------
 
     @staticmethod
@@ -434,6 +509,34 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
         if preset.label != preset.id:
             return f"{preset.label}  ·  id={preset.id}"
         return preset.label
+
+    def _render_voice_changer_value(self) -> str:
+        if self._voice_changer is None:
+            return "[dim]Sin voice changer[/dim]"
+        return (
+            "[green]Activo[/green]  ·  "
+            f"voice_id=[b]{self._voice_changer.voice_id}[/b]  ·  "
+            f"modelo={self._voice_changer.model_id}"
+        )
+
+    def _render_voice_changer_hint(self) -> str:
+        if self._elevenlabs_client is None:
+            return (
+                "[dim]Configura ELEVENLABS_API_KEY en .env para usar el voice changer[/dim]"
+            )
+        return (
+            "[dim]Opcional. Convierte el audio final del workflow con "
+            "ElevenLabs speech-to-speech. Elegí una voz o dejalo en "
+            "'Sin voice changer'.[/dim]"
+        )
+
+    def _refresh_voice_changer_summary(self) -> None:
+        self.query_one("#configure-voice-changer-value", Static).update(
+            self._render_voice_changer_value()
+        )
+        self.query_one("#configure-voice-changer-hint", Static).update(
+            self._render_voice_changer_hint()
+        )
 
     def _render_continue_label(self) -> str:
         """El botón de continuar describe el próximo paso según el método."""

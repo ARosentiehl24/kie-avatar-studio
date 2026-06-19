@@ -1,16 +1,22 @@
 # Kie Avatar Studio - Spec del proyecto
 
-Documento maestro. Léelo de arriba a abajo antes de tocar código.  
-Última revisión: 2026-05-31
+Documento maestro. Léelo de arriba a abajo antes de tocar código.
+Última revisión: 2026-06-15
 
 ---
 
 ## 1. Propósito
 
-App local en Python con interfaz **TUI (Textual)** para automatizar producción de videos con avatar/lip-sync usando las APIs de **Kie.ai**:
+App local en Python con interfaz **TUI (Textual)** para automatizar producción de video con las APIs de **Kie.ai**. Hoy conviven dos pipelines:
 
 ```text
+video manual clásico
 script + imagen + voz + prompt  -->  audio TTS + video Kling Avatar
+
+workflow v2.0.0
+modelo base + escenas + prompt  -->  VEO 3.1 (audio nativo)
+                                  -->  concat local + extracción de audio
+                                  -->  voice changer opcional (ElevenLabs)
 ```
 
 Optimizada para correr en una máquina personal sin exponer la API key, soportar **lotes** y **paralelismo controlado**, mantener un **historial persistente**, y servir de base reutilizable para una futura UI web/Electron sin reescribir la lógica.
@@ -33,7 +39,7 @@ Optimizada para correr en una máquina personal sin exponer la API key, soportar
 - Servidor multi-usuario o multi-tenant.
 - Autenticación por usuario.
 - UI web/Electron en la fase 1.
-- Edición de video / post-procesamiento (mux, subtítulos, etc.).
+- Edición manual tipo timeline / subtítulos / color grading. El post-proceso automático de workflows (concat + extracción de audio + voice changer) sí forma parte del producto.
 - Callbacks HTTP de Kie (se hace polling).
 
 ---
@@ -50,10 +56,21 @@ audio duración max      : 5 min
 audio formatos          : audio/mpeg, audio/wav, audio/x-wav, audio/aac, audio/mp4, audio/ogg
 modelo TTS              : elevenlabs/text-to-speech-multilingual-v2
 modelo Avatar           : kling/ai-avatar-pro
+modelos workflow video  : veo3, veo3_fast, veo3_lite
 endpoint upload         : POST https://kieai.redpandaai.co/api/file-stream-upload
 endpoint createTask     : POST https://api.kie.ai/api/v1/jobs/createTask
-endpoint recordInfo     : GET  https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<id>  (formato exacto a confirmar)
+endpoint recordInfo     : GET  https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<id>
+endpoint veo generate   : POST https://api.kie.ai/api/v1/veo/generate
+endpoint veo polling    : GET  https://api.kie.ai/api/v1/veo/record-info?taskId=<id>
+endpoint sts directo    : POST https://api.elevenlabs.io/v1/speech-to-speech/<voice_id>
 ```
+
+Notas workflow v2.0.0:
+
+- `POST /api/v1/veo/generate` usa endpoints propios de VEO; **no** pasa por `/jobs/createTask`.
+- Polling VEO usa `data.successFlag` (`0=generando`, `1=success`, `2=failed`, `3=upstream failed`) y extrae el MP4 desde `data.response.resultUrls[]`.
+- El schema JSON v2 introduce `pre_settings.veo`, `pre_settings.voice_changer` y `run[].attached`.
+- `audio_language`, `voice_preset_id`/`voice_preset` e `i2v_duration_seconds` quedan deprecated y el loader los conserva solo por backward compat.
 
 Polling sugerido:
 
@@ -440,6 +457,19 @@ class KieClient:
     async def create_tts_task(text, voice, model="elevenlabs/text-to-speech-multilingual-v2") -> KieTaskCreated
     async def create_avatar_task(image_url, audio_url, prompt, model="kling/ai-avatar-pro") -> KieTaskCreated
     async def get_task_detail(task_id) -> dict
+    async def create_veo_video_task(
+        prompt,
+        *,
+        image_urls=None,
+        model="veo3_fast",
+        generation_type="FIRST_AND_LAST_FRAMES_2_VIDEO",
+        aspect_ratio="9:16",
+        resolution="720p",
+        duration=8,
+        enable_translation=True,
+        watermark=None,
+    ) -> KieTaskCreated
+    async def get_veo_task_detail(task_id) -> dict
     async def download_file(url, output_path) -> Path
 ```
 
@@ -517,6 +547,113 @@ def add_listener(cb: Callable[[VideoJob], None]) -> None
 
 - Recuperación al arranque: cargar de DB todos los jobs en estados `WAITING_AUDIO|WAITING_VIDEO|CREATING_*|DOWNLOADING` y re-encolarlos (idempotente, el runner sabe re-pedir el `task_id` si ya existe).
 
+
+
+### 10.1 Automatización (workflows v2.0.0)
+
+La automatización dejó de dividir los steps entre Avatar Pro, Kling 3.0 y
+TTS por separado. Desde **v2.0.0**, todos los steps renderizan video con
+**VEO 3.1** y el audio se trata como una preocupación de post-proceso.
+
+#### State machine del workflow
+
+```text
+WorkflowJob
+queued
+  └─► preparing_base
+        └─► running
+              ├─► awaiting_approval      (solo si scene_approval_mode=manual)
+              ├─► completed
+              ├─► partially_failed
+              ├─► failed
+              └─► cancelled
+```
+
+#### Flow de un step
+
+```text
+WorkflowStep
+queued
+  └─► preparing
+        └─► scene_image opcional (Nano Banana / reuso de base)
+              └─► awaiting_approval?
+                    └─► rendering (VEO 3.1)
+                          └─► downloading (video.mp4)
+                                └─► completed | failed | cancelled
+```
+
+Reglas:
+
+- `WorkflowStepRunner` unifica el runtime en `_run_veo()`; ya no existen
+  ramas separadas por `a-roll`/`b-roll` para elegir backend de video.
+- `type=a-roll` y `type=b-roll` siguen existiendo, pero ahora describen el
+  **rol editorial** de la escena (talento vs recurso), no el motor de render.
+- El prompt del step alimenta directamente a VEO. Cuando la escena necesita
+  una `scene_image`, primero se genera/reutiliza la imagen y luego se pasa
+  en `imageUrls[]` con `generationType=FIRST_AND_LAST_FRAMES_2_VIDEO`.
+- `attached=true` (default) indica que el `video.mp4` del step entra al
+  reel final; `attached=false` lo deja solo como output individual.
+
+#### Post-proceso al terminar los steps
+
+```text
+steps completed
+  └─► concatenar videos attached         -> outputs/<wf_id>/final.mp4
+        └─► extraer audio con FFmpeg     -> outputs/<wf_id>/final_audio.mp3
+              └─► speech-to-speech opcional
+                    (pre_settings.voice_changer)
+                    -> outputs/<wf_id>/voice_changed_audio.mp3
+```
+
+Detalles del pipeline:
+
+- La concatenación usa FFmpeg local y omite steps no attached o sin
+  `video.mp4` descargado.
+- Si hay un solo clip attached, se copia tal cual a `final.mp4` y luego se
+  extrae su audio igualmente.
+- `pre_settings.voice_changer` apunta a ElevenLabs directo
+  (`speech-to-speech`) y trabaja sobre `final_audio.mp3`, nunca por step.
+- Cada transición persiste DB + manifest atómico (`workflow.json`) antes de
+  notificar a la UI.
+
+#### Schema JSON v2 resumido
+
+```json
+{
+  "pre_settings": {
+    "model_creation": { "method": "prompt" },
+    "veo": {
+      "model": "veo3_fast",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "duration": 8,
+      "enable_translation": true,
+      "watermark": null
+    },
+    "voice_changer": {
+      "voice_id": "voice_123",
+      "model_id": "eleven_multilingual_sts_v2",
+      "remove_background_noise": true,
+      "output_format": "mp3_44100_128"
+    }
+  },
+  "run": [
+    {
+      "step": 1,
+      "type": "a-roll",
+      "attached": true,
+      "prompt": "Persona a cámara, audio nativo VEO"
+    }
+  ]
+}
+```
+
+Campos deprecated aceptados solo para compatibilidad de carga:
+
+- `pre_settings.audio_language`
+- `pre_settings.voice_preset_id` / alias `voice_preset`
+- `pre_settings.i2v_duration_seconds`
+
 ---
 
 ## 11. BatchLoader
@@ -580,11 +717,14 @@ Archivo único `kie_avatar_studio/ui/styles.tcss`. No CSS inline en cada widget.
 KIE_API_KEY=
 KIE_API_BASE=https://api.kie.ai
 KIE_UPLOAD_BASE=https://kieai.redpandaai.co
+ELEVENLABS_API_KEY=
 MAX_PARALLEL_JOBS=2
+MAX_PARALLEL_VEO_JOBS=1
 POLL_INTERVAL_SECONDS=10
 TASK_TIMEOUT_SECONDS=1800
 DEFAULT_VOICE=EkK5I93UQWFDigLMpZcX
 DEFAULT_PROMPT=Mirada a cámara, expresión natural, gestos suaves, tono confiado.
+FFMPEG_PATH=ffmpeg
 DATA_DIR=./data
 OUTPUTS_DIR=./outputs
 INPUTS_DIR=./inputs

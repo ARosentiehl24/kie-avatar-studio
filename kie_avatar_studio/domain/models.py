@@ -555,6 +555,40 @@ class GitHubRelease(BaseModel):
     published_at: str = ""
 
 
+# --- VEO 3.1 + ElevenLabs models ------------------------------------------
+
+
+class VeoSettings(BaseModel):
+    """Configuración de VEO 3.1 para workflows.
+
+    Los defaults apuntan al tier cost-efficient (veo3_fast, 720p, 8s,
+    60 créditos) que es el más usado para reels verticales. Todos los
+    campos se validan con `policies.validate_veo_settings` antes de
+    llamar a `KieClient.create_veo_video_task`.
+    """
+
+    model: str = "veo3_fast"
+    aspect_ratio: str = "9:16"
+    resolution: str = "720p"
+    duration: int = 8
+    enable_translation: bool = True
+    watermark: str | None = None
+
+
+class VoiceChangerSettings(BaseModel):
+    """Configuración de ElevenLabs Speech-to-Speech (voice changer).
+
+    Se aplica al final del workflow sobre el audio extraído del video
+    concatenado. `voice_id` es obligatorio — se resuelve desde los
+    presets de ElevenLabs o se selecciona desde la UI.
+    """
+
+    voice_id: str
+    model_id: str = "eleven_multilingual_sts_v2"
+    remove_background_noise: bool = True
+    output_format: str = "mp3_44100_128"
+
+
 # --- Workflow automation models -------------------------------------------
 
 
@@ -640,46 +674,32 @@ class ProductImage(BaseModel):
 
 
 class WorkflowPreSettings(BaseModel):
-    """Pre-configuración del workflow: idioma, voz preset, modelo base.
+    """Pre-configuración del workflow: veo, voice changer, modelo base.
 
-    El JSON del usuario trae `voice_preset` (snake_case sin sufijo `_id`).
-    Mantenemos `voice_preset_id` como atributo Python para coherencia
-    interna y exponemos el alias `voice_preset` para parsear/serializar.
-
-    `audio_language` es un `language_code` ISO 639-1 (ej. `"es-419"`).
-    Si está seteado, el `WorkflowStepRunner` fuerza el modelo TTS turbo
-    (acepta `language_code`); si es `None`, usa el multilingual default
-    (que NO acepta `language_code` → Kie devuelve 422 si se manda).
+    **v2.0.0**: los campos `audio_language`, `voice_preset_id` y
+    `i2v_duration_seconds` están deprecated (eran del flujo Kling/TTS).
+    Se mantienen para backward compat con workflows JSON v1 — el loader
+    los acepta y emite warning. Los nuevos workflows deben usar
+    `veo` y `voice_changer`.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
+    # --- deprecated (Kling/TTS era, mantener para backward compat) ---
     audio_language: str | None = None
     voice_preset_id: str | None = Field(default=None, alias="voice_preset")
-    model_creation: ModelCreation
-    # Override global del workflow para la duración de los b-roll. Si es
-    # `None`, cada step usa su propio `duration_seconds` (si lo tiene) o
-    # cae al default global de `Settings.default_i2v_duration_seconds`.
-    # Si el usuario lo setea desde el modal de Configurar, FORZA esa
-    # duración para TODOS los b-roll del workflow (sobreescribe el del
-    # step si el step trae uno propio del JSON). Aceptable porque el
-    # modal es la última palabra antes de encolar.
     i2v_duration_seconds: int | None = None
-    # Modo de aprobación de scene_image. Ver docstring de
-    # `SceneApprovalMode`. Default `AUTO` para no romper workflows
-    # existentes (comportamiento histórico).
+
+    # --- vigentes ---
+    model_creation: ModelCreation
     scene_approval_mode: SceneApprovalMode = SceneApprovalMode.AUTO
-    # Promoción de producto: si `True`, el workflow promociona UN producto
-    # global (elegido en la UI antes de encolar, subido a Kie). Los steps
-    # con `include_product=True` lo componen sobre la base con Nano Banana.
-    # El producto resuelto vive en `product_image`. Default `False`.
     promote_product: bool = False
     product_image: ProductImage | None = None
-    # Aspect ratio global para todas las imágenes generadas/compuestas con
-    # Nano Banana 2 (base del modelo y scene_images de cada step). Si es
-    # `None`, se usa el aspect ratio por defecto del modelo (auto).
-    # Valores soportados: auto, 1:1, 9:16, 16:9, etc. (ver ASPECT_RATIOS).
     image_aspect_ratio: str | None = None
+
+    # --- nuevos v2.0.0 ---
+    veo: VeoSettings = Field(default_factory=VeoSettings)
+    voice_changer: VoiceChangerSettings | None = None
 
 
 class StepType(StrEnum):
@@ -773,6 +793,12 @@ class WorkflowStep(BaseModel):
     scene_name: str
     scene_slug: str
     type: StepType
+    # `attached`: si True (default), el video generado de este step se
+    # incluye en el concat final del workflow. Si False, el video se
+    # genera igualmente pero NO se concatena al output final. Útil para
+    # escenas que el usuario quiere generar individualmente para edición
+    # manual posterior sin que entren al reel automático.
+    attached: bool = True
     # `change_scene` (antes `change_background`): si True dispara una
     # regeneración con Nano Banana 2 (refs=[base] + `scene_description` +
     # `prompt`) y la imagen resultante se usa como `image_urls[0]` del

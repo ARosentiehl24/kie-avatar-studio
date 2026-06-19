@@ -80,6 +80,7 @@ async def test_write_creates_workflow_json_with_expected_shape(tmp_path: Path) -
     assert data["slug"] == "sample"
     assert data["error"] is None
     assert data["manifest_write_failed"] is False
+    assert data["outputs"] == {}
     assert len(data["steps"]) == 2
     assert data["steps"][0]["type"] == "a-roll"
     assert data["steps"][1]["type"] == "b-roll"
@@ -139,6 +140,23 @@ async def test_outputs_only_include_set_paths(tmp_path: Path) -> None:
     assert outputs == {
         "scene_image": "outputs/wf/step_01/scene.png",
         "video": "outputs/wf/step_01/final.mp4",
+    }
+
+
+async def test_workflow_outputs_include_existing_final_artifacts(tmp_path: Path) -> None:
+    workflow = _make_workflow(tmp_path / "wf_001")
+    output_dir = Path(workflow.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "final.mp4").write_bytes(b"video")
+    (output_dir / "final_audio.mp3").write_bytes(b"audio")
+    (output_dir / "voice_changed_audio.mp3").write_bytes(b"changed")
+    writer = AtomicWorkflowManifestWriter()
+    await writer.write(workflow)
+    data = json.loads((tmp_path / "wf_001" / "workflow.json").read_text(encoding="utf-8"))
+    assert data["outputs"] == {
+        "video": str(output_dir / "final.mp4"),
+        "audio": str(output_dir / "final_audio.mp3"),
+        "voice_changed_audio": str(output_dir / "voice_changed_audio.mp3"),
     }
 
 

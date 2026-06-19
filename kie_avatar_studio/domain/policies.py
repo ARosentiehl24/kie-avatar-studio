@@ -30,7 +30,9 @@ from .models import (
     ModelCreation,
     ModelCreationMethod,
     StepType,
+    VeoSettings,
     VideoJob,
+    VoiceChangerSettings,
     VoiceSettings,
     WorkflowJob,
     WorkflowProgressKey,
@@ -43,6 +45,28 @@ _BYTES_PER_MB: Final[int] = 1024 * 1024
 MAX_IMAGE_BYTES: Final[int] = 10 * _BYTES_PER_MB
 MAX_AUDIO_BYTES: Final[int] = 100 * _BYTES_PER_MB
 MAX_AUDIO_SECONDS: Final[int] = 5 * 60
+
+# --- VEO 3.1 constants ---------------------------------------------------
+
+VEO_MODELS: Final[frozenset[str]] = frozenset({"veo3", "veo3_fast", "veo3_lite"})
+VEO_GENERATION_TYPES: Final[frozenset[str]] = frozenset(
+    {"TEXT_2_VIDEO", "FIRST_AND_LAST_FRAMES_2_VIDEO", "REFERENCE_2_VIDEO"}
+)
+VEO_ASPECT_RATIOS: Final[frozenset[str]] = frozenset({"16:9", "9:16", "Auto"})
+VEO_RESOLUTIONS: Final[frozenset[str]] = frozenset({"720p", "1080p", "4k"})
+VEO_DURATIONS: Final[frozenset[int]] = frozenset({4, 6, 8})
+# Modelos que soportan REFERENCE_2_VIDEO (material-to-video).
+VEO_REFERENCE_MODELS: Final[frozenset[str]] = frozenset({"veo3_fast", "veo3_lite"})
+VEO_REFERENCE_FIXED_DURATION: Final[int] = 8
+VEO_FIRST_LAST_FRAMES_MAX_IMAGES: Final[int] = 2
+VEO_REFERENCE_MAX_IMAGES: Final[int] = 3
+# Retención de result URLs de VEO (14 días, misma que generated media).
+VEO_RESULT_RETENTION_DAYS: Final[int] = 14
+# successFlag values del polling de VEO.
+VEO_STATUS_GENERATING: Final[int] = 0
+VEO_STATUS_SUCCESS: Final[int] = 1
+VEO_STATUS_FAILED: Final[int] = 2
+VEO_STATUS_UPSTREAM_FAILED: Final[int] = 3
 
 # Restricciones del endpoint Nano Banana 2 (`docs.kie.ai/market/google/nanobanana2`).
 # El prompt admite hasta 5000 chars (siguiendo las directrices del proyecto)
@@ -945,3 +969,92 @@ def validate_i2v_duration(duration: int) -> None:
         raise WorkflowStepValidationError(
             f"duration i2v inválido: {duration} (válidos: {', '.join(map(str, I2V_DURATIONS))})"
         )
+
+
+# --- VEO 3.1 validation --------------------------------------------------
+
+
+class VeoValidationError(WorkflowValidationError):
+    """Parámetros de VEO 3.1 fuera de las restricciones del endpoint."""
+
+
+def validate_veo_settings(settings: VeoSettings) -> None:
+    """Valida la configuración global de VEO 3.1 del workflow."""
+    if settings.model not in VEO_MODELS:
+        raise VeoValidationError(
+            f"modelo VEO inválido: {settings.model!r} "
+            f"(válidos: {', '.join(sorted(VEO_MODELS))})"
+        )
+    if settings.aspect_ratio not in VEO_ASPECT_RATIOS:
+        raise VeoValidationError(
+            f"aspect_ratio VEO inválido: {settings.aspect_ratio!r} "
+            f"(válidos: {', '.join(sorted(VEO_ASPECT_RATIOS))})"
+        )
+    if settings.resolution not in VEO_RESOLUTIONS:
+        raise VeoValidationError(
+            f"resolution VEO inválida: {settings.resolution!r} "
+            f"(válidos: {', '.join(sorted(VEO_RESOLUTIONS))})"
+        )
+    if settings.duration not in VEO_DURATIONS:
+        raise VeoValidationError(
+            f"duration VEO inválido: {settings.duration} "
+            f"(válidos: {', '.join(map(str, sorted(VEO_DURATIONS)))})"
+        )
+
+
+def validate_veo_step(
+    generation_type: str,
+    image_urls: list[str],
+    model: str,
+    duration: int,
+) -> None:
+    """Valida reglas cruzadas de un step VEO individual.
+
+    Reglas:
+    - FIRST_AND_LAST_FRAMES_2_VIDEO: 1-2 image_urls, todos los modelos, duration 4/6/8.
+    - REFERENCE_2_VIDEO: 1-3 image_urls, solo veo3_fast/veo3_lite, duration obligado a 8.
+    - TEXT_2_VIDEO: sin image_urls, todos los modelos, duration 4/6/8.
+    """
+    if generation_type not in VEO_GENERATION_TYPES:
+        raise VeoValidationError(
+            f"generationType VEO inválido: {generation_type!r} "
+            f"(válidos: {', '.join(sorted(VEO_GENERATION_TYPES))})"
+        )
+
+    n = len(image_urls)
+
+    if generation_type == "TEXT_2_VIDEO" and n > 0:
+        raise VeoValidationError(
+            f"TEXT_2_VIDEO no acepta image_urls (recibí {n})"
+        )
+    if generation_type == "FIRST_AND_LAST_FRAMES_2_VIDEO" and (
+        n < 1 or n > VEO_FIRST_LAST_FRAMES_MAX_IMAGES
+    ):
+        raise VeoValidationError(
+            f"FIRST_AND_LAST_FRAMES_2_VIDEO requiere 1-{VEO_FIRST_LAST_FRAMES_MAX_IMAGES} "
+            f"image_urls (recibí {n})"
+        )
+    if generation_type == "REFERENCE_2_VIDEO":
+        if n < 1 or n > VEO_REFERENCE_MAX_IMAGES:
+            raise VeoValidationError(
+                f"REFERENCE_2_VIDEO requiere 1-{VEO_REFERENCE_MAX_IMAGES} "
+                f"image_urls (recibí {n})"
+            )
+        if model not in VEO_REFERENCE_MODELS:
+            raise VeoValidationError(
+                f"REFERENCE_2_VIDEO solo soporta modelos "
+                f"{', '.join(sorted(VEO_REFERENCE_MODELS))} (recibí {model!r})"
+            )
+        if duration != VEO_REFERENCE_FIXED_DURATION:
+            raise VeoValidationError(
+                f"REFERENCE_2_VIDEO solo soporta duration={VEO_REFERENCE_FIXED_DURATION} "
+                f"(recibí {duration})"
+            )
+
+
+def validate_voice_changer_settings(settings: VoiceChangerSettings) -> None:
+    """Valida la configuración de ElevenLabs Speech-to-Speech."""
+    if not settings.voice_id or not settings.voice_id.strip():
+        raise WorkflowValidationError("voice_changer.voice_id no puede estar vacío")
+    if not settings.model_id or not settings.model_id.strip():
+        raise WorkflowValidationError("voice_changer.model_id no puede estar vacío")

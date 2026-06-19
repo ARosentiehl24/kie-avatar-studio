@@ -17,6 +17,7 @@ from kie_avatar_studio.domain.events import WorkflowJobUpdated
 from kie_avatar_studio.domain.models import (
     ImageAssetKind,
     ImageAssetRef,
+    VoiceChangerSettings,
     VoicePreset,
     WorkflowJob,
 )
@@ -203,6 +204,54 @@ async def test_enqueue_entry_overrides_voice_and_language(
     )
     assert workflow.pre_settings.voice_preset_id == "alt"
     assert workflow.pre_settings.audio_language == "pt-BR"
+
+
+async def test_enqueue_entry_can_override_voice_changer(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    controller, _, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    workflow = await controller.enqueue_entry(
+        entries[0],
+        voice_changer=VoiceChangerSettings(
+            voice_id="voice_new",
+            model_id="custom-model",
+            remove_background_noise=False,
+        ),
+        set_voice_changer=True,
+    )
+    assert workflow.pre_settings.voice_changer is not None
+    assert workflow.pre_settings.voice_changer.voice_id == "voice_new"
+    assert workflow.pre_settings.voice_changer.model_id == "custom-model"
+    assert workflow.pre_settings.voice_changer.remove_background_noise is False
+
+
+async def test_enqueue_entry_can_disable_voice_changer(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path, VoicePresetsStore],
+) -> None:
+    controller, _, workflows_dir, _ = workflow_controller_setup
+    payload = {
+        "workflow": "voice changer on",
+        "pre_settings": {
+            "model_creation": {"method": "catalog", "asset_kind": "generated", "asset_id": "x"},
+            "voice_changer": {"voice_id": "voice_original", "model_id": "keep-me"},
+        },
+        "run": [
+            {
+                "step": 1,
+                "scene_name": "Hook",
+                "type": "a-roll",
+                "prompt": "Persona hablando a cámara",
+                "text": "Hola",
+            }
+        ],
+    }
+    path = workflows_dir / "voice_changer_disable.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    entries = await controller.list_entries(refresh=True)
+    target = next(entry for entry in entries if entry.path.name == "voice_changer_disable.json")
+    workflow = await controller.enqueue_entry(target, voice_changer=None, set_voice_changer=True)
+    assert workflow.pre_settings.voice_changer is None
 
 
 async def test_enqueue_rejects_unknown_voice_preset(

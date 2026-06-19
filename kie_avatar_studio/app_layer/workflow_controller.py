@@ -34,6 +34,7 @@ from ..domain.models import (
     ModelCreationMethod,
     ProductImage,
     SceneApprovalMode,
+    VoiceChangerSettings,
     VoicePreset,
     WorkflowEntry,
     WorkflowJob,
@@ -127,6 +128,8 @@ class WorkflowController:
         scene_approval_mode: SceneApprovalMode | None = None,
         product_ref: ImageAssetRef | None = None,
         product_local_path: str | None = None,
+        voice_changer: VoiceChangerSettings | None = None,
+        set_voice_changer: bool = False,
     ) -> WorkflowJob:
         """Encola un workflow validando preset + archivos locales.
 
@@ -157,6 +160,11 @@ class WorkflowController:
         a Kie y pasa la ref + el path acá; se persisten en
         `pre_settings.product_image` para que el runner componga el producto
         en los steps con `include_product=true`.
+
+        `voice_changer`: snapshot completo del selector del modal
+        Configurar. Si `set_voice_changer=True`, este valor reemplaza el
+        `pre_settings.voice_changer` del JSON (incluyendo `None` para
+        desactivar la conversión).
         """
         if not entry.valid:
             raise WorkflowValidationError(
@@ -177,6 +185,10 @@ class WorkflowController:
             workflow.pre_settings.i2v_duration_seconds = i2v_duration_override
         if scene_approval_mode is not None:
             workflow.pre_settings.scene_approval_mode = scene_approval_mode
+        if set_voice_changer:
+            workflow.pre_settings.voice_changer = (
+                voice_changer.model_copy(deep=True) if voice_changer is not None else None
+            )
         self._apply_product_selection(workflow, product_ref, product_local_path)
         await self._validate_voice_preset(workflow)
         # Si la base ya fue resuelta por la UI, el runner la reusará sin

@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # Duración default de los b-roll (Kling 3.0 acepta 3-15s)
     default_i2v_duration_seconds: int = Field(default=DEFAULT_I2V_DURATION_SECONDS, ge=3, le=15)
 
+    # ElevenLabs API directa (voice changer)
+    elevenlabs_api_key: str = Field(default="", description="API key para ElevenLabs API directa")
+    # VEO 3.1 parallelism (60 créditos por video, no spamear)
+    max_parallel_veo_jobs: int = Field(default=1, ge=1)
+    # Path al binario de FFmpeg (para concat + extract audio)
+    ffmpeg_path: str = "ffmpeg"
+
     notifications_enabled: bool = True
     update_check_enabled: bool = True
     update_check_repo: str = "ARosentiehl24/kie-avatar-studio"

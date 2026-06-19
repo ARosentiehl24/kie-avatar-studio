@@ -117,6 +117,35 @@ class LimitedKieGateway:
     async def get_task_detail(self, task_id: str) -> dict[str, Any]:
         return await self._inner.get_task_detail(task_id)
 
+    async def create_veo_video_task(
+        self,
+        prompt: str,
+        *,
+        image_urls: list[str] | None = None,
+        model: str = "veo3_fast",
+        generation_type: str = "FIRST_AND_LAST_FRAMES_2_VIDEO",
+        aspect_ratio: str = "9:16",
+        resolution: str = "720p",
+        duration: int = 8,
+        enable_translation: bool = True,
+        watermark: str | None = None,
+    ) -> KieTaskCreated:
+        async with self._video_limiter:
+            return await self._inner.create_veo_video_task(
+                prompt,
+                image_urls=image_urls,
+                model=model,
+                generation_type=generation_type,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                duration=duration,
+                enable_translation=enable_translation,
+                watermark=watermark,
+            )
+
+    async def get_veo_task_detail(self, task_id: str) -> dict[str, Any]:
+        return await self._inner.get_veo_task_detail(task_id)
+
     async def get_account_credits(self) -> float:
         return await self._inner.get_account_credits()
 

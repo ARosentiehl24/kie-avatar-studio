@@ -4,6 +4,49 @@ Todas las entradas siguen el esquema de versionado descrito en
 [`docs/VERSIONING.md`](docs/VERSIONING.md): **L** → MAJOR, **M** →
 MINOR, **S** → PATCH.
 
+## [Unreleased]
+
+### Added (M)
+
+- **Selector de voz ElevenLabs en Automatización**: el modal
+  `Configurar workflow` ahora expone un acceso directo al
+  `voice_changer` del workflow. Abre un selector que consulta
+  `ElevenLabsClient.list_voices()` al momento de abrirse, permite elegir
+  una voz o dejar "Sin voice changer", y refleja la selección en el
+  resumen final antes de encolar. Si falta `ELEVENLABS_API_KEY`, el
+  control queda deshabilitado y la UI muestra el mensaje de
+  configuración correspondiente.
+- **ELEVENLABS_API_KEY en Configuración**: la pantalla `Configuración`
+  ahora incluye la pestaña "Integraciones" para guardar o limpiar la API
+  key directa de ElevenLabs sin editar `.env` a mano.
+- **Botones de alto contraste**: el sistema global de `Button` en TCSS
+  ahora usa bordes visibles, texto en negrita y estados `hover`/`focus`/
+  `active` más marcados para estandarizar todas las acciones de la TUI.
+
+## [2.0.0] — 2026-06-15
+
+### Breaking (L)
+
+- **Pipeline de video de workflows migrado a VEO 3.1**: la automatización deja atrás Avatar Pro / Kling 3.0 y ahora renderiza todas las escenas con `POST /api/v1/veo/generate` usando `generationType=FIRST_AND_LAST_FRAMES_2_VIDEO`.
+- **TTS removido del runtime de workflows**: los workflows ya no crean audio ElevenLabs vía Kie por step; VEO genera audio nativo embebido en cada MP4.
+- **Schema JSON v2 para workflows**: se agregan `pre_settings.veo`, `pre_settings.voice_changer` y el campo `attached` por step para controlar el reel final.
+- **Campos deprecated en `pre_settings`**: `audio_language`, `voice_preset_id`, `voice_preset` e `i2v_duration_seconds` quedan aceptados solo por backward compat y emiten warning en el loader.
+
+### Added (M)
+
+- **Integración con VEO 3.1**: nuevo backend de video para automatización con los modelos `veo3`, `veo3_fast` y `veo3_lite`, apoyado en `FIRST_AND_LAST_FRAMES_2_VIDEO`.
+- **Cliente directo de ElevenLabs para speech-to-speech**: se incorpora `ElevenLabsClient` para aplicar voice changing al audio final del workflow sin pasar por Kie.
+- **Postproceso local con FFmpeg**: nueva capa para concatenar videos, extraer audio y preparar el material que luego se transforma con speech-to-speech.
+- **Pipeline post-workflow automático**: al terminar los steps se concatena la lista de escenas `attached`, se extrae `final_audio.mp3` y opcionalmente se genera `voice_changed_audio.mp3`.
+- **Campo `attached` por step**: cada escena decide si participa o no del `final.mp4` concatenado, sin impedir que el clip individual se renderice y se descargue.
+- **Selector de voces ElevenLabs en UI**: la automatización suma un selector de voces para `pre_settings.voice_changer` usando la API directa de ElevenLabs.
+- **Nueva configuración**: `ELEVENLABS_API_KEY`, `MAX_PARALLEL_VEO_JOBS` y `FFMPEG_PATH`.
+
+### Removed (S)
+
+- **Helpers legacy de video workflow**: se eliminan `render_avatar_video()` y `render_i2v_video()` de `workflow_kie_helpers` porque el render ahora pasa por VEO + `veo_poller`.
+- **Step runner legacy por tipo**: desaparecen `_run_a_roll`, `_run_b_roll_with_audio` y `_run_b_roll_silent`; `WorkflowStepRunner` converge en `_run_veo()`.
+
 ## [1.4.0] — 2026-06-13
 
 ### Added (M)

@@ -178,6 +178,7 @@ def _build_manifest_payload(workflow: WorkflowJob) -> dict[str, Any]:
         "pre_settings": workflow.pre_settings.model_dump(by_alias=True, mode="json"),
         "model_base": _model_base_block(workflow),
         "product": _product_block(workflow),
+        "outputs": _workflow_outputs_block(workflow),
         "steps": [_step_block(step) for step in workflow.steps],
     }
 
@@ -261,6 +262,17 @@ def _step_outputs(step: WorkflowStep) -> dict[str, str]:
         "video": step.video_path,
     }
     return {key: value for key, value in candidates.items() if value}
+
+
+def _workflow_outputs_block(workflow: WorkflowJob) -> dict[str, str]:
+    """Devuelve los outputs finales derivados que existan en el output_dir."""
+    output_dir = Path(workflow.output_dir)
+    candidates = {
+        "video": output_dir / "final.mp4",
+        "audio": output_dir / "final_audio.mp3",
+        "voice_changed_audio": output_dir / "voice_changed_audio.mp3",
+    }
+    return {key: str(path) for key, path in candidates.items() if path.is_file()}
 
 
 def _summarize_steps(steps: list[WorkflowStep]) -> str:

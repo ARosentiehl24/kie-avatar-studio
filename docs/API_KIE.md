@@ -138,6 +138,10 @@ musicales de Suno**, no con TTS para avatar.
 
 ## 3. Crear task Avatar (Kling)
 
+> Nota: este endpoint sigue existiendo para el flujo manual de video clásico.
+> La automatización (`workflows`) ya no lo usa desde v2.0.0; el runtime nuevo
+> renderiza escenas con VEO 3.1.
+
 ```json
 {
   "model": "kling/ai-avatar-pro",
@@ -158,6 +162,9 @@ prompt      : max 5000 chars
 ```
 
 ## 5. Crear task GPT Image 2 (OpenAI — generación de imagen)
+
+> En workflows v2.0.0 se usa para imagen base o `scene_image`; el video final
+> lo genera luego VEO, no Kling.
 
 Mismo endpoint `createTask`, distinto `model` y `input`:
 
@@ -211,11 +218,97 @@ La validación de enums + prompt + refs vive en `domain/policies.py`
 (`validate_image_prompt`, `validate_image_settings`, `validate_image_refs`);
 el cliente HTTP no valida nada (CR-2.1).
 
-## 6. Crear task Kling 3.0 video (b-roll)
+## 6. Crear task VEO 3.1 (workflow video)
+
+Endpoint dedicado de VEO 3.1 (no usa `createTask`). Desde **v2.0.0** es el
+backend de video de la automatización: tanto `a-roll` como `b-roll` pasan por
+este endpoint y reciben audio nativo embebido en el MP4.
+
+```http
+POST https://api.kie.ai/api/v1/veo/generate
+Authorization: Bearer <KIE_API_KEY>
+Content-Type: application/json
+```
+
+Body típico del workflow:
+
+```json
+{
+  "prompt": "Persona a cámara, habla en español neutro, gestos suaves",
+  "model": "veo3_fast",
+  "generationType": "FIRST_AND_LAST_FRAMES_2_VIDEO",
+  "aspect_ratio": "9:16",
+  "resolution": "720p",
+  "duration": 8,
+  "enableTranslation": true,
+  "imageUrls": [
+    "https://tempfile.redpandaai.co/.../scene.png"
+  ]
+}
+```
+
+Generation types soportados:
+
+| `generationType` | Uso típico | Notas |
+|---|---|---|
+| `TEXT_2_VIDEO` | Idea 100 % desde prompt | Sin imágenes de referencia |
+| `FIRST_AND_LAST_FRAMES_2_VIDEO` | Workflow actual | Arranca desde la `scene_image` y genera el clip completo |
+| `REFERENCE_2_VIDEO` | Variaciones con refs | Mantiene look/movimiento alrededor de refs visuales |
+
+Modelos VEO 3.1 (referencia pública; validar en billing antes de producción):
+
+| Modelo | Perfil | 720p | 1080p | 4K |
+|---|---|---:|---:|---:|
+| `veo3_lite` | Más barato / volumen | 30 créditos (~US$0.15) | 35 créditos (~US$0.175) | 150 créditos (~US$0.75) |
+| `veo3_fast` | Balance costo/latencia | 60 créditos (~US$0.30) | 65 créditos (~US$0.325) | 180 créditos (~US$0.90) |
+| `veo3` | Máxima calidad | 250 créditos (~US$1.25) | 255 créditos (~US$1.275) | 370 créditos (~US$1.85) |
+
+Respuesta al crear el task:
+
+```json
+{ "code": 200, "msg": "success", "data": { "taskId": "veo_xxx" } }
+```
+
+Polling dedicado de VEO:
+
+```http
+GET https://api.kie.ai/api/v1/veo/record-info?taskId=<TASK_ID>
+Authorization: Bearer <KIE_API_KEY>
+```
+
+Shape relevante del response:
+
+```json
+{
+  "code": 200,
+  "data": {
+    "taskId": "veo_xxx",
+    "successFlag": 1,
+    "errorCode": null,
+    "response": {
+      "resultUrls": ["https://.../video.mp4"],
+      "originUrls": ["https://.../origin.mp4"]
+    }
+  }
+}
+```
+
+Convención usada por la app (`veo_poller.py`):
+
+- `successFlag = 0` → generando
+- `successFlag = 1` → success (usar `resultUrls[0]`)
+- `successFlag = 2` → failed
+- `successFlag = 3` → upstream failed
+
+Implementado en `KieClient.create_veo_video_task(...)` y
+`KieClient.get_veo_task_detail(...)`.
+
+## 7. Crear task Kling 3.0 video (b-roll legacy)
 
 Mismo endpoint `createTask`, modelo `kling-3.0/video`. Genera un video a
-partir de una imagen estática + prompt. Usado en el subsistema de
-**automatización** para los steps `type=b-roll`. Kling 3.0 ofrece
+partir de una imagen estática + prompt. Queda documentado como referencia
+**legacy** para el flujo manual / compatibilidad histórica; la automatización
+v2.0.0 ya no lo usa para render final. Kling 3.0 ofrece
 duración 3-15s, aspect ratio configurable, modos std/pro/4K y sound
 effects ambientales nativos.
 
@@ -272,7 +365,7 @@ Implementado en `KieClient.create_kling_video_task(...)` (`infra/kie_client.py`)
 La validación de `duration` vive en `domain/policies.py:validate_i2v_duration`.
 El cliente HTTP no valida nada (CR-2.1).
 
-## 7. Consultar task
+## 8. Consultar task
 
 ```http
 GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<TASK_ID>

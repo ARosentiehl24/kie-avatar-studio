@@ -1,0 +1,218 @@
+{
+  "workflow": "Harvestory UGC - Hook 2 - Pared Intestinal",
+  "pre_settings": {
+    "scene_approval_mode": "auto",
+    "promote_product": true,
+    "image_aspect_ratio": "9:16",
+    "model_creation": {
+      "method": "prompt",
+      "prompt": "Ultra realistic UGC video. A real person recording themselves using the front camera of an iPhone 17 Pro Max. The footage must look completely organic and naturally captured by a real human, not an advertisement, not a commercial production, not influencer-style content, and not AI-generated. Camera characteristics: Front-facing smartphone camera, iPhone 17 Pro Max look, Slight handheld movement, Natural micro jitters, Imperfect framing, Minor focus breathing, Auto exposure adjustments, Natural motion blur, Real smartphone HDR, Authentic rolling shutter. Natural skin texture, Visible pores, Fine facial details, Small skin imperfections, Realistic eye reflections, Natural lip texture, No beauty filter, No skin smoothing, No CGI. Genuine user generated content, Selfie video, Direct eye contact, Casual conversational delivery, Natural facial expressions. Environmental light only, Realistic shadows, Soft ambient lighting. 4K vertical video, 9:16 aspect ratio, Smartphone compression, Natural digital sharpening, Realistic noise pattern. Real-world location, Background naturally exists, Lived-in environment, No staged set design, Authentic depth. SCENE: A Latina woman (32-48 years old) with natural, ordinary healthy hair. She is wearing a soft oatmeal-colored linen shirt. She is in a real, lived-in house. Soft natural daylight illuminates her naturally. She looks authentic, grounded, and slightly frustrated but sincere. No overlays, no text."
+    },
+    "veo": {
+      "model": "veo3_fast",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "duration": 8,
+      "enable_translation": true,
+      "watermark": null
+    },
+    "voice_changer": null
+  },
+  "run": [
+    {
+      "step": 1,
+      "scene_name": "clip_01_hook_kitchen",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Authentic depth and perspective. Natural motion blur, slight handheld movement. SCENE: The Latina woman is standing in her kitchen, looking down at a plate of very healthy food. She sighs, touches her stomach slightly, then looks up directly at the camera with a tired, frustrated expression. Authentic, everyday lived-in kitchen environment. No text or overlays.",
+      "text": "Si llevas meses eliminando alimentos, gastando en probióticos y tomando enzimas, y sigues sintiéndote hinchada y pesada cada vez que comes… no es tu comida. Es la pared dentro de tu intestino.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 2,
+      "scene_name": "clip_02_industry_kitchen",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Genuine user generated content. SCENE: The Latina woman continues in her kitchen. She looks directly at the camera with an honest, frustrated but composed expression, speaking like a friend sharing a hard truth. Natural morning light. No text or overlays.",
+      "text": "Por años, la industria del bienestar nos ha dicho que si el estómago se te inflama a las tres de la tarde, tienes que restringir más tu dieta o meterle más bacterias a tu cuerpo.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 3,
+      "scene_name": "clip_03_bloat_broll",
+      "type": "b-roll",
+      "change_scene": true,
+      "scene_description": "Close-up of hands unbuttoning jeans due to severe bloating.",
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Authentic rolling shutter, natural digital sharpening. SCENE: A close-up of a woman's hands subtly unbuttoning the top button of her jeans while sitting down, showing physical discomfort from a bloated stomach. Real-world lived-in environment. Natural lighting. No text or overlays.",
+      "text": "Pero el problema real, para muchísimas mujeres, es un daño estructural.",
+      "voiceover": true,
+      "include_product": false,
+      "include_model": false,
+      "duration_seconds": 6,
+      "attached": true
+    },
+    {
+      "step": 4,
+      "scene_name": "clip_04_barrier_living_room",
+      "type": "a-roll",
+      "change_scene": true,
+      "scene_description": "The Latina woman sitting in her cozy living room.",
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Casual conversational delivery. SCENE: The Latina woman is now sitting in her cozy living room on a sofa, looking directly at the camera. Her energy is informed and teacherly, explaining clearly. Natural window light. No text or overlays.",
+      "text": "El interior de tu intestino está recubierto por una barrera microscópica de una sola célula de grosor.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 5,
+      "scene_name": "clip_05_medical_diagram_damage",
+      "type": "b-roll",
+      "change_scene": true,
+      "scene_description": "Apothecary-style illustration of a damaged intestinal wall.",
+      "prompt": "Ultra realistic UGC video aesthetic. Authentic depth, natural noise pattern. SCENE: A beautifully hand-drawn apothecary-style illustration of an intestinal wall cross-section. Small gaps are visible, showing damage where particles are filtering through. Sepia tones, dark chocolate ink on cream paper. Vintage medical illustration style, not modern corporate graphics. No text or overlays.",
+      "text": "Cuando esa barrera se daña por estrés, antibióticos o años de inflamación, partículas que deberían quedarse en el intestino se filtran hacia tu sangre.",
+      "voiceover": true,
+      "include_product": false,
+      "include_model": false,
+      "duration_seconds": 9,
+      "attached": true
+    },
+    {
+      "step": 6,
+      "scene_name": "clip_06_symptoms_living_room",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Direct eye contact, natural facial expressions. SCENE: She continues speaking from her living room sofa. She looks at the camera with an informed, confident expression. Slight handheld movement. No text or overlays.",
+      "text": "Eso es lo que causa esa pesadez constante, el bloating que no se va con nada, y esa sensación de fatiga crónica.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 7,
+      "scene_name": "clip_07_false_solutions_living_room",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Natural micro jitters. SCENE: She shakes her head slightly, conveying a sense of realization. Authentic shadows and ambient light in the living room. No text or overlays.",
+      "text": "Quitar el gluten o tomar un probiótico no repara esa barrera.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 8,
+      "scene_name": "clip_08_medical_diagram_repair",
+      "type": "b-roll",
+      "change_scene": true,
+      "scene_description": "Apothecary-style illustration showing bioactives repairing the wall.",
+      "prompt": "Ultra realistic UGC video aesthetic. Authentic depth, natural noise pattern. SCENE: A beautifully hand-drawn apothecary-style illustration showing round molecules flowing into the gaps of an intestinal wall, closing and repairing the structure. Sepia tones, dark chocolate ink on cream paper. Vintage medical illustration style. No text or overlays.",
+      "text": "Lo único que está biológicamente diseñado para reconstruir esa pared celular son las inmunoglobulinas y los factores de crecimiento, como el IGF-1 y el EGF.",
+      "voiceover": true,
+      "include_product": false,
+      "include_model": false,
+      "duration_seconds": 10,
+      "attached": true
+    },
+    {
+      "step": 9,
+      "scene_name": "clip_09_colostrum_reveal",
+      "type": "a-roll",
+      "change_scene": true,
+      "scene_description": "The Latina woman standing by her kitchen counter.",
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. SCENE: The Latina woman is standing by her kitchen counter, speaking directly to the camera with excitement and relief. Warm wood details in the background. No text or overlays.",
+      "text": "Y la fuente natural más densa de estos compuestos es el CALOSTRO.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 10,
+      "scene_name": "clip_10_trap",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. SCENE: She narrows her eyes slightly in a cautionary expression, warning the viewer. Kitchen environment. No text or overlays.",
+      "text": "Pero aquí está la trampa: la mayoría del calostro que venden hoy se recolecta tarde, cuando esos compuestos ya casi no existen, y le quitan la grasa que tu cuerpo necesita para absorberlos.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 11,
+      "scene_name": "clip_11_product_jar_broll",
+      "type": "b-roll",
+      "change_scene": true,
+      "scene_description": "A close-up of the Harvestory jar on a cream linen surface.",
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Natural motion blur. SCENE: A close-up of a hand reaching in to lift the lid off a supplement jar resting on a cream linen surface. Soft lateral window light from the left. Authentic apothecary register. No text or overlays.",
+      "text": "Por eso Harvestory es completamente distinto.",
+      "voiceover": true,
+      "include_product": true,
+      "include_model": false,
+      "product_prompt": "The Harvestory colostrum jar is resting gracefully on the cream linen surface, integrating perfectly with the warm natural lighting.",
+      "duration_seconds": 5,
+      "attached": true
+    },
+    {
+      "step": 12,
+      "scene_name": "clip_12_scoop_pour_broll",
+      "type": "b-roll",
+      "change_scene": true,
+      "scene_description": "A small wooden scoop pouring powder into a glass on a kitchen counter.",
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. High detail but not cinematic. SCENE: A close-up of a small wooden scoop pouring cream-colored powder into a glass of milk. The light catches the powder mid-pour. Natural morning routine on a wooden kitchen counter. No text or overlays.",
+      "text": "Utilizan únicamente calostro del primer día, sin procesar, con su grasa intacta, y te dan tres gramos completos por porción.",
+      "voiceover": true,
+      "include_product": false,
+      "include_model": false,
+      "duration_seconds": 10,
+      "attached": true
+    },
+    {
+      "step": 13,
+      "scene_name": "clip_13_specs",
+      "type": "a-roll",
+      "change_scene": true,
+      "scene_description": "The Latina woman in the kitchen holding the jar.",
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. SCENE: Back to the Latina woman in her kitchen. She looks at the camera with conviction, gently holding the supplement jar. Soft exposure inconsistencies typical of smartphone footage. No text or overlays.",
+      "text": "Tienen un 25.3% de IgG, verificado por laboratorio.",
+      "include_product": true,
+      "product_prompt": "The Harvestory colostrum jar is held naturally in her hands at chest level.",
+      "attached": true
+    },
+    {
+      "step": 14,
+      "scene_name": "clip_14_results",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Natural speech rhythm. SCENE: She smiles softly, nodding slightly with a relaxed and healthy expression. Lived-in kitchen environment. No text or overlays.",
+      "text": "Las mujeres que empiezan a tomarlo notan la diferencia rápido. Menos inflamación después de comer en la primera semana.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 15,
+      "scene_name": "clip_15_timeline",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Subtle head movements. SCENE: Calm, grounded energy. Speaking clearly and honestly to the camera. Warm kitchen background. No text or overlays.",
+      "text": "Y para el día treinta, muchas reportan que esa hinchazón de las tres de la tarde simplemente desaparece.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 16,
+      "scene_name": "clip_16_cta",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Occasional blinking. SCENE: She lowers the camera slightly, leaning in to create an intimate, honest moment. Warm kitchen lighting. No text or overlays.",
+      "text": "Toca el enlace. Pide tu frasco. Úsalo sesenta días.",
+      "include_product": false,
+      "attached": true
+    },
+    {
+      "step": 17,
+      "scene_name": "clip_17_guarantee",
+      "type": "a-roll",
+      "change_scene": false,
+      "prompt": "Ultra realistic UGC video. iPhone 17 Pro Max look. Genuine conversational delivery. SCENE: Casual sign-off. She looks directly with a reassuring expression, giving a final piece of advice before ending the recording. No text or overlays.",
+      "text": "Si no sientes que tu digestión cambia por completo, te devuelven todo tu dinero. Sin preguntas.",
+      "include_product": false,
+      "attached": true
+    }
+  ]
+}

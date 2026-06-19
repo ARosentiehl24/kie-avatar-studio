@@ -19,6 +19,7 @@ from ..domain.models import (
     ImageAssetRef,
     SceneApprovalMode,
     StepType,
+    VeoSettings,
     VoiceSettings,
     WorkflowProgressKey,
     WorkflowProgressStatus,
@@ -50,6 +51,7 @@ class WorkflowExecutionContext:
         scene_approval_mode: SceneApprovalMode = SceneApprovalMode.AUTO,
         product_image_ref: ImageAssetRef | None = None,
         image_aspect_ratio: str | None = None,
+        veo_settings: VeoSettings | None = None,
     ) -> None:
         self.audio_language = audio_language
         self.voice_id = voice_id
@@ -74,6 +76,8 @@ class WorkflowExecutionContext:
         # Aspect ratio global para las imágenes generadas por Nano Banana 2
         # (tanto la base como las escenas de cada step).
         self.image_aspect_ratio = image_aspect_ratio
+        # Config global de VEO 3.1 para el render de todos los steps.
+        self.veo_settings = veo_settings or VeoSettings()
 
     def requires_scene_approval(self, step: WorkflowStep) -> bool:
         """`True` si este step necesita pausa para aprobación humana de scene_image.

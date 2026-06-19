@@ -5,8 +5,7 @@ inyectados desde el composition root. No conoce `infra/`, ni `httpx`, ni
 `aiosqlite`.
 
 Notifica al composition root cambios que requieren reconstruir clientes
-(key activa cambió o endpoints cambiaron) llamando a `on_kie_credentials_changed`
-o `on_endpoints_changed` si fueron provistos.
+(key activa, endpoints o integraciones) llamando a los callbacks inyectados.
 """
 
 from __future__ import annotations
@@ -57,6 +56,7 @@ class SettingsScreen(Screen[None]):
         *,
         on_kie_credentials_changed: NotifyAsync | None = None,
         on_endpoints_changed: NotifyAsync | None = None,
+        on_integrations_changed: NotifyAsync | None = None,
         on_runtime_cleanup: CleanupAsync | None = None,
     ) -> None:
         super().__init__()
@@ -64,6 +64,7 @@ class SettingsScreen(Screen[None]):
         self._settings = settings_controller
         self._on_credentials_changed = on_kie_credentials_changed
         self._on_endpoints_changed = on_endpoints_changed
+        self._on_integrations_changed = on_integrations_changed
         self._on_runtime_cleanup = on_runtime_cleanup
         self._cleanup_confirm_pending = False
 
@@ -222,6 +223,12 @@ class SettingsScreen(Screen[None]):
             return
         self._set_status(f"{OK} defaults guardados en .env")
 
+    async def _handle_save_integrations(self) -> None:
+        elevenlabs_api_key = self.query_one("#elevenlabs-api-key", Input).value
+        self._settings.update_integrations(elevenlabs_api_key=elevenlabs_api_key)
+        self._set_status(f"{OK} integraciones guardadas en .env")
+        await self._notify_integrations_changed()
+
     async def _handle_cleanup_runtime_db(self) -> None:
         if self._on_runtime_cleanup is None:
             self._set_status(f"{ERROR} limpieza no disponible en esta sesión", error=True)
@@ -286,6 +293,10 @@ class SettingsScreen(Screen[None]):
         if self._on_endpoints_changed is not None:
             await self._on_endpoints_changed()
 
+    async def _notify_integrations_changed(self) -> None:
+        if self._on_integrations_changed is not None:
+            await self._on_integrations_changed()
+
 
 _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
     "key-add": SettingsScreen._handle_add_key,
@@ -296,5 +307,6 @@ _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
     "save-execution": SettingsScreen._handle_save_execution,
     "save-concurrency": SettingsScreen._handle_save_concurrency,
     "save-defaults": SettingsScreen._handle_save_defaults,
+    "save-integrations": SettingsScreen._handle_save_integrations,
     "cleanup-runtime-db": SettingsScreen._handle_cleanup_runtime_db,
 }

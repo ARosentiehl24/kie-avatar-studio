@@ -45,8 +45,10 @@ from ..domain.ports import (
     WorkflowRepository,
 )
 from .workflow_base_resolver import WorkflowBaseResolver
+from .workflow_concat import concatenate_workflow_videos
 from .workflow_execution_context import WorkflowExecutionContext
 from .workflow_step_runner import WorkflowStepRunner
+from .workflow_voice_changer import ElevenLabsClient, apply_voice_changer
 
 WorkflowNotify = Callable[[WorkflowJob], Awaitable[None] | None]
 """Callback opcional que se llama tras cada transición (UI listener)."""
@@ -71,6 +73,8 @@ class WorkflowRunner:
         client: KieGateway,
         deps: WorkflowRunnerDeps,
         *,
+        elevenlabs_client: ElevenLabsClient | None = None,
+        ffmpeg_path: str = "ffmpeg",
         notify: WorkflowNotify | None = None,
     ) -> None:
         self._settings = settings
@@ -79,6 +83,8 @@ class WorkflowRunner:
         self._manifest_writer = deps.manifest_writer
         self._step_runner = deps.step_runner
         self._base_resolver = deps.base_resolver
+        self._elevenlabs_client = elevenlabs_client
+        self._ffmpeg_path = ffmpeg_path
         self._notify = notify
         # Lock por workflow_id para serializar transiciones (steps paralelos
         # transicionando contra el mismo workflow object).
@@ -114,6 +120,7 @@ class WorkflowRunner:
                 scene_approval_mode=job.pre_settings.scene_approval_mode,
                 product_image_ref=self._resolve_product_ref(job),
                 image_aspect_ratio=job.pre_settings.image_aspect_ratio,
+                veo_settings=job.pre_settings.veo,
             )
             paused = await self._execute_steps(job, context)
             if paused:
@@ -123,6 +130,7 @@ class WorkflowRunner:
                 # cuando el usuario revise.
                 await self._mark_awaiting_approval(job)
             else:
+                await self._run_post_processing(job, output_dir)
                 await self._finalize_workflow(job)
         except asyncio.CancelledError:
             await self._mark_cancelled(job)
@@ -281,6 +289,33 @@ class WorkflowRunner:
         await self._dispatch_notify(job)
 
     # --- helpers ----------------------------------------------------------
+
+    async def _run_post_processing(self, job: WorkflowJob, output_dir: Path) -> None:
+        """Ejecuta concat + extracción de audio + voice changer al finalizar steps."""
+        final_video_path = await concatenate_workflow_videos(
+            job.steps,
+            output_dir,
+            ffmpeg_path=self._ffmpeg_path,
+        )
+        if final_video_path is None:
+            return
+
+        voice_changer = job.pre_settings.voice_changer
+        final_audio_path = output_dir / "final_audio.mp3"
+        if voice_changer is None or not final_audio_path.is_file():
+            return
+        if self._elevenlabs_client is None:
+            raise WorkflowValidationError(
+                "voice_changer configurado pero ElevenLabsClient no fue inyectado"
+            )
+        voice_changed_path = output_dir / "voice_changed_audio.mp3"
+        await apply_voice_changer(
+            final_audio_path,
+            voice_changed_path,
+            voice_changer,
+            self._elevenlabs_client,
+        )
+        await self._write_manifest(job)
 
     async def _write_manifest(self, job: WorkflowJob) -> None:
         """Regenera el manifest atómicamente. Fail-safe (nunca levanta).

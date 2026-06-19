@@ -137,6 +137,22 @@ class KieGateway(Protocol):
 
     async def get_task_detail(self, task_id: str) -> dict[str, Any]: ...
 
+    async def create_veo_video_task(
+        self,
+        prompt: str,
+        *,
+        image_urls: list[str] | None = ...,
+        model: str = ...,
+        generation_type: str = ...,
+        aspect_ratio: str = ...,
+        resolution: str = ...,
+        duration: int = ...,
+        enable_translation: bool = ...,
+        watermark: str | None = ...,
+    ) -> KieTaskCreated: ...
+
+    async def get_veo_task_detail(self, task_id: str) -> dict[str, Any]: ...
+
     async def get_account_credits(self) -> float: ...
 
     async def download_file(self, url: str, output_path: str | Path) -> Path: ...

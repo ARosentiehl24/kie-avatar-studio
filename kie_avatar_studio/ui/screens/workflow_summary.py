@@ -1,14 +1,14 @@
 """Modal `Resumen del workflow` — confirmación final antes de encolar.
 
-Muestra los ajustes resueltos (voice_preset, audio_language,
-model_creation method) + el desglose por step de qué operaciones Kie
-se van a consumir + el saldo actual de Kie. NO muestra precio
-estimado (decisión del rubber-duck): el repo no tiene tabla confiable
-de precios y dar montos sin fuente es peor que no darlos.
+Muestra los ajustes resueltos (VEO 3.1, voice changer y modelo base),
+el desglose por step del pipeline que se va a ejecutar y el saldo
+actual de Kie. NO muestra precio estimado (decisión del rubber-duck):
+el repo no tiene tabla confiable de precios y dar montos sin fuente es
+peor que no darlos.
 
 Flow:
 
-    AutomationScreen → ConfigureWorkflowScreen (edita voice/lang)
+    AutomationScreen → ConfigureWorkflowScreen
         → WorkflowSummaryScreen (review + confirma) → enqueue
 
 Si el usuario cancela en summary, vuelve a la pantalla de automation
@@ -33,7 +33,6 @@ from ...domain.models import (
     WorkflowEntry,
     WorkflowPreSettings,
 )
-from ...domain.policies import parse_optional_int_field, resolve_effective_i2v_duration
 
 _PROMPT_PREVIEW_MAX_CHARS: Final[int] = 80
 _NOTIFICATION_TIMEOUT: Final[int] = 4
@@ -60,17 +59,11 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
         entry: WorkflowEntry,
         pre_settings: WorkflowPreSettings,
         check_credits: CreditsLoader,
-        default_i2v_duration_seconds: int,
     ) -> None:
         super().__init__()
         self._entry = entry
         self._pre_settings = pre_settings
         self._check_credits = check_credits
-        # `default_i2v_duration_seconds` viene inyectado por el caller
-        # (AutomationScreen lo lee de `Settings`). Sin esto, hardcodear
-        # un fallback acá introduce drift con `Settings` cuando el usuario
-        # cambia `KIE_DEFAULT_I2V_DURATION_SECONDS` en `.env`.
-        self._default_i2v_duration_seconds = default_i2v_duration_seconds
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -81,8 +74,9 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
             )
             yield Static(
                 "[dim]Revisá los ajustes resueltos y el desglose de operaciones que se "
-                "van a consumir en Kie. Al confirmar, el workflow se encola y NO se "
-                "puede deshacer (los créditos se consumen apenas empiezan los sub-jobs).[/dim]",
+                "van a ejecutar en el pipeline VEO 3.1. Al confirmar, el workflow se "
+                "encola y NO se puede deshacer (los créditos se consumen apenas empiezan "
+                "los renders).[/dim]",
                 id="workflow-summary-subtitle",
             )
             with VerticalScroll(id="workflow-summary-body"):
@@ -132,15 +126,29 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
     def _render_settings_block(self) -> str:
         creation = self._pre_settings.model_creation
         lines = ["[b]Ajustes resueltos[/b]"]
-        voice_preset = (
-            self._pre_settings.voice_preset_id or "[dim](sin preset, default voice)[/dim]"
+        veo = self._pre_settings.veo
+        lines.append(
+            "  · [b]VEO 3.1:[/b] "
+            f"model={veo.model} · aspect={veo.aspect_ratio} · res={veo.resolution} "
+            f"· duración={veo.duration}s"
         )
-        lines.append(f"  · [b]Voice preset:[/b] {voice_preset}")
-        audio_lang = (
-            self._pre_settings.audio_language
-            or "[dim](sin language_code, modelo multilingual default)[/dim]"
+        translation = "on" if veo.enable_translation else "off"
+        watermark = veo.watermark or "[dim]sin watermark[/dim]"
+        lines.append(
+            f"    [dim]translation={translation} · watermark={watermark}[/dim]"
         )
-        lines.append(f"  · [b]Audio language:[/b] {audio_lang}")
+        if self._pre_settings.voice_changer is None:
+            lines.append("  · [b]Voice changer:[/b] [dim]no configurado[/dim]")
+        else:
+            changer = self._pre_settings.voice_changer
+            noise = "sí" if changer.remove_background_noise else "no"
+            lines.append(
+                "  · [b]Voice changer:[/b] "
+                f"voice_id={changer.voice_id} · model={changer.model_id}"
+            )
+            lines.append(
+                f"    [dim]noise removal={noise} · formato={changer.output_format}[/dim]"
+            )
         approval_mode = self._pre_settings.scene_approval_mode
         if approval_mode == SceneApprovalMode.MANUAL:
             lines.append(
@@ -151,15 +159,14 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
             )
         else:
             lines.append("  · [b]Aprobación scene_image:[/b] [dim]auto (sin pausa)[/dim]")
-        duration_override = self._pre_settings.i2v_duration_seconds
-        if duration_override is not None:
+        if (
+            self._pre_settings.voice_preset_id is not None
+            or self._pre_settings.audio_language is not None
+            or self._pre_settings.i2v_duration_seconds is not None
+        ):
             lines.append(
-                f"  · [b]Duración b-roll (FORZADA):[/b] {duration_override}s en TODOS los b-roll"
-            )
-        else:
-            lines.append(
-                f"  · [b]Duración b-roll:[/b] "
-                f"[dim](la del JSON por step, fallback default {self._default_i2v_duration_seconds}s)[/dim]"
+                "  · [b]Compat legacy:[/b] "
+                "[dim]se detectaron campos del flujo anterior (preset / language / duración).[/dim]"
             )
         lines.append(f"  · [b]Modelo base:[/b] method=[b]{creation.method.value}[/b]")
         if creation.method == ModelCreationMethod.PROMPT and creation.prompt:
@@ -184,7 +191,6 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
         if not isinstance(steps_payload, list):
             return ""
         lines = [f"[b]Steps a ejecutar ({len(steps_payload)})[/b]"]
-        override = self._pre_settings.i2v_duration_seconds
         for raw_step in steps_payload:
             if not isinstance(raw_step, dict):
                 continue
@@ -195,23 +201,10 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
             change_scene_flag = bool(
                 raw_step.get("change_scene", raw_step.get("change_background", True))
             )
-            has_text = bool(str(raw_step.get("text", "")).strip())
             include_product_flag = bool(raw_step.get("include_product", False))
-            tag = _describe_step_operations(
-                type_value, change_scene_flag, has_text, include_product_flag
-            )
-            # Para b-roll mostramos la duración efectiva (override > step > default)
-            duration_tag = ""
-            if type_value == StepType.B_ROLL.value:
-                # Mismo parser que `infra/workflow_loader._parse_steps` para
-                # que la preview NO diverja del runtime ante valores como
-                # `"10"` (string numérica) en el JSON.
-                step_value = parse_optional_int_field(raw_step.get("duration_seconds"))
-                effective = resolve_effective_i2v_duration(
-                    override, step_value, self._default_i2v_duration_seconds
-                )
-                source = _describe_duration_source(override, step_value)
-                duration_tag = f"  [dim]{effective}s {source}[/dim]"
+            attached = bool(raw_step.get("attached", True))
+            tag = _describe_step_operations(type_value, change_scene_flag, include_product_flag, attached)
+            duration_tag = f"  [dim]VEO 3.1 · {self._pre_settings.veo.duration}s[/dim]"
             lines.append(
                 f"  [b]{step_n}.[/b] [cyan]{type_value:6}[/cyan] {name[:48]}  {tag}{duration_tag}"
             )
@@ -219,7 +212,7 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
 
     def _render_operations_block(self) -> str:
         counts = _count_operations(self._entry, self._pre_settings)
-        lines = ["[b]Operaciones Kie a consumir[/b]"]
+        lines = ["[b]Pipeline v2.0.0[/b]"]
         if counts["nano_banana"]:
             base = (
                 1 if self._pre_settings.model_creation.method == ModelCreationMethod.PROMPT else 0
@@ -232,14 +225,12 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
                 detail_parts.append(f"{scene} scene/producto")
             detail = " + ".join(detail_parts)
             lines.append(f"  · [green]Nano Banana 2:[/green] {counts['nano_banana']} ({detail})")
-        if counts["tts"]:
-            lines.append(f"  · [green]TTS ElevenLabs:[/green] {counts['tts']}")
-        if counts["avatar"]:
-            lines.append(f"  · [green]Avatar Pro (a-roll):[/green] {counts['avatar']}")
-        if counts["i2v"]:
-            lines.append(f"  · [green]Kling 3.0 (b-roll):[/green] {counts['i2v']}")
-        total = sum(counts.values())
-        lines.append(f"  · [b]Total:[/b] {total} llamadas Kie")
+        lines.append(f"  · [green]VEO 3.1:[/green] {counts['veo']} renders ({counts['attached']} adjuntos al final)")
+        lines.append("  · [cyan]Postproceso local:[/cyan] concatenación + extracción de audio")
+        if counts["voice_changer"]:
+            lines.append("  · [cyan]Voice changer:[/cyan] 1 pasada sobre `final_audio.mp3`")
+        total = counts["nano_banana"] + counts["veo"]
+        lines.append(f"  · [b]Total Kie:[/b] {total} llamadas")
         lines.append(
             "  [dim](Cada llamada consume créditos según el modelo. "
             "No mostramos estimación de monto porque los precios varían — "
@@ -258,7 +249,10 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
 
 
 def _describe_step_operations(
-    type_value: str, change_scene: bool, has_text: bool, include_product: bool
+    type_value: str,
+    change_scene: bool,
+    include_product: bool,
+    attached: bool,
 ) -> str:
     """Devuelve un tag corto con las operaciones del step."""
     parts: list[str] = []
@@ -266,55 +260,44 @@ def _describe_step_operations(
         parts.append("scene-img")
     if include_product:
         parts.append("producto")
-    if has_text:
-        parts.append("tts")
+    parts.append("veo")
+    parts.append("concat" if attached else "sin-concat")
     if type_value == StepType.A_ROLL.value:
-        parts.append("avatar")
+        parts.append("talento")
     else:
-        parts.append("i2v")
+        parts.append("recurso")
     return f"[dim]({', '.join(parts)})[/dim]"
 
 
 def _count_operations(entry: WorkflowEntry, pre_settings: WorkflowPreSettings) -> dict[str, int]:
     """Cuenta operaciones Kie por modelo a partir del JSON del entry."""
-    counts = {"nano_banana": 0, "tts": 0, "avatar": 0, "i2v": 0}
+    counts = {"nano_banana": 0, "veo": 0, "attached": 0, "voice_changer": 0}
     # Imagen base: solo método 'prompt' genera con Nano Banana; los otros
     # métodos no consumen llamadas (local = upload sin Nano Banana,
     # catalog = reusa existente).
     if pre_settings.model_creation.method == ModelCreationMethod.PROMPT:
         counts["nano_banana"] += 1
+    if pre_settings.voice_changer is not None:
+        counts["voice_changer"] = 1
     steps_payload = (entry.workflow_payload or {}).get("run", [])
     if not isinstance(steps_payload, list):
         return counts
     for raw_step in steps_payload:
         if not isinstance(raw_step, dict):
             continue
-        type_value = str(raw_step.get("type", "a-roll"))
         change_scene_flag = bool(
             raw_step.get("change_scene", raw_step.get("change_background", True))
         )
-        has_text = bool(str(raw_step.get("text", "")).strip())
         include_product_flag = bool(raw_step.get("include_product", False))
+        attached = bool(raw_step.get("attached", True))
         # Nano Banana se invoca si el step cambia escena O incluye el
         # producto (ambos requieren componer una scene_image nueva).
         if change_scene_flag or include_product_flag:
             counts["nano_banana"] += 1
-        if has_text or type_value == StepType.A_ROLL.value:
-            counts["tts"] += 1
-        if type_value == StepType.A_ROLL.value:
-            counts["avatar"] += 1
-        else:
-            counts["i2v"] += 1
+        counts["veo"] += 1
+        if attached:
+            counts["attached"] += 1
     return counts
-
-
-def _describe_duration_source(override: int | None, step_value: int | None) -> str:
-    """Etiqueta corta que dice de dónde viene la duración mostrada."""
-    if override is not None:
-        return "(forzado)"
-    if step_value is not None:
-        return "(del JSON)"
-    return "(default)"
 
 
 __all__ = ["WorkflowSummaryScreen"]

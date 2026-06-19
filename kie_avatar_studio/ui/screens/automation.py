@@ -36,6 +36,7 @@ from ...domain.models import (
     ModelCreationMethod,
     ProductImage,
     SceneApprovalMode,
+    VoiceChangerSettings,
     WorkflowEntry,
     WorkflowJob,
     WorkflowPreSettings,
@@ -54,6 +55,7 @@ from .configure_workflow import ConfigureResult, ConfigureWorkflowScreen
 from .file_picker import ImageFilePickerScreen
 from .preview_base_image import PreviewBaseImageScreen
 from .scene_image_approval import SceneImageApprovalScreen
+from .voice_changer_selector import ElevenLabsVoicesClient
 from .workflow_detail import WorkflowDetailScreen
 from .workflow_summary import CreditsLoader, WorkflowSummaryScreen
 
@@ -94,6 +96,7 @@ class AutomationScreen(Screen[None]):
         check_credits: CreditsLoader,
         presets_controller: VoicePresetsController,
         audio_player: AudioPlayer,
+        elevenlabs_client: ElevenLabsVoicesClient | None,
         default_input_dir: Path,
         open_local_path: Callable[[Path], Awaitable[None]],
         default_i2v_duration_seconds: int,
@@ -104,6 +107,7 @@ class AutomationScreen(Screen[None]):
         self._check_credits = check_credits
         self._presets_controller = presets_controller
         self._audio_player = audio_player
+        self._elevenlabs_client = elevenlabs_client
         self._default_input_dir = default_input_dir
         self._open_local_path = open_local_path
         # Necesario para que el `WorkflowSummaryScreen` pueda mostrar la
@@ -223,13 +227,16 @@ class AutomationScreen(Screen[None]):
             if result is None:
                 # Usuario canceló — nada más que hacer.
                 return
-            voice_preset_id, audio_language, i2v_duration_override, approval_mode = result
+            voice_preset_id, audio_language, i2v_duration_override, approval_mode, voice_changer = (
+                result
+            )
             pre_settings = _merge_pre_settings(
                 entry,
                 voice_preset_id,
                 audio_language,
                 i2v_duration_override,
                 approval_mode,
+                voice_changer,
             )
             self._dispatch_base_resolution(
                 entry,
@@ -244,6 +251,7 @@ class AutomationScreen(Screen[None]):
                 presets_controller=self._presets_controller,
                 audio_player=self._audio_player,
                 default_i2v_duration_seconds=self._default_i2v_duration_seconds,
+                elevenlabs_client=self._elevenlabs_client,
             ),
             _on_configure_dismissed,
         )
@@ -562,6 +570,11 @@ class AutomationScreen(Screen[None]):
         product = pre_settings.product_image
         product_ref = product.resolved_image_ref if product else None
         product_local_path = product.local_path if product else None
+        voice_changer = (
+            pre_settings.voice_changer.model_copy(deep=True)
+            if pre_settings.voice_changer is not None
+            else None
+        )
 
         def _on_summary_dismissed(approved: bool | None) -> None:
             if not approved:
@@ -578,6 +591,7 @@ class AutomationScreen(Screen[None]):
                     scene_approval_mode=scene_approval_mode,
                     product_ref=product_ref,
                     product_local_path=product_local_path,
+                    voice_changer=voice_changer,
                 ),
                 exclusive=False,
             )
@@ -587,7 +601,6 @@ class AutomationScreen(Screen[None]):
                 entry=entry,
                 pre_settings=pre_settings,
                 check_credits=self._check_credits,
-                default_i2v_duration_seconds=self._default_i2v_duration_seconds,
             ),
             _on_summary_dismissed,
         )
@@ -604,6 +617,7 @@ class AutomationScreen(Screen[None]):
         scene_approval_mode: SceneApprovalMode,
         product_ref: ImageAssetRef | None,
         product_local_path: str | None,
+        voice_changer: VoiceChangerSettings | None,
     ) -> None:
         try:
             workflow = await self._controller.enqueue_entry(
@@ -616,6 +630,8 @@ class AutomationScreen(Screen[None]):
                 scene_approval_mode=scene_approval_mode,
                 product_ref=product_ref,
                 product_local_path=product_local_path,
+                voice_changer=voice_changer,
+                set_voice_changer=True,
             )
         except (WorkflowValidationError, WorkflowStepError, KieError) as exc:
             self._set_status(f"{ERROR} no pude encolar '{entry.name}': {exc}", error=True)
@@ -833,6 +849,7 @@ def _merge_pre_settings(
     audio_language: str | None,
     i2v_duration_override: int | None,
     approval_mode: SceneApprovalMode | None,
+    voice_changer: VoiceChangerSettings | None,
 ) -> WorkflowPreSettings:
     """Parsea `pre_settings` del JSON y aplica overrides del modal Configurar.
 
@@ -850,4 +867,5 @@ def _merge_pre_settings(
         pre.i2v_duration_seconds = i2v_duration_override
     if approval_mode is not None:
         pre.scene_approval_mode = approval_mode
+    pre.voice_changer = voice_changer.model_copy(deep=True) if voice_changer is not None else None
     return pre
