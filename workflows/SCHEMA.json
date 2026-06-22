@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://example.com/kie-avatar-studio/workflows/SCHEMA.json",
   "title": "Kie Avatar Studio Workflow JSON (v2)",
-  "description": "Contrato para workflows JSON consumidos por AutomationScreen / WorkflowLoader. Flujo v2: render por VEO + postproceso local (concat) + voice changer opcional.",
+  "description": "Contrato para workflows JSON consumidos por AutomationScreen / WorkflowLoader. Flujo v2: modelo base + escenas -> VEO 3.1 con audio nativo -> concat local -> voice changer opcional. Diseñado para que humanos e IA generen videos narrativos: cada step debe describir con claridad qué se ve, qué se dice y si participa en el video final.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,10 +14,11 @@
     "workflow": {
       "type": "string",
       "minLength": 1,
-      "description": "Nombre del workflow para UI y manifest."
+      "description": "Nombre humano del video/workflow. Úsalo como título editorial claro, por ejemplo 'UGC suplemento digestivo - 5 escenas'. La app lo muestra en UI y lo usa para construir el slug del output."
     },
     "pre_settings": {
-      "$ref": "#/$defs/PreSettings"
+      "$ref": "#/$defs/PreSettings",
+      "description": "Configuración global previa: cómo se obtiene la imagen base, si hay producto, cómo se renderiza VEO y si se aplica voice changer."
     },
     "run": {
       "type": "array",
@@ -25,7 +26,7 @@
       "items": {
         "$ref": "#/$defs/Step"
       },
-      "description": "Lista ordenada de pasos (escenas) a ejecutar."
+      "description": "Lista ordenada de escenas. Una IA debe generar una progresión narrativa coherente: hook, demostración/beneficio, prueba visual, explicación y cierre. Los números de step deben ser consecutivos empezando en 1."
     }
   },
   "$defs": {
@@ -54,7 +55,7 @@
     "VeoSettings": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Configuración global de VEO usada para renderizar TODOS los pasos.",
+      "description": "Configuración global de VEO usada para renderizar TODOS los pasos. Para workflows verticales tipo UGC se recomienda veo3_fast, 9:16, 720p, duration 8.",
       "properties": {
         "model": {
           "type": "string",
@@ -63,7 +64,8 @@
             "veo3_fast",
             "veo3_lite"
           ],
-          "default": "veo3_fast"
+          "default": "veo3_fast",
+          "description": "Modelo VEO. Usa 'veo3_fast' para iterar rápido, 'veo3' para mayor calidad y 'veo3_lite' para menor costo cuando esté disponible."
         },
         "aspect_ratio": {
           "type": "string",
@@ -72,7 +74,8 @@
             "9:16",
             "Auto"
           ],
-          "default": "9:16"
+          "default": "9:16",
+          "description": "Aspect ratio del video generado por VEO. Para TikTok/Reels/Shorts usa '9:16'. Usa '16:9' solo para horizontal."
         },
         "resolution": {
           "type": "string",
@@ -81,7 +84,8 @@
             "1080p",
             "4k"
           ],
-          "default": "720p"
+          "default": "720p",
+          "description": "Resolución solicitada a VEO. '720p' es el default/costo razonable; '1080p' o '4k' pueden aumentar tiempo/costo según disponibilidad."
         },
         "duration": {
           "type": "integer",
@@ -90,18 +94,21 @@
             6,
             8
           ],
-          "default": 8
+          "default": 8,
+          "description": "Duración por escena VEO en segundos. Valores válidos: 4, 6 u 8. Para narrativa UGC usa 8 si hay diálogo; usa 4 o 6 para b-rolls simples."
         },
         "enable_translation": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Si true, permite normalización/traducción del backend cuando aplique. Para prompts/textos en español se recomienda true."
         },
         "watermark": {
           "type": [
             "string",
             "null"
           ],
-          "default": null
+          "default": null,
+          "description": "Texto de watermark opcional. Usa null si no quieres watermark."
         }
       }
     },
@@ -111,25 +118,29 @@
       "required": [
         "voice_id"
       ],
-      "description": "Postproceso opcional sobre final_audio.mp3 usando ElevenLabs Speech-to-Speech.",
+      "description": "Postproceso opcional sobre final_audio.mp3 usando ElevenLabs Speech-to-Speech. Sirve para unificar la voz final después de concatenar los clips VEO. Si es null o se omite, el workflow termina correctamente con final.mp4 y final_audio.mp3, sin llamar a ElevenLabs; el usuario puede procesar ese audio por fuera.",
       "properties": {
         "voice_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "ID de voz de ElevenLabs. Debe venir del catálogo/listado de voces; no lo inventes. Ejemplo: JBFqnCBsd6RMkjVDRZzb."
         },
         "model_id": {
           "type": "string",
           "minLength": 1,
-          "default": "eleven_multilingual_sts_v2"
+          "default": "eleven_multilingual_sts_v2",
+          "description": "Modelo Speech-to-Speech. Para español y voz consistente usa 'eleven_multilingual_sts_v2'."
         },
         "remove_background_noise": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Si true, ElevenLabs intenta aislar la voz antes de convertirla. Recomendado cuando VEO genera ruido/ambiente variable."
         },
         "output_format": {
           "type": "string",
           "minLength": 1,
-          "default": "mp3_44100_128"
+          "default": "mp3_44100_128",
+          "description": "Formato de salida de ElevenLabs STS. Recomendado: mp3_44100_128 por compatibilidad."
         },
         "voice_settings": {
           "oneOf": [
@@ -148,7 +159,7 @@
     "VoiceSettings": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Ajustes opcionales de voz soportados por ElevenLabs speech-to-speech.",
+      "description": "Ajustes opcionales de voz soportados por ElevenLabs speech-to-speech. Déjalos null/omitidos para defaults del proveedor; configúralos para mejorar consistencia entre escenas.",
       "properties": {
         "stability": {
           "type": [
@@ -156,7 +167,8 @@
             "null"
           ],
           "minimum": 0,
-          "maximum": 1
+          "maximum": 1,
+          "description": "0.0-1.0. Más alto = voz más estable/menos variable. Para consistencia usa 0.70-0.90."
         },
         "similarity_boost": {
           "type": [
@@ -164,7 +176,8 @@
             "null"
           ],
           "minimum": 0,
-          "maximum": 1
+          "maximum": 1,
+          "description": "0.0-1.0. Más alto = más parecida a la voz seleccionada. Para voice changer consistente usa 0.80-0.95."
         },
         "style": {
           "type": [
@@ -172,7 +185,8 @@
             "null"
           ],
           "minimum": 0,
-          "maximum": 1
+          "maximum": 1,
+          "description": "0.0-1.0. Exageración de estilo. Para UGC natural usa 0.0-0.2."
         },
         "speed": {
           "type": [
@@ -180,12 +194,13 @@
             "null"
           ],
           "minimum": 0.7,
-          "maximum": 1.2
+          "maximum": 1.2,
+          "description": "0.7-1.2. 1.0 es velocidad normal. Mantén 0.95-1.05 para consistencia natural."
         }
       }
     },
     "ModelCreation": {
-      "description": "Cómo resolver la imagen base del modelo antes de ejecutar pasos.",
+      "description": "Cómo resolver la imagen base del modelo antes de ejecutar pasos. La imagen base define identidad visual, rostro, vestuario y estilo inicial.",
       "oneOf": [
         {
           "type": "object",
@@ -196,12 +211,14 @@
           ],
           "properties": {
             "method": {
-              "const": "prompt"
+              "const": "prompt",
+              "description": "Genera una imagen base nueva desde un prompt de texto."
             },
             "prompt": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 5000
+              "maxLength": 5000,
+              "description": "Prompt de la imagen base. Debe describir persona/modelo, edad aproximada, estilo visual, encuadre, luz, fondo, vestuario y formato. Escribe en español."
             }
           }
         },
@@ -213,11 +230,12 @@
           ],
           "properties": {
             "method": {
-              "const": "local"
+              "const": "local",
+              "description": "Usa una imagen local como base."
             },
             "local_path": {
               "type": "string",
-              "description": "Ruta local opcional. Si no viene, la UI puede solicitarla al encolar."
+              "description": "Ruta local opcional a la imagen base. Si no viene, la UI puede solicitarla al encolar. Para generación autónoma incluye una ruta bajo inputs/."
             }
           }
         },
@@ -231,18 +249,21 @@
           ],
           "properties": {
             "method": {
-              "const": "catalog"
+              "const": "catalog",
+              "description": "Reusa una imagen ya subida/generada en el catálogo de la app."
             },
             "asset_kind": {
               "type": "string",
               "enum": [
                 "uploaded",
                 "generated"
-              ]
+              ],
+              "description": "'uploaded' para imágenes subidas por usuario; 'generated' para imágenes generadas por la app."
             },
             "asset_id": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "description": "ID exacto del asset en catálogo. No inventar IDs."
             }
           }
         }
@@ -251,12 +272,14 @@
     "PreSettings": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Configuración global del workflow. Una IA debe definir aquí la base visual, el modo de aprobación, producto promocional, configuración VEO y voice changer opcional.",
       "required": [
         "model_creation"
       ],
       "properties": {
         "model_creation": {
-          "$ref": "#/$defs/ModelCreation"
+          "$ref": "#/$defs/ModelCreation",
+          "description": "Origen de la imagen base del modelo/producto visual principal. Es requerido."
         },
         "scene_approval_mode": {
           "type": "string",
@@ -264,11 +287,13 @@
             "auto",
             "manual"
           ],
-          "default": "auto"
+          "default": "auto",
+          "description": "'auto' ejecuta sin pausar; 'manual' pausa b-rolls que generen scene_image para aprobar/regenerar antes de gastar VEO. Para pruebas visuales críticas usa 'manual'."
         },
         "promote_product": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "Activa el flujo de producto promocional. Debe ser true si algún step usa include_product=true."
         },
         "image_aspect_ratio": {
           "oneOf": [
@@ -279,11 +304,13 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Aspect ratio global para imágenes generadas/compuestas con Nano Banana. Para workflow vertical usa '9:16'. Un step puede sobrescribirlo."
         },
         "veo": {
           "$ref": "#/$defs/VeoSettings",
-          "default": {}
+          "default": {},
+          "description": "Config global de render VEO para todos los steps."
         },
         "voice_changer": {
           "oneOf": [
@@ -294,13 +321,15 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Configuración opcional de voice changer final. Si se omite/null, no se ejecuta ElevenLabs y el flujo termina en final.mp4 + final_audio.mp3."
         }
       }
     },
     "Step": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Una escena del video. Describe qué se ve en prompt, qué se dice en text, si cambia la escena, si entra al montaje final y si incluye producto/modelo.",
       "required": [
         "step",
         "scene_name",
@@ -310,31 +339,36 @@
       "properties": {
         "step": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Número consecutivo de escena empezando en 1. No saltes números."
         },
         "scene_name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Nombre corto y legible de la escena. Ejemplos: 'Hook testimonial', 'Solo producto con narración', 'CTA final'."
         },
         "type": {
           "type": "string",
           "enum": [
             "a-roll",
             "b-roll"
-          ]
+          ],
+          "description": "'a-roll' para persona/modelo hablando a cámara; 'b-roll' para apoyo visual, producto, manos, infografías o voz en off."
         },
         "attached": {
           "type": "boolean",
           "default": true,
-          "description": "Si true, el clip participa en final.mp4; si false, se genera pero no se concatena."
+          "description": "Si true, el clip participa en final.mp4; si false, se genera como clip individual pero queda fuera del video unificado."
         },
         "change_scene": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Si true, genera una scene_image nueva a partir de scene_description + prompt. Si false, reusa la base actual. Para continuidad de misma locación usa false; para cambio de fondo/infografía/producto usa true."
         },
         "scene_description": {
           "type": "string",
-          "default": ""
+          "default": "",
+          "description": "Descripción del entorno cuando change_scene=true: lugar, fondo, luz, props y atmósfera. Debe complementar el prompt; no repitas el diálogo."
         },
         "change_background": {
           "type": "boolean",
@@ -346,11 +380,12 @@
         },
         "prompt": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Prompt visual que VEO recibirá. Debe describir plano, movimiento de cámara, acción visible, continuidad de modelo/producto, estilo, luz y, si quieres consistencia vocal, una instrucción de voz para VEO. No metas campos JSON dentro del texto."
         },
         "text": {
           "type": "string",
-          "description": "Guion hablado. Requerido para a-roll; opcional para b-roll."
+          "description": "Guion hablado exacto. En a-roll la persona debe decirlo; en b-roll se trata como voz en off si no hay modelo. Escribe en español natural y breve para que quepa en la duración VEO."
         },
         "voiceover": {
           "type": "boolean",
@@ -368,11 +403,13 @@
         },
         "include_product": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "Si true, compone/usa el producto promocional en este step. Requiere pre_settings.promote_product=true."
         },
         "include_model": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Si true, la modelo/persona base participa como referencia visual. Si false, el step puede ser solo producto, infografía o b-roll sin persona; puede haber manos/interacción humana parcial si el prompt lo pide."
         },
         "set_as_base": {
           "type": "boolean",
@@ -381,7 +418,8 @@
         },
         "product_prompt": {
           "type": "string",
-          "default": ""
+          "default": "",
+          "description": "Descripción específica del producto y cómo debe aparecer: envase, etiqueta, posición, interacción, legibilidad, manos, close-up. Solo se usa si include_product=true."
         },
         "image_aspect_ratio": {
           "oneOf": [
@@ -392,7 +430,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Override de aspect ratio para la imagen scene de este step. Útil para producto/infografía con formato distinto; null usa el global."
         }
       },
       "allOf": [
