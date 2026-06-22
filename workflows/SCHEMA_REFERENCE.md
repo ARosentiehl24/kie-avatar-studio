@@ -1,104 +1,143 @@
-# Workflow JSON v2 — Referencia operativa
+# Workflow JSON v2 — guía para IA generadora
 
-Este documento describe **qué JSON generar** para `workflows/*.json` en Kie
-Avatar Studio (flujo v2).
+Este documento explica **cómo generar un workflow JSON válido y útil** para Kie
+Avatar Studio. Está pensado para que una IA pueda crear videos narrativos con
+VEO 3.1 siguiendo el estilo del ejemplo
+[`000-SANITY-MATRIX-v2.json`](./000-SANITY-MATRIX-v2.json).
 
-Fuente de verdad machine-readable: [`SCHEMA.json`](./SCHEMA.json).
+Fuente machine-readable: [`SCHEMA.json`](./SCHEMA.json).
 
----
+## Objetivo del JSON
 
-## 1) Contrato mínimo (lo que siempre debe existir)
+Un workflow describe un video como una lista ordenada de escenas:
 
-El JSON raíz debe incluir exactamente:
+```text
+modelo base + steps narrativos -> VEO 3.1 con audio nativo
+                               -> concat local de clips attached
+                               -> voice changer ElevenLabs opcional
+```
 
-1. `workflow` (string)
-2. `pre_settings` (object)
-3. `run` (array de pasos)
+Al generar JSON, la IA debe decidir:
 
-No agregues claves inventadas fuera del schema.
+1. Quién o qué aparece como base visual.
+2. Qué escena ocurre en cada step.
+3. Qué texto se habla o narra.
+4. Si la escena cambia de fondo, incluye producto o solo apoya visualmente.
+5. Si la escena entra al `final.mp4`.
+6. Si el audio final se queda como VEO lo genera o si se convierte con ElevenLabs.
 
----
+Usa **prompts y textos 100% en español**.
 
-## 2) Estructura raíz
+## Contrato raíz
 
 ```json
 {
-  "workflow": "Nombre descriptivo",
-  "pre_settings": {
-    "model_creation": { "...": "..." }
-  },
-  "run": [{ "...": "step 1" }]
+  "workflow": "Nombre descriptivo del video",
+  "pre_settings": { "model_creation": { "method": "prompt", "prompt": "..." } },
+  "run": []
 }
 ```
 
----
+| Campo | Obligatorio | Qué debe contener |
+| --- | --- | --- |
+| `workflow` | Sí | Título editorial claro. Ej: `"UGC digestivo - 5 escenas"`. |
+| `pre_settings` | Sí | Configuración global: base, VEO, producto, voz. |
+| `run` | Sí | Array ordenado de steps. Debe empezar en `step: 1` y ser consecutivo. |
 
-## 3) `pre_settings`
+No inventes claves fuera del schema.
 
-### 3.1 Campos principales (v2)
+## `pre_settings`
 
-| Campo                 | Tipo                 | Requerido | Default  | Notas                                           |
-| --------------------- | -------------------- | --------- | -------- | ----------------------------------------------- |
-| `model_creation`      | object               | **Sí**    | —        | Define de dónde sale la imagen base del modelo. |
-| `scene_approval_mode` | `"auto" \| "manual"` | No        | `"auto"` | Modo de aprobación de escenas.                  |
-| `promote_product`     | boolean              | No        | `false`  | Si `true`, habilita uso de producto en steps.   |
-| `image_aspect_ratio`  | string \| null       | No        | `null`   | Aspect ratio general opcional.                  |
-| `veo`                 | object               | No        | `{}`     | Config global de VEO usada en todos los pasos.  |
-| `voice_changer`       | object \| null       | No        | `null`   | Postproceso opcional (ElevenLabs STS).          |
+### `model_creation` (requerido)
 
-### 3.2 `model_creation` (requerido)
+Define la imagen base del workflow. Esa base determina identidad visual,
+rostro, vestuario, encuadre inicial y estilo general.
 
-Tres modos válidos:
+#### `method: "prompt"`
 
-#### A) `method: "prompt"` (recomendado si no hay assets locales)
+Usar cuando la IA debe crear una modelo/base nueva.
 
 ```json
 {
   "method": "prompt",
-  "prompt": "Retrato de modelo femenina, estudio, luz suave..."
+  "prompt": "Fotografía hiperrealista vertical 9:16 de mujer latina de 29 años..."
 }
 ```
 
-#### B) `method: "local"`
+El `prompt` debe describir:
+
+- persona/modelo o sujeto principal;
+- edad aproximada, rasgos generales, vestuario;
+- encuadre (`plano medio`, `primer plano`, etc.);
+- fondo, luz, estética y formato.
+
+#### `method: "local"`
+
+Usar si ya existe una imagen local.
 
 ```json
-{
-  "method": "local",
-  "local_path": "/ruta/a/imagen_modelo.png"
-}
+{ "method": "local", "local_path": "inputs/modelo.png" }
 ```
 
-`local_path` puede omitirse para que la UI lo resuelva al encolar, pero para
-generación autónoma se recomienda incluirlo.
+Si `local_path` se omite, la UI puede pedirlo al encolar; para generación
+autónoma, inclúyelo.
 
-#### C) `method: "catalog"`
+#### `method: "catalog"`
+
+Usar si ya existe un asset en el catálogo de la app.
 
 ```json
-{
-  "method": "catalog",
-  "asset_kind": "generated",
-  "asset_id": "img_abc123"
-}
+{ "method": "catalog", "asset_kind": "generated", "asset_id": "img_abc123" }
 ```
 
-`asset_kind` solo admite `uploaded` o `generated`.
+No inventes `asset_id`; debe existir.
 
-### 3.3 `veo` (opcional)
+### `veo`
 
-Todos los pasos de `run` se renderizan con VEO usando estos valores globales.
+Configuración global de render VEO.
 
-| Campo                | Tipo           | Default     | Valores                          |
-| -------------------- | -------------- | ----------- | -------------------------------- |
-| `model`              | string         | `veo3_fast` | `veo3`, `veo3_fast`, `veo3_lite` |
-| `aspect_ratio`       | string         | `9:16`      | `16:9`, `9:16`, `Auto`           |
-| `resolution`         | string         | `720p`      | `720p`, `1080p`, `4k`            |
-| `duration`           | int            | `8`         | `4`, `6`, `8`                    |
-| `enable_translation` | bool           | `true`      | `true/false`                     |
-| `watermark`          | string \| null | `null`      | texto libre o `null`             |
+| Campo | Valores | Recomendación |
+| --- | --- | --- |
+| `model` | `veo3`, `veo3_fast`, `veo3_lite` | `veo3_fast` para iterar. |
+| `aspect_ratio` | `9:16`, `16:9`, `Auto` | `9:16` para Reels/TikTok/Shorts. |
+| `resolution` | `720p`, `1080p`, `4k` | `720p` para costo/velocidad. |
+| `duration` | `4`, `6`, `8` | `8` para diálogo; `4/6` para b-roll corto. |
+| `enable_translation` | boolean | `true` para español. |
+| `watermark` | string/null | `null` si no quieres marca. |
 
-### 3.4 `voice_changer` (opcional)
+### `scene_approval_mode`
 
-Si existe, debe incluir `voice_id` no vacío.
+- `"auto"`: ejecuta sin pausar. Más rápido.
+- `"manual"`: pausa b-rolls que generan `scene_image` para aprobar/regenerar
+  antes de gastar VEO. Útil cuando el producto o escena puede salir mal.
+
+### `promote_product`
+
+Debe ser `true` si algún step usa `include_product: true`.
+
+### `image_aspect_ratio`
+
+Aspect ratio global para imágenes generadas/compuestas con Nano Banana. Para
+workflow vertical usa `"9:16"`. Cada step puede sobrescribirlo con
+`image_aspect_ratio`.
+
+### `voice_changer`
+
+Postproceso opcional con ElevenLabs Speech-to-Speech sobre `final_audio.mp3`.
+El workflow **funciona completo sin ElevenLabs**: si `voice_changer` es `null`
+o se omite, la app termina después de crear `final.mp4` y `final_audio.mp3`.
+Eso permite que el usuario procese el audio manualmente en ElevenLabs u otra
+herramienta externa.
+
+Para desactivar ElevenLabs desde JSON:
+
+```json
+"voice_changer": null
+```
+
+O simplemente omite la propiedad, porque su default es `null`.
+
+Para activar ElevenLabs dentro de la app:
 
 ```json
 {
@@ -115,101 +154,189 @@ Si existe, debe incluir `voice_id` no vacío.
 }
 ```
 
-`voice_settings` es opcional y se envía como JSON string al endpoint directo de
-ElevenLabs speech-to-speech. `language_code` no aplica a este postproceso STS.
+Notas:
 
----
+- `voice_id` debe venir del catálogo/listado de ElevenLabs.
+- No uses `language_code` aquí; no aplica a STS.
+- Para consistencia: `stability` 0.70-0.90, `similarity_boost` 0.80-0.95,
+  `style` 0.0-0.2, `speed` 0.95-1.05.
+- Si `voice_changer` está configurado pero no hay `ELEVENLABS_API_KEY`, ese
+  postproceso no podrá ejecutarse. Si no quieres depender de ElevenLabs, usa
+  `voice_changer: null`.
 
-## 4) `run[]` (pasos)
+## `run[]`: steps/escenas
 
-Cada item del array representa una escena.
+Cada item de `run` representa una escena.
 
-| Campo                | Tipo                   | Req.        | Default | Notas                                                    |
-| -------------------- | ---------------------- | ----------- | ------- | -------------------------------------------------------- |
-| `step`               | int                    | **Sí**      | —       | Debe comenzar en 1 y avanzar correlativo.                |
-| `scene_name`         | string                 | **Sí**      | —       | Nombre legible de escena.                                |
-| `type`               | `"a-roll" \| "b-roll"` | **Sí**      | —       | Clasificación narrativa del paso.                        |
-| `prompt`             | string                 | **Sí**      | —       | Prompt visual del clip (siempre requerido).              |
-| `text`               | string                 | Condicional | —       | **Obligatorio para `a-roll`**.                           |
-| `attached`           | bool                   | No          | `true`  | Si `false`, genera clip pero no entra a `final.mp4`.     |
-| `change_scene`       | bool                   | No          | `true`  | Control de cambio de escena.                             |
-| `scene_description`  | string                 | No          | `""`    | Si `b-roll` + `change_scene=true`, debe tener contenido. |
-| `include_product`    | bool                   | No          | `false` | Requiere `pre_settings.promote_product=true`.            |
-| `include_model`      | bool                   | No          | `true`  | Incluye modelo base en el render.                        |
-| `set_as_base`        | bool                   | No          | `false` | Si `true`, esta escena se vuelve la nueva base para los siguientes steps. |
-| `product_prompt`     | string                 | No          | `""`    | Prompt específico para producto.                         |
-| `image_aspect_ratio` | string \| null         | No          | `null`  | Override por step (aspect ratios generales).             |
+| Campo | Requerido | Qué escribir |
+| --- | --- | --- |
+| `step` | Sí | Número consecutivo desde 1. |
+| `scene_name` | Sí | Nombre corto: `"Hook testimonial"`, `"Solo producto"`, `"CTA"`. |
+| `type` | Sí | `"a-roll"` o `"b-roll"`. |
+| `prompt` | Sí | Prompt visual detallado para VEO. |
+| `text` | A-roll sí | Guion hablado exacto o voz en off. |
+| `attached` | No | `true` si entra al `final.mp4`; `false` si es clip suelto. |
+| `change_scene` | No | `true` genera nueva scene image; `false` reutiliza base actual. |
+| `scene_description` | Si cambia escena | Lugar/fondo/luz/ambiente de la nueva scene image. |
+| `include_product` | No | `true` si el producto aparece en este step. |
+| `include_model` | No | `true` si aparece la modelo/persona base. |
+| `set_as_base` | No | `true` si esta scene image será base para steps siguientes. |
+| `product_prompt` | Si producto | Cómo debe verse/interactuar el producto. |
+| `image_aspect_ratio` | No | Override de imagen para este step. |
 
-Campos legacy por compatibilidad en step:
+### `type: "a-roll"`
 
-- `voiceover` (legacy)
-- `duration_seconds` (legacy)
-- `change_background` (alias legacy de `change_scene`)
-- `background_description` (alias legacy de `scene_description`)
+Usar para la persona/modelo hablando a cámara.
 
----
+Reglas:
 
-## 5) Reglas de validación críticas
+- `text` es obligatorio y debe ser breve.
+- `prompt` debe describir plano, gesto, emoción, cámara, luz y continuidad.
+- Si la misma modelo continúa, menciona continuidad visual.
+
+Ejemplo:
+
+```json
+{
+  "step": 1,
+  "scene_name": "Hook testimonial",
+  "type": "a-roll",
+  "attached": true,
+  "change_scene": false,
+  "prompt": "Plano medio vertical, cámara a la altura de los ojos, expresión cercana...",
+  "text": "Te cuento rápido mi experiencia: llevaba semanas con inflamación..."
+}
+```
+
+### `type: "b-roll"`
+
+Usar para producto, manos, infografías, ambiente, close-ups o apoyo visual.
+
+Reglas:
+
+- `text` puede estar vacío o contener voz en off.
+- Si `include_model=false`, no debe aparecer la modelo completa.
+- Una escena “solo producto” puede incluir manos humanas interactuando si el
+  foco sigue siendo el producto.
+- Si `change_scene=true`, escribe `scene_description`.
+
+Ejemplo solo producto:
+
+```json
+{
+  "step": 3,
+  "scene_name": "Solo producto con narración",
+  "type": "b-roll",
+  "attached": true,
+  "change_scene": false,
+  "prompt": "Toma protagonista del suplemento digestivo en polvo, cámara macro...",
+  "text": "Aquí te enseño el suplemento digestivo en detalle...",
+  "include_product": true,
+  "include_model": false,
+  "product_prompt": "Frasco ámbar bajo con tapa café mate, etiqueta crema visible..."
+}
+```
+
+## Cómo escribir buenos prompts
+
+Un buen `prompt` de step debe incluir:
+
+1. Tipo de plano: `plano medio`, `primer plano`, `macro`, `infografía`.
+2. Acción visible: qué hace la modelo, manos o producto.
+3. Cámara/movimiento: `cámara fija`, `desplazamiento suave`, `acercamiento`.
+4. Luz/estética: `luz natural cálida`, `realista`, `UGC premium`.
+5. Continuidad: misma modelo, mismo vestuario, mismo producto, mismo fondo si aplica.
+6. Voz para VEO, si quieres probar consistencia previa al voice changer.
+
+Plantilla de instrucción de voz para VEO:
+
+```text
+Instrucción de voz para VEO: mantener en todos los clips una única voz femenina
+latina adulta, español latino neutro, timbre cálido y suave, tono testimonial
+cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de
+locutor ni de timbre entre escenas.
+```
+
+Para b-roll sin persona:
+
+```text
+Instrucción de voz para VEO: usar voz en off con la misma voz femenina latina
+adulta de los demás clips...
+```
+
+## Patrón narrativo recomendado
+
+Para un video UGC de 5 escenas:
+
+1. **Hook a-roll**: modelo habla a cámara y plantea problema/beneficio.
+2. **Cambio de escena a-roll**: misma modelo en otra locación, refuerza continuidad.
+3. **Solo producto b-roll**: close-up del producto, manos opcionales, narración.
+4. **Modelo + producto a-roll**: testimonio directo con producto en mano.
+5. **Infografía / explicación b-roll**: apoyo visual sin modelo o cierre educativo.
+
+## Reglas críticas de validación
 
 1. `run` no puede estar vacío.
-2. Los `step` deben ser consecutivos (1, 2, 3, ...).
+2. `step` debe ser consecutivo: 1, 2, 3...
 3. `a-roll` requiere `text` no vacío.
-4. `prompt`:
-   - `a-roll`: máximo 5000 chars
-   - `b-roll`: máximo 2500 chars
-5. Si `b-roll` y `change_scene=true`, `scene_description` debe ser no vacío.
-6. Si `include_product=true`, entonces `pre_settings.promote_product` debe ser
-   `true`.
-7. Aspect ratios deben estar en el set permitido del dominio:
-   - `auto`, `match_input_image`, `1:1`, `9:16`, `16:9`, `4:3`, `3:4`, `3:2`,
-     `2:3`, `4:5`, `5:4`, `21:9`, `9:21`, `1:8`, `4:1`, `8:1`
+4. `prompt` máximo:
+   - a-roll: 5000 caracteres;
+   - b-roll: 2500 caracteres.
+5. Si `b-roll` y `change_scene=true`, `scene_description` debe tener contenido.
+6. Si `include_product=true`, `pre_settings.promote_product` debe ser `true`.
+7. Si usas `set_as_base=true`, el workflow se ejecuta en serie para preservar
+   continuidad.
+8. `voice_changer` es opcional: `null` u omitido significa “no llamar a
+   ElevenLabs”.
 
----
+## Outputs esperados
 
-## 6) Semántica de ejecución v2 (importante para expectativas)
+Sin ElevenLabs (`voice_changer: null` u omitido):
 
-1. **Todos los pasos** se renderizan vía VEO (no se separa por motor según
-   tipo).
-2. La app concatena solo clips `attached=true` para producir `final.mp4`.
-3. Luego extrae audio a `final_audio.mp3`.
-4. Si hay `voice_changer`, genera `voice_changed_audio.mp3` como postproceso.
-5. Campos legacy se aceptan por compatibilidad, pero no definen el camino
-   principal v2.
-6. Si algún step usa `set_as_base=true`, la ejecución pasa a modo secuencial
-   para mantener orden determinista en la continuidad de escenas.
-7. En reanudaciones/re-encolados, la base efectiva se reconstruye usando la
-   última `scene_image` promovida y completada (`set_as_base=true`).
+- `final.mp4`
+- `final_audio.mp3`
 
----
+Con ElevenLabs (`voice_changer` configurado):
 
-## 7) No incluir en JSON generado
+- `final.mp4`
+- `final_audio.mp3`
+- `voice_changed_audio.mp3`
 
-No generes campos internos/resueltos en runtime (ejemplos):
+`voice_changed_audio.mp3` es un derivado opcional. No lo esperes si el usuario
+quiere hacer el voice changer manualmente fuera de la app.
+
+## No incluir en JSON generado
+
+No generes campos runtime/internos:
 
 - `scene_slug`
 - `product_image`
 - `resolved_image_ref`
+- `video_task_id`
+- `scene_image_path`
+- `progress`
+- `status`
 
----
-
-## 8) Plantilla recomendada (v2)
+## Plantilla completa recomendada
 
 ```json
 {
-  "workflow": "UGC - Producto X - 3 escenas",
+  "workflow": "UGC - Producto X - 5 escenas",
   "pre_settings": {
     "model_creation": {
       "method": "prompt",
-      "prompt": "Modelo femenina latina de 28 años, look natural de skincare."
+      "prompt": "Fotografía hiperrealista vertical 9:16 de mujer latina de 29 años..."
     },
-    "scene_approval_mode": "auto",
+    "scene_approval_mode": "manual",
     "promote_product": true,
+    "image_aspect_ratio": "9:16",
     "veo": {
       "model": "veo3_fast",
       "aspect_ratio": "9:16",
       "resolution": "720p",
       "duration": 8,
-      "enable_translation": true
+      "enable_translation": true,
+      "watermark": null
     },
     "voice_changer": {
       "voice_id": "JBFqnCBsd6RMkjVDRZzb",
@@ -227,40 +354,39 @@ No generes campos internos/resueltos en runtime (ejemplos):
   "run": [
     {
       "step": 1,
-      "scene_name": "Hook",
+      "scene_name": "Hook testimonial",
       "type": "a-roll",
-      "prompt": "Primer plano, luz natural, expresión sorprendida.",
-      "text": "¿Tu piel perdió brillo en pocas semanas?",
       "attached": true,
-      "change_scene": true,
-      "scene_description": "Baño moderno, mañana",
+      "change_scene": false,
+      "scene_description": "",
+      "prompt": "Plano medio vertical, cámara a la altura de los ojos, tono testimonial cercano.",
+      "text": "Te cuento rápido mi experiencia: por fin encontré una rutina que sí me ayudó.",
+      "include_product": false,
       "include_model": true,
-      "include_product": false
+      "set_as_base": false,
+      "product_prompt": ""
     },
     {
       "step": 2,
-      "scene_name": "Demostración",
+      "scene_name": "Solo producto con narración",
       "type": "b-roll",
-      "prompt": "Hands-on aplicando crema sobre mejilla con textura visible.",
-      "attached": true,
-      "change_scene": true,
-      "scene_description": "Tocador minimalista con luz suave",
-      "set_as_base": true,
-      "include_model": true,
-      "include_product": true,
-      "product_prompt": "Frasco blanco mate con etiqueta verde menta"
-    },
-    {
-      "step": 3,
-      "scene_name": "CTA",
-      "type": "a-roll",
-      "prompt": "Plano medio vertical, sonrisa, gesto señalando producto.",
-      "text": "Pruébalo hoy y siente la diferencia desde la primera aplicación.",
       "attached": true,
       "change_scene": false,
-      "include_model": true,
-      "include_product": true
+      "scene_description": "",
+      "prompt": "Toma macro del producto con textura visible, fondo limpio, manos opcionales interactuando sin perder foco.",
+      "text": "Aquí te enseño el producto en detalle para que veas exactamente lo que estoy usando.",
+      "include_product": true,
+      "include_model": false,
+      "set_as_base": false,
+      "product_prompt": "Producto centrado, etiqueta legible, empaque nítido, mano humana mostrando uso real.",
+      "image_aspect_ratio": "1:1"
     }
   ]
 }
+```
+
+Si el usuario quiere hacer ElevenLabs manualmente, reemplaza ese bloque por:
+
+```json
+"voice_changer": null
 ```
