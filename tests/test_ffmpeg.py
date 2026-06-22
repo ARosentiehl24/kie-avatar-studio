@@ -59,8 +59,7 @@ async def test_concat_videos_writes_concat_list_and_cleans_up(tmp_path: Path) ->
         "stderr": asyncio.subprocess.PIPE,
     }
     expected_payload = (
-        f"file '{video_a.resolve(strict=False)}'\n"
-        f"file '{video_b.resolve(strict=False)}'\n"
+        f"file '{video_a.resolve(strict=False)}'\nfile '{video_b.resolve(strict=False)}'\n"
     )
     assert captured["concat_payload"] == expected_payload
     assert output_path.parent.is_dir()

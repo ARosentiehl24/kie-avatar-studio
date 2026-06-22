@@ -1,0 +1,106 @@
+{
+  "workflow": "Sanity Matrix v2 - 5 escenarios narrativos",
+  "pre_settings": {
+    "model_creation": {
+      "method": "prompt",
+      "prompt": "Fotografía hiperrealista vertical 9:16 de mujer latina de 29 años en sala moderna, encuadre medio corto (pecho a cabeza), piel natural sin filtros, cabello castaño ondulado a hombros, camiseta beige lisa, maquillaje suave, mirada directa a cámara, luz natural de ventana lateral + relleno suave cálido, profundidad de campo ligera, estilo de creadora de contenido premium."
+    },
+    "scene_approval_mode": "manual",
+    "promote_product": true,
+    "image_aspect_ratio": "9:16",
+    "veo": {
+      "model": "veo3_fast",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "duration": 8,
+      "enable_translation": true,
+      "watermark": null
+    },
+    "voice_changer": {
+      "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+      "model_id": "eleven_multilingual_sts_v2",
+      "remove_background_noise": true,
+      "output_format": "mp3_44100_128",
+      "voice_settings": {
+        "stability": 0.75,
+        "similarity_boost": 0.85,
+        "style": 0.0,
+        "speed": 1.0
+      }
+    }
+  },
+  "run": [
+    {
+      "step": 1,
+      "scene_name": "Modelo base sola (escenario original)",
+      "type": "a-roll",
+      "attached": true,
+      "change_scene": false,
+      "scene_description": "",
+      "prompt": "Plano medio vertical, cámara a la altura de los ojos, micro movimiento de mano muy suave, expresión cercana y creíble, gestos naturales con manos a la altura del torso, tono testimonial. Instrucción de voz para VEO: mantener en todos los clips una única voz femenina latina adulta, español latino neutro, timbre cálido y suave, tono testimonial cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de locutor ni de timbre entre escenas.",
+      "text": "Te cuento rápido mi experiencia: llevaba semanas con inflamación y por fin encontré una rutina que sí me ayudó.",
+      "include_product": false,
+      "include_model": true,
+      "set_as_base": false,
+      "product_prompt": ""
+    },
+    {
+      "step": 2,
+      "scene_name": "Misma modelo en otro fondo (solo aquí cambia escena)",
+      "type": "a-roll",
+      "attached": true,
+      "change_scene": true,
+      "scene_description": "Cocina luminosa de casa, cubierta de mármol claro, plantas pequeñas al fondo, luz de tarde entrando por ventana lateral",
+      "prompt": "Misma mujer del plano base, plano medio ligeramente más abierto, postura relajada junto a la isla de cocina, continuidad facial y de vestuario, iluminación natural cálida, estética realista de creadora de contenido. Instrucción de voz para VEO: mantener en todos los clips una única voz femenina latina adulta, español latino neutro, timbre cálido y suave, tono testimonial cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de locutor ni de timbre entre escenas.",
+      "text": "Ahora te hablo desde la cocina para mostrar que la misma modelo se mantiene consistente aunque cambie completamente el entorno.",
+      "include_product": false,
+      "include_model": true,
+      "set_as_base": true,
+      "product_prompt": ""
+    },
+    {
+      "step": 3,
+      "scene_name": "Solo producto con narración",
+      "type": "b-roll",
+      "attached": true,
+      "change_scene": false,
+      "scene_description": "",
+      "prompt": "Toma protagonista del suplemento digestivo en polvo en un ambiente cálido de cocina o sala, cámara macro con desplazamiento corto de izquierda a derecha, textura del polvo visible, reflejos controlados sobre frasco ámbar, fondo desenfocado limpio, estética de producto de bienestar, con posible mano humana cucharando el polvo para mostrar uso real sin perder el foco en el producto. Instrucción de voz para VEO: usar voz en off con la misma voz femenina latina adulta de los demás clips, español latino neutro, timbre cálido y suave, tono testimonial cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de locutor ni de timbre entre escenas.",
+      "text": "Aquí te enseño el suplemento digestivo en detalle: presentación, textura del polvo y empaque para que veas exactamente lo que estoy usando.",
+      "include_product": true,
+      "include_model": false,
+      "set_as_base": false,
+      "product_prompt": "Frasco de vidrio ámbar bajo con tapa café mate, etiqueta crema minimalista de HARVESTORY con ilustración de vaca, cucharita medidora dorada con polvo sobre la boca del frasco, marca legible y nítida",
+      "image_aspect_ratio": "1:1"
+    },
+    {
+      "step": 4,
+      "scene_name": "Modelo + producto mencionando beneficios",
+      "type": "a-roll",
+      "attached": true,
+      "change_scene": false,
+      "scene_description": "",
+      "prompt": "Plano medio con contacto visual directo, la modelo sostiene el frasco del suplemento digestivo cerca del rostro y luego lo acerca a cámara, sonrisa natural, comunicación confiable, luz suave uniforme. Instrucción de voz para VEO: mantener en todos los clips una única voz femenina latina adulta, español latino neutro, timbre cálido y suave, tono testimonial cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de locutor ni de timbre entre escenas.",
+      "text": "Lo que más me gustó fue notar menos pesadez e inflamación abdominal; me ha ayudado a sentir una digestión más ligera día a día.",
+      "include_product": true,
+      "include_model": true,
+      "set_as_base": false,
+      "product_prompt": "Frasco HARVESTORY en mano derecha a la altura del pómulo, etiqueta crema completamente visible, tapa café mate y tono ámbar del envase distinguibles, movimiento final acercándolo a cámara"
+    },
+    {
+      "step": 5,
+      "scene_name": "Infografía animada del sistema digestivo (sin modelo/producto)",
+      "type": "b-roll",
+      "attached": true,
+      "change_scene": true,
+      "scene_description": "Fondo oscuro con tonos azul petróleo, estilo infografía médica moderna, elementos flotantes y líneas de conexión",
+      "prompt": "Animación tipo gráficos en movimiento 2.5D del sistema digestivo humano, estómago resaltado con brillo suave, flechas y etiquetas dinámicas, transición de síntomas a alivio, ritmo visual limpio y educativo, sin personas y sin producto en cuadro. Instrucción de voz para VEO: usar voz en off con la misma voz femenina latina adulta de los demás clips, español latino neutro, timbre cálido y suave, tono testimonial cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de locutor ni de timbre entre escenas.",
+      "text": "Para entenderlo mejor, esta infografía muestra cómo mejora la digestión y por qué se reduce la sensación de pesadez abdominal.",
+      "include_product": false,
+      "include_model": false,
+      "set_as_base": false,
+      "product_prompt": "",
+      "image_aspect_ratio": "16:9"
+    }
+  ]
+}

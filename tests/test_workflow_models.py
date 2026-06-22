@@ -35,7 +35,6 @@ def _make_pre_settings(
         )
     return WorkflowPreSettings(
         audio_language="es-419",
-        voice_preset_id="latina_warm",
         model_creation=creation,
     )
 
@@ -57,35 +56,6 @@ def _make_step(
         prompt="Una mujer hablando a cámara, plano medio.",
         text=text,
     )
-
-
-def test_voice_preset_alias_accepts_user_facing_json() -> None:
-    """El JSON del usuario trae `voice_preset` (sin sufijo _id) y debe parsear OK."""
-    payload = {
-        "audio_language": "es-419",
-        "voice_preset": "latina_warm_authentic",
-        "model_creation": {
-            "method": "prompt",
-            "prompt": "Una persona",
-        },
-    }
-    pre = WorkflowPreSettings.model_validate(payload)
-    assert pre.voice_preset_id == "latina_warm_authentic"
-    # Y serializa de vuelta con el alias para que el manifest matchee el input.
-    dumped = pre.model_dump(by_alias=True)
-    assert dumped["voice_preset"] == "latina_warm_authentic"
-    assert "voice_preset_id" not in dumped
-
-
-def test_voice_preset_id_also_accepts_internal_name() -> None:
-    """`populate_by_name=True` también acepta el nombre interno (compat tests)."""
-    pre = WorkflowPreSettings.model_validate(
-        {
-            "voice_preset_id": "custom",
-            "model_creation": {"method": "catalog", "asset_kind": "generated", "asset_id": "x"},
-        }
-    )
-    assert pre.voice_preset_id == "custom"
 
 
 def test_workflow_step_progress_uses_typed_enums() -> None:

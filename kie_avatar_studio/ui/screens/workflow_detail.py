@@ -16,8 +16,10 @@ from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from ...app_layer.workflow_controller import WorkflowController
+from ...domain.errors import WorkflowNotFoundError, WorkflowValidationError
 from ...domain.events import WorkflowJobUpdated
 from ...domain.models import WorkflowJob
+from .._table_helpers import get_selected_row_key
 from .._text_format import truncate
 from ._workflow_format import (
     format_attached_status,
@@ -71,6 +73,11 @@ class WorkflowDetailScreen(Screen[None]):
                 table.add_column(column, key=column)
             yield table
             with Horizontal(classes="actions-row actions-row-keys"):
+                yield Button(
+                    "Recrear escena seleccionada",
+                    id="workflow-detail-recreate-step",
+                    classes="btn-warning",
+                )
                 yield Button("Refrescar", id="workflow-detail-refresh", classes="btn-info")
             yield Static("", id="workflow-detail-status-bar")
         yield Footer()
@@ -85,14 +92,44 @@ class WorkflowDetailScreen(Screen[None]):
             self._unsubscribe = None
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if (event.button.id or "") == "workflow-detail-refresh":
+        button_id = event.button.id or ""
+        if button_id == "workflow-detail-refresh":
             await self._refresh()
+            return
+        if button_id == "workflow-detail-recreate-step":
+            await self._handle_recreate_step()
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
 
     async def action_refresh(self) -> None:
         await self._refresh()
+
+    async def _handle_recreate_step(self) -> None:
+        step_number = self._selected_step_number()
+        if step_number is None:
+            return
+        try:
+            await self._controller.recreate_step(self._workflow_id, step_number)
+        except (WorkflowNotFoundError, WorkflowValidationError) as exc:
+            self._set_status(str(exc), error=True)
+            return
+        self._set_status(
+            f"Step {step_number} reencolado para recrear video; se reconstruirán los finales"
+        )
+        await self._refresh()
+
+    def _selected_step_number(self) -> int | None:
+        table = self.query_one("#workflow-detail-table", DataTable)
+        key = get_selected_row_key(table)
+        if key is None:
+            self._set_status("Seleccioná un step en la tabla primero", error=True)
+            return None
+        try:
+            return int(key)
+        except ValueError:
+            self._set_status(f"Step seleccionado inválido: {key!r}", error=True)
+            return None
 
     def _on_workflow_event(self, event: WorkflowJobUpdated) -> None:
         if event.job.id != self._workflow_id:
@@ -121,9 +158,7 @@ class WorkflowDetailScreen(Screen[None]):
         self.query_one("#workflow-detail-pipeline", Static).update(
             f"[b]Pipeline:[/b] {format_workflow_pipeline(workflow)}"
         )
-        self.query_one("#workflow-detail-outputs", Static).update(
-            format_workflow_outputs(workflow)
-        )
+        self.query_one("#workflow-detail-outputs", Static).update(format_workflow_outputs(workflow))
 
     def _refresh_steps_table(self, workflow: WorkflowJob) -> None:
         table = self.query_one("#workflow-detail-table", DataTable)

@@ -348,7 +348,7 @@ class KieClient:
         """
         self._ensure_api_key()
         out = Path(output_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(out.parent.mkdir, parents=True, exist_ok=True)
         last_server_error: KieServerError | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             file_handle = await asyncio.to_thread(out.open, "wb")

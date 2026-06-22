@@ -1,44 +1,52 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Protocol
+from typing import ClassVar, Final
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Select, Static
+from textual.widgets import Button, Select, Static
 
-from ...domain.models import VoiceChangerSettings
+from ...domain.errors import UrlValidationError, VoiceSettingsValidationError
+from ...domain.models import (
+    DEFAULT_VOICE_CHANGER_MODEL_ID,
+    DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT,
+    VoiceChangerSettings,
+)
+from ...domain.ports import AudioPreviewPlayer, ElevenLabsVoicesClient, ExternalJsonObject
 from .._icons import ERROR, OK
+from ._voice_changer_selector_form import (
+    build_selection,
+    collect_voice_settings,
+    initial_voice_setting,
+    read_form_values,
+    selected_voice_id,
+)
+from ._voice_changer_selector_options import (
+    build_model_options,
+    build_voice_options,
+)
+from ._voice_changer_selector_widgets import compose_voice_changer_selector
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
 _LOADING_SENTINEL: Final[str] = "__loading__"
 _NO_VOICE_CHANGER_SENTINEL: Final[str] = "__no_voice_changer__"
-
-
-class ElevenLabsVoicesClient(Protocol):
-    """Contrato mínimo para listar voces de ElevenLabs desde la UI."""
-
-    async def list_voices(
-        self,
-        *,
-        voice_type: str | None = None,
-        search: str | None = None,
-    ) -> list[dict[str, Any]]: ...
+_NOISE_ON_SENTINEL: Final[str] = "__noise_on__"
+_NOISE_OFF_SENTINEL: Final[str] = "__noise_off__"
+_OUTPUT_FORMAT_OPTIONS: Final[tuple[tuple[str, str], ...]] = (
+    ("MP3 44.1kHz 128kbps (recomendado)", DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT),
+    ("AAC 44.1kHz", "aac_44100"),
+)
 
 
 @dataclass(frozen=True)
 class VoiceChangerSelectionResult:
-    """Resultado explícito del modal; `voice_changer=None` = deshabilitado."""
-
     voice_changer: VoiceChangerSettings | None
 
 
 class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]):
-    """Modal para elegir la voz del voice changer de ElevenLabs."""
-
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "cancel", "Cancelar"),
     ]
@@ -48,115 +56,233 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
         *,
         elevenlabs_client: ElevenLabsVoicesClient,
         initial_selection: VoiceChangerSettings | None,
+        audio_player: AudioPreviewPlayer | None = None,
     ) -> None:
         super().__init__()
         self._elevenlabs_client = elevenlabs_client
-        self._initial_selection = initial_selection.model_copy(deep=True) if initial_selection else None
+        self._audio_player = audio_player
+        self._initial_selection = (
+            initial_selection.model_copy(deep=True) if initial_selection else None
+        )
+        self._voices_loaded = False
+        self._models_loaded = False
+        self._voice_preview_urls: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
-        with Vertical(id="voice-changer-selector-box"):
-            yield Static("[b]Seleccionar voz de ElevenLabs[/b]", id="voice-changer-selector-title")
-            yield Static(
-                "[dim]Se aplica al audio final del workflow. Elegí una voz o desactivalo con "
-                "'Sin voice changer'.[/dim]",
-                id="voice-changer-selector-subtitle",
-            )
-            yield Select[str](
-                [(self._render_loading_option(), _LOADING_SENTINEL)],
-                value=_LOADING_SENTINEL,
-                allow_blank=False,
-                id="voice-changer-selector-select",
-            )
-            yield Static("", id="voice-changer-selector-status")
-            with Horizontal(classes="actions-row actions-row-keys"):
-                yield Button(
-                    "Usar selección",
-                    id="voice-changer-selector-confirm",
-                    variant="primary",
-                    disabled=True,
-                )
-                yield Button("Cancelar", id="voice-changer-selector-cancel", variant="default")
-        yield Footer()
+        yield from compose_voice_changer_selector(
+            audio_preview_available=self._audio_player is not None,
+            initial_noise_enabled=self._initial_noise_enabled(),
+            output_format_options=self._render_output_format_options(),
+            initial_output_format=self._initial_output_format(),
+            initial_voice_setting=lambda field: initial_voice_setting(
+                self._initial_selection, field
+            ),
+            loading_value=_LOADING_SENTINEL,
+            noise_on_value=_NOISE_ON_SENTINEL,
+            noise_off_value=_NOISE_OFF_SENTINEL,
+        )
 
     def on_mount(self) -> None:
-        self.app.run_worker(self._load_voices(), exclusive=False)
+        self.app.run_worker(self._load_options(), exclusive=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "voice-changer-selector-cancel":
+            self._stop_preview_async()
             self.dismiss(None)
             return
         if button_id == "voice-changer-selector-confirm":
             self._handle_confirm()
+            return
+        if button_id == "voice-changer-selector-preview":
+            self._handle_preview()
+            return
+        if button_id == "voice-changer-selector-preview-stop":
+            self._stop_preview_async()
 
     def action_cancel(self) -> None:
+        self._stop_preview_async()
         self.dismiss(None)
 
-    async def _load_voices(self) -> None:
+    async def _load_options(self) -> None:
+        voices, models, voice_error, model_error = await self._fetch_options()
+        visible_voices = self._apply_voice_options(voices)
+        visible_models = self._apply_model_options(models)
+        if self._show_load_error(voice_error, model_error):
+            return
+        self._set_status(f"{OK} {visible_voices} voces y {visible_models} modelos cargados")
+
+    async def _fetch_options(
+        self,
+    ) -> tuple[
+        list[ExternalJsonObject],
+        list[ExternalJsonObject],
+        Exception | None,
+        Exception | None,
+    ]:
+        voices: list[ExternalJsonObject] = []
+        models: list[ExternalJsonObject] = []
+        voice_error: Exception | None = None
+        model_error: Exception | None = None
         try:
             voices = await self._elevenlabs_client.list_voices()
         except Exception as exc:
-            self._apply_voice_options([])
-            self._set_status(f"{ERROR} no pude listar voces de ElevenLabs: {exc}", error=True)
-            return
-        visible_count = self._apply_voice_options(voices)
-        if visible_count > 0:
-            self._set_status(f"{OK} {visible_count} voces cargadas")
-        else:
-            self._set_status("No hay voces disponibles en ElevenLabs; podés dejarlo sin voice changer.")
+            voice_error = exc
+        try:
+            models = await self._elevenlabs_client.list_models()
+        except Exception as exc:
+            model_error = exc
+        return voices, models, voice_error, model_error
 
-    def _apply_voice_options(self, raw_voices: list[dict[str, Any]]) -> int:
+    def _show_load_error(
+        self,
+        voice_error: Exception | None,
+        model_error: Exception | None,
+    ) -> bool:
+        if voice_error is not None and model_error is not None:
+            self._set_status(
+                f"{ERROR} no pude cargar voces/modelos de ElevenLabs: "
+                f"voces={voice_error} · modelos={model_error}",
+                error=True,
+            )
+            return True
+        if voice_error is not None:
+            self._set_status(
+                f"{ERROR} no pude listar voces de ElevenLabs: {voice_error}",
+                error=True,
+            )
+            return True
+        if model_error is not None:
+            self._set_status(
+                f"{ERROR} no pude listar modelos de ElevenLabs: {model_error}",
+                error=True,
+            )
+            return True
+        return False
+
+    def _apply_voice_options(self, raw_voices: list[ExternalJsonObject]) -> int:
         select = self.query_one("#voice-changer-selector-select", Select)
-        confirm = self.query_one("#voice-changer-selector-confirm", Button)
-        current_voice_id = self._initial_selection.voice_id if self._initial_selection is not None else None
-
-        options: list[tuple[str, str]] = [
-            ("Sin voice changer", _NO_VOICE_CHANGER_SENTINEL),
-        ]
-        seen_voice_ids: set[str] = set()
-        if current_voice_id:
-            seen_voice_ids.add(current_voice_id)
-        visible_count = 0
-        for raw_voice in raw_voices:
-            voice_id = raw_voice.get("voice_id")
-            name = raw_voice.get("name")
-            if not isinstance(voice_id, str) or not voice_id.strip():
-                continue
-            voice_id = voice_id.strip()
-            if voice_id in seen_voice_ids:
-                continue
-            seen_voice_ids.add(voice_id)
-            label = name.strip() if isinstance(name, str) and name.strip() else voice_id
-            options.append((f"{label}  ·  {voice_id}", voice_id))
-            visible_count += 1
-        if current_voice_id and all(value != current_voice_id for _, value in options):
-            options.insert(1, (f"Actual (no listada)  ·  {current_voice_id}", current_voice_id))
-        select.set_options(options)
+        current_voice_id = self._initial_selection.voice_id if self._initial_selection else None
+        result = build_voice_options(
+            raw_voices,
+            current_voice_id=current_voice_id,
+            disabled_value=_NO_VOICE_CHANGER_SENTINEL,
+        )
+        self._voice_preview_urls = result.preview_urls
+        select.set_options(result.options)
         select.value = current_voice_id or _NO_VOICE_CHANGER_SENTINEL
-        confirm.disabled = False
+        self._voices_loaded = True
+        self._refresh_confirm_state()
+        return result.visible_count
+
+    def _apply_model_options(self, raw_models: list[ExternalJsonObject]) -> int:
+        select = self.query_one("#voice-changer-selector-model", Select)
+        current_model_id = self._initial_model_id()
+        options, visible_count = build_model_options(
+            raw_models,
+            current_model_id=current_model_id,
+            default_model_id=DEFAULT_VOICE_CHANGER_MODEL_ID,
+        )
+        select.set_options(options)
+        select.value = current_model_id
+        self._models_loaded = True
+        self._refresh_confirm_state()
         return visible_count
 
     def _handle_confirm(self) -> None:
-        select = self.query_one("#voice-changer-selector-select", Select)
-        value = select.value
-        if not isinstance(value, str):
-            self._set_status(f"{ERROR} elegí una voz válida", error=True)
+        result = self._read_voice_changer_result()
+        if result is None:
             return
-        if value == _NO_VOICE_CHANGER_SENTINEL:
-            self.dismiss(VoiceChangerSelectionResult(voice_changer=None))
-            return
-        selection = (
-            self._initial_selection.model_copy(deep=True)
-            if self._initial_selection is not None
-            else VoiceChangerSettings(voice_id=value)
-        )
-        selection.voice_id = value
-        self.dismiss(VoiceChangerSelectionResult(voice_changer=selection))
+        self._stop_preview_async()
+        self.dismiss(result)
 
-    @staticmethod
-    def _render_loading_option() -> str:
-        return "Cargando voces…"
+    def _read_voice_changer_result(self) -> VoiceChangerSelectionResult | None:
+        values = read_form_values(
+            self.query_one,
+            self._set_form_error,
+            loading=_LOADING_SENTINEL,
+            disabled=_NO_VOICE_CHANGER_SENTINEL,
+        )
+        if values is None:
+            return None
+        if values[0] == _NO_VOICE_CHANGER_SENTINEL:
+            return VoiceChangerSelectionResult(voice_changer=None)
+        try:
+            voice_settings = collect_voice_settings(self.query_one)
+        except VoiceSettingsValidationError as exc:
+            self._set_status(f"{ERROR} {exc}", error=True)
+            return None
+        selection = build_selection(
+            self._initial_selection,
+            values,
+            noise_on=_NOISE_ON_SENTINEL,
+            voice_settings=voice_settings,
+        )
+        return VoiceChangerSelectionResult(voice_changer=selection)
+
+    def _set_form_error(self, message: str) -> None:
+        self._set_status(f"{ERROR} {message}", error=True)
+
+    def _handle_preview(self) -> None:
+        if self._audio_player is None:
+            self._set_status(f"{ERROR} preview no disponible", error=True)
+            return
+        voice_id = selected_voice_id(
+            self.query_one,
+            loading=_LOADING_SENTINEL,
+            disabled=_NO_VOICE_CHANGER_SENTINEL,
+        )
+        if voice_id is None:
+            self._set_status(f"{ERROR} elegí una voz para escuchar", error=True)
+            return
+        preview_url = self._voice_preview_urls.get(voice_id)
+        if preview_url is None:
+            self._set_status(
+                f"{ERROR} la voz seleccionada no trae preview_url desde ElevenLabs",
+                error=True,
+            )
+            return
+        self.app.run_worker(self._open_preview(preview_url), exclusive=False)
+
+    async def _open_preview(self, url: str) -> None:
+        if self._audio_player is None:
+            return
+        try:
+            await self._audio_player.play_voice_preview(url)
+        except (OSError, UrlValidationError) as exc:
+            self._set_status(f"{ERROR} no pude reproducir el preview: {exc}", error=True)
+
+    def _stop_preview_async(self) -> None:
+        if self._audio_player is None:
+            return
+        self.app.run_worker(self._audio_player.stop(), exclusive=False)
+
+    def _render_output_format_options(self) -> list[tuple[str, str]]:
+        options = list(_OUTPUT_FORMAT_OPTIONS)
+        current = self._initial_output_format()
+        if all(value != current for _, value in options):
+            options.insert(0, (f"Actual (no listado)  ·  {current}", current))
+        return options
+
+    def _initial_model_id(self) -> str:
+        if self._initial_selection is None:
+            return DEFAULT_VOICE_CHANGER_MODEL_ID
+        return self._initial_selection.model_id.strip() or DEFAULT_VOICE_CHANGER_MODEL_ID
+
+    def _initial_noise_enabled(self) -> bool:
+        if self._initial_selection is None:
+            return True
+        return self._initial_selection.remove_background_noise
+
+    def _initial_output_format(self) -> str:
+        if self._initial_selection is None:
+            return DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT
+        value = self._initial_selection.output_format.strip()
+        return value or DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT
+
+    def _refresh_confirm_state(self) -> None:
+        confirm = self.query_one("#voice-changer-selector-confirm", Button)
+        confirm.disabled = not (self._voices_loaded and self._models_loaded)
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
         status = self.query_one("#voice-changer-selector-status", Static)
@@ -167,10 +293,3 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
             severity="error" if error else "information",
             timeout=timeout,
         )
-
-
-__all__ = [
-    "ElevenLabsVoicesClient",
-    "VoiceChangerSelectionResult",
-    "VoiceChangerSelectorScreen",
-]

@@ -13,13 +13,13 @@ corruptos si la descarga se interrumpe.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Final
 
 import httpx
 
-_DOWNLOAD_TIMEOUT_SECONDS: Final[float] = 30.0
-_DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
+from ..domain.policies import AUDIO_DOWNLOAD_TIMEOUT_SECONDS, KIE_DOWNLOAD_CHUNK_BYTES
+from ._streaming import write_response_to_file
 
 
 async def download_audio(url: str, destination: Path) -> None:
@@ -28,21 +28,18 @@ async def download_audio(url: str, destination: Path) -> None:
     Convierte cualquier error de red (`httpx.HTTPError`) a `OSError` para que
     `app_layer` pueda traducirlo a notify visible sin importar httpx.
     """
-    destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_suffix(destination.suffix + ".part")
     try:
         async with (
-            httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT_SECONDS) as client,
+            httpx.AsyncClient(timeout=AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as client,
             client.stream("GET", url) as response,
         ):
             response.raise_for_status()
-            with tmp_path.open("wb") as fp:
-                async for chunk in response.aiter_bytes(_DOWNLOAD_CHUNK_BYTES):
-                    fp.write(chunk)
-        tmp_path.replace(destination)
+            await write_response_to_file(response, tmp_path, chunk_size=KIE_DOWNLOAD_CHUNK_BYTES)
+        await asyncio.to_thread(tmp_path.replace, destination)
     except httpx.HTTPError as exc:
-        tmp_path.unlink(missing_ok=True)
+        await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
         raise OSError(f"no pude descargar el audio: {exc}") from exc
     except OSError:
-        tmp_path.unlink(missing_ok=True)
+        await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
         raise

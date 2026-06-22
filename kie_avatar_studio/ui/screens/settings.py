@@ -1,13 +1,3 @@
-"""Pantalla `Configuración`: API keys + endpoints + ejecución + defaults.
-
-Solo dispatch + render (CR-10.1). Recibe `KeysController` y `SettingsController`
-inyectados desde el composition root. No conoce `infra/`, ni `httpx`, ni
-`aiosqlite`.
-
-Notifica al composition root cambios que requieren reconstruir clientes
-(key activa, endpoints o integraciones) llamando a los callbacks inyectados.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -43,8 +33,6 @@ _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
 
 
 class SettingsScreen(Screen[None]):
-    """Pantalla raíz de configuración."""
-
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "go_back", "Volver"),
     ]
@@ -68,17 +56,11 @@ class SettingsScreen(Screen[None]):
         self._on_runtime_cleanup = on_runtime_cleanup
         self._cleanup_confirm_pending = False
 
-    # --- composición -------------------------------------------------------
-
     def compose(self) -> ComposeResult:
         yield from compose_settings_layout(self._settings.snapshot())
 
-    # --- ciclo de vida -----------------------------------------------------
-
     async def on_mount(self) -> None:
         await self._refresh_keys_table()
-
-    # --- handlers ----------------------------------------------------------
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -90,21 +72,12 @@ class SettingsScreen(Screen[None]):
     def action_go_back(self) -> None:
         self.app.pop_screen()
 
-    # --- API Keys handlers ------------------------------------------------
-
     async def _handle_add_key(self) -> None:
-        """Abre el modal en background. Cuando el usuario cierra, se invoca
-        `_on_key_form_dismissed` (push_screen con callback no requiere
-        @work, a diferencia de push_screen_wait — ver
-        https://textual.textualize.io/api/app/#textual.app.App.push_screen).
-        """
         self.app.push_screen(KeyFormScreen(), self._on_key_form_dismissed)
 
     def _on_key_form_dismissed(self, result: KeyFormResult | None) -> None:
         if result is None:
             return
-        # El callback es síncrono; el persist requiere await, así que lo
-        # disparamos como task vigilada por el exception handler global.
         self.app.run_worker(self._persist_new_key(result), exclusive=False)
 
     async def _persist_new_key(self, payload: KeyFormResult) -> None:
@@ -157,8 +130,6 @@ class SettingsScreen(Screen[None]):
         message = format_test_result(tested)
         self._set_status(message, error=tested.last_validated_status != "ok")
         await self._refresh_keys_table()
-
-    # --- Endpoints / Execution / Defaults handlers ------------------------
 
     async def _handle_save_endpoints(self) -> None:
         api_base = self.query_one("#kie-api-base", Input).value
@@ -248,8 +219,6 @@ class SettingsScreen(Screen[None]):
             self._set_status(f"{ERROR} {exc}", error=True)
             return
         self._set_status(f"{OK} {message}")
-
-    # --- helpers internos -------------------------------------------------
 
     async def _refresh_keys_table(self) -> None:
         table = self.query_one("#keys-table", DataTable)

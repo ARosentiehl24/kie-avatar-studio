@@ -1,6 +1,6 @@
 """Smoke tests de `ConfigureWorkflowScreen`.
 
-Foco: con muchos campos (preset + duración + aprobación + producto) en un
+Foco: con muchos campos (voice changer + duración + aprobación + producto) en un
 terminal chico, los controles deben quedar dentro de un `VerticalScroll`
 (`#configure-workflow-body`) y los botones de acción deben seguir presentes
 y alcanzables (no recortados por overflow).
@@ -9,6 +9,7 @@ y alcanzables (no recortados por overflow).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from textual.containers import VerticalScroll
 from textual.widgets import Button, Static
@@ -16,8 +17,22 @@ from textual.widgets import Button, Static
 from kie_avatar_studio.app import KieAvatarStudioApp
 from kie_avatar_studio.config import Settings
 from kie_avatar_studio.domain.models import VoiceChangerSettings, WorkflowEntry
+from kie_avatar_studio.domain.ports import ElevenLabsVoicesClient
 from kie_avatar_studio.ui.screens.configure_workflow import ConfigureWorkflowScreen
-from kie_avatar_studio.ui.screens.voice_changer_selector import ElevenLabsVoicesClient
+
+
+class _FakeElevenLabsClient:
+    async def list_voices(
+        self,
+        *,
+        voice_type: str | None = None,
+        search: str | None = None,
+    ) -> list[dict[str, Any]]:
+        _ = voice_type, search
+        return [{"voice_id": "voice_123", "name": "Ana"}]
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        return [{"model_id": "eleven_multilingual_sts_v2", "can_do_voice_conversion": True}]
 
 
 def _build_app(tmp_path: Path) -> KieAvatarStudioApp:
@@ -46,7 +61,6 @@ def _dense_entry() -> WorkflowEntry:
         "workflow": "Dense Config",
         "pre_settings": {
             "audio_language": "es-419",
-            "voice_preset": "demo",
             "scene_approval_mode": "manual",
             "promote_product": True,
             "model_creation": {"method": "catalog", "asset_kind": "generated", "asset_id": "x"},
@@ -85,8 +99,6 @@ def _push_configure(
 ) -> ConfigureWorkflowScreen:
     screen = ConfigureWorkflowScreen(
         entry=entry or _dense_entry(),
-        presets_controller=app.presets_controller,
-        audio_player=app.audio_player,
         default_i2v_duration_seconds=app.settings.default_i2v_duration_seconds,
         elevenlabs_client=elevenlabs_client,
     )
@@ -103,9 +115,9 @@ async def test_configure_form_fields_live_in_scrollable_body(tmp_path: Path) -> 
         _push_configure(app)
         await pilot.pause()
         body = app.screen.query_one("#configure-workflow-body", VerticalScroll)
-        # El selector de voz y el de aprobación viven DENTRO del body scrollable.
+        # El selector de voice changer y el de aprobación viven DENTRO del body scrollable.
         select_ids = {s.id for s in body.query("Select")}
-        assert "configure-voice-preset-select" in select_ids
+        assert "configure-duration-select" in select_ids
         assert "configure-approval-select" in select_ids
 
 
@@ -153,7 +165,23 @@ async def test_configure_disables_voice_changer_without_api_key(tmp_path: Path) 
         select_button = app.screen.query_one("#configure-voice-changer-select", Button)
         hint = app.screen.query_one("#configure-voice-changer-hint", Static)
         assert select_button.disabled
-        assert "Configura ELEVENLABS_API_KEY en .env para usar el voice changer" in str(hint.content)
+        assert "Configura ELEVENLABS_API_KEY en .env para usar el voice changer" in str(
+            hint.content
+        )
+
+
+async def test_configure_shows_voice_catalog_button_when_api_key_exists(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        _push_configure(app, elevenlabs_client=_FakeElevenLabsClient())
+        await pilot.pause()
+        body = app.screen.query_one("#configure-workflow-body", VerticalScroll)
+        select_button = body.query_one("#configure-voice-changer-select", Button)
+        assert not select_button.disabled
+        assert "Elegir voz" in str(select_button.label)
+        assert select_button.outer_size.width > 0
+        assert select_button.outer_size.height == 3
 
 
 async def test_configure_shows_existing_voice_changer_selection(tmp_path: Path) -> None:

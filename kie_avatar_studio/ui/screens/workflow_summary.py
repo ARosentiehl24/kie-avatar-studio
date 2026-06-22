@@ -134,21 +134,16 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
         )
         translation = "on" if veo.enable_translation else "off"
         watermark = veo.watermark or "[dim]sin watermark[/dim]"
-        lines.append(
-            f"    [dim]translation={translation} · watermark={watermark}[/dim]"
-        )
+        lines.append(f"    [dim]translation={translation} · watermark={watermark}[/dim]")
         if self._pre_settings.voice_changer is None:
             lines.append("  · [b]Voice changer:[/b] [dim]no configurado[/dim]")
         else:
             changer = self._pre_settings.voice_changer
             noise = "sí" if changer.remove_background_noise else "no"
             lines.append(
-                "  · [b]Voice changer:[/b] "
-                f"voice_id={changer.voice_id} · model={changer.model_id}"
+                f"  · [b]Voice changer:[/b] voice_id={changer.voice_id} · model={changer.model_id}"
             )
-            lines.append(
-                f"    [dim]noise removal={noise} · formato={changer.output_format}[/dim]"
-            )
+            lines.append(f"    [dim]noise removal={noise} · formato={changer.output_format}[/dim]")
         approval_mode = self._pre_settings.scene_approval_mode
         if approval_mode == SceneApprovalMode.MANUAL:
             lines.append(
@@ -160,13 +155,12 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
         else:
             lines.append("  · [b]Aprobación scene_image:[/b] [dim]auto (sin pausa)[/dim]")
         if (
-            self._pre_settings.voice_preset_id is not None
-            or self._pre_settings.audio_language is not None
+            self._pre_settings.audio_language is not None
             or self._pre_settings.i2v_duration_seconds is not None
         ):
             lines.append(
                 "  · [b]Compat legacy:[/b] "
-                "[dim]se detectaron campos del flujo anterior (preset / language / duración).[/dim]"
+                "[dim]se detectaron campos del flujo anterior (language / duración).[/dim]"
             )
         lines.append(f"  · [b]Modelo base:[/b] method=[b]{creation.method.value}[/b]")
         if creation.method == ModelCreationMethod.PROMPT and creation.prompt:
@@ -202,8 +196,11 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
                 raw_step.get("change_scene", raw_step.get("change_background", True))
             )
             include_product_flag = bool(raw_step.get("include_product", False))
+            set_as_base_flag = bool(raw_step.get("set_as_base", False))
             attached = bool(raw_step.get("attached", True))
-            tag = _describe_step_operations(type_value, change_scene_flag, include_product_flag, attached)
+            tag = _describe_step_operations(
+                type_value, change_scene_flag, include_product_flag, set_as_base_flag, attached
+            )
             duration_tag = f"  [dim]VEO 3.1 · {self._pre_settings.veo.duration}s[/dim]"
             lines.append(
                 f"  [b]{step_n}.[/b] [cyan]{type_value:6}[/cyan] {name[:48]}  {tag}{duration_tag}"
@@ -225,7 +222,9 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
                 detail_parts.append(f"{scene} scene/producto")
             detail = " + ".join(detail_parts)
             lines.append(f"  · [green]Nano Banana 2:[/green] {counts['nano_banana']} ({detail})")
-        lines.append(f"  · [green]VEO 3.1:[/green] {counts['veo']} renders ({counts['attached']} adjuntos al final)")
+        lines.append(
+            f"  · [green]VEO 3.1:[/green] {counts['veo']} renders ({counts['attached']} adjuntos al final)"
+        )
         lines.append("  · [cyan]Postproceso local:[/cyan] concatenación + extracción de audio")
         if counts["voice_changer"]:
             lines.append("  · [cyan]Voice changer:[/cyan] 1 pasada sobre `final_audio.mp3`")
@@ -252,6 +251,7 @@ def _describe_step_operations(
     type_value: str,
     change_scene: bool,
     include_product: bool,
+    set_as_base: bool,
     attached: bool,
 ) -> str:
     """Devuelve un tag corto con las operaciones del step."""
@@ -260,6 +260,8 @@ def _describe_step_operations(
         parts.append("scene-img")
     if include_product:
         parts.append("producto")
+    if set_as_base:
+        parts.append("set-base")
     parts.append("veo")
     parts.append("concat" if attached else "sin-concat")
     if type_value == StepType.A_ROLL.value:

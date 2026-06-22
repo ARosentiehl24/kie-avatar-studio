@@ -5,8 +5,8 @@ El loader es **puro filesystem**: no toca red, no toca DB, no encola.
 
 Cada archivo `.json` del directorio se interpreta como UN workflow
 candidato a ejecutar. La validación estructural (shape Pydantic) se
-hace acá; la validación semántica (preset existe, archivo local
-existe, etc.) la hace el `WorkflowController` antes de encolar.
+hace acá; la validación semántica (archivo local existe, etc.) la hace
+el `WorkflowController` antes de encolar.
 
 Errores se devuelven en `WorkflowEntry.errors` (no se levantan): un
 directorio con 10 JSONs no debe fallar por uno malformado.
@@ -37,17 +37,15 @@ _WORKFLOWS_GLOB: Final[str] = "*.json"
 # Archivos JSON que NO son workflows ejecutables (docs, schemas, etc.).
 # Se omiten del escaneo para evitar mostrar errores spam en la UI.
 _RESERVED_JSON_NAMES: Final[frozenset[str]] = frozenset({"SCHEMA.json"})
-_WARNING_VEO_DEFAULTS: Final[str] = (
-    "pre_settings.veo no está configurado; se usarán los defaults"
-)
+_WARNING_VEO_DEFAULTS: Final[str] = "pre_settings.veo no está configurado; se usarán los defaults"
 _WARNING_AUDIO_LANGUAGE_DEPRECATED: Final[str] = (
     "pre_settings.audio_language está deprecated; se mantiene por backward compat"
 )
-_WARNING_VOICE_PRESET_DEPRECATED: Final[str] = (
-    "pre_settings.voice_preset_id/voice_preset está deprecated; usá pre_settings.voice_changer"
-)
 _WARNING_I2V_DURATION_DEPRECATED: Final[str] = (
     "pre_settings.i2v_duration_seconds está deprecated; se mantiene por backward compat"
+)
+_ERROR_VOICE_PRESET_UNSUPPORTED: Final[str] = (
+    "pre_settings inválido: voice_preset/voice_preset_id ya no está soportado; usá pre_settings.voice_changer"
 )
 _ERROR_VOICE_CHANGER_VOICE_ID_EMPTY: Final[str] = (
     "pre_settings inválido: voice_changer.voice_id no puede estar vacío"
@@ -136,6 +134,8 @@ def _parse_pre_settings(
         return pre, [], []
 
     warnings = _collect_pre_settings_warnings(raw_pre_settings)
+    if "voice_preset_id" in raw_pre_settings or "voice_preset" in raw_pre_settings:
+        return None, warnings, [_ERROR_VOICE_PRESET_UNSUPPORTED]
     voice_changer = raw_pre_settings.get("voice_changer")
     if voice_changer is not None and _voice_changer_voice_id_is_empty(voice_changer):
         return None, warnings, [_ERROR_VOICE_CHANGER_VOICE_ID_EMPTY]
@@ -154,8 +154,6 @@ def _collect_pre_settings_warnings(raw_pre_settings: dict[str, Any]) -> list[str
         warnings.append(_WARNING_VEO_DEFAULTS)
     if "audio_language" in raw_pre_settings:
         warnings.append(_WARNING_AUDIO_LANGUAGE_DEPRECATED)
-    if "voice_preset_id" in raw_pre_settings or "voice_preset" in raw_pre_settings:
-        warnings.append(_WARNING_VOICE_PRESET_DEPRECATED)
     if "i2v_duration_seconds" in raw_pre_settings:
         warnings.append(_WARNING_I2V_DURATION_DEPRECATED)
     return warnings
@@ -276,7 +274,7 @@ def build_workflow_from_entry(
 
 
 def resolve_model_creation_from_payload(  # Any: JSON crudo sin esquema estático antes de Pydantic.
-    payload: dict[str, Any]
+    payload: dict[str, Any],
 ) -> ModelCreation:
     """Devuelve el `ModelCreation` parseado desde el `pre_settings.model_creation`."""
     pre, _, errors = _parse_pre_settings(payload.get("pre_settings", {}))

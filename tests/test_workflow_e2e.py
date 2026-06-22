@@ -13,7 +13,6 @@ import pytest
 
 from kie_avatar_studio.app_layer.queue_manager import QueueManager
 from kie_avatar_studio.app_layer.runner_factories import (
-    AudioRunnerDeps,
     ImageRunnerDeps,
     WorkflowRunnerFactory,
 )
@@ -29,7 +28,6 @@ from kie_avatar_studio.config import Settings
 from kie_avatar_studio.domain.events import WorkflowJobUpdated
 from kie_avatar_studio.domain.models import (
     SceneApprovalMode,
-    VoicePreset,
     WorkflowJob,
     WorkflowStatus,
     WorkflowStepStatus,
@@ -40,13 +38,22 @@ from kie_avatar_studio.infra.generated_images_db import GeneratedImagesDB
 from kie_avatar_studio.infra.image_jobs_db import ImageJobsDB
 from kie_avatar_studio.infra.images_db import ImagesDB
 from kie_avatar_studio.infra.kie_client import KieClient
-from kie_avatar_studio.infra.presets_store import VoicePresetsStore
 from kie_avatar_studio.infra.workflow_db import WorkflowDB
 from kie_avatar_studio.infra.workflow_loader import (
     build_workflow_from_entry,
     scan_workflows_dir,
 )
 from kie_avatar_studio.infra.workflow_manifest_writer import AtomicWorkflowManifestWriter
+
+
+class _FakeFFmpeg:
+    async def concat_videos(self, _video_paths: list[Path], output_path: Path) -> Path:
+        output_path.write_bytes(b"video")
+        return output_path
+
+    async def extract_audio(self, _video_path: Path, output_path: Path) -> Path:
+        output_path.write_bytes(b"audio")
+        return output_path
 
 
 class _MockKieAllSuccess:
@@ -136,7 +143,6 @@ def _workflow_json_3_steps() -> dict:
         "workflow": "E2E Test 3 Steps",
         "pre_settings": {
             "audio_language": "es-419",
-            "voice_preset": "test_voice",
             "model_creation": {
                 "method": "prompt",
                 "prompt": "Photorealistic woman talking to camera",
@@ -204,48 +210,30 @@ async def e2e_setup(tmp_settings: Settings):
     workflow_db = WorkflowDB(settings.db_path)
     await workflow_db.init()
 
-    presets = VoicePresetsStore(settings.presets_dir)
-    await presets.init()
-    await presets.upsert(
-        VoicePreset(
-            id="test_voice",
-            label="Test Voice",
-            voice_id="N2lVS1w4EtoT3dr4eOWO",
-        )
-    )
-
     capacity_limiter = asyncio.Semaphore(4)
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=settings,
             client=kie,
             image_jobs_repo=image_jobs_db,
             generated_images_store=generated_db,
             uploaded_images_store=images_db,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=settings,
-            client=kie,
-            audio_jobs_repo=audio_jobs_db,
-            audios_store=audios_db,
-        ),
+        )
     )
     step_runner = WorkflowStepRunner(
         settings,
         kie,
         capacity_limiter,
-        audio_limiter=asyncio.Semaphore(1),
         video_limiter=asyncio.Semaphore(2),
         download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
         runner_factory=runner_factory,
     )
-    manifest_writer = AtomicWorkflowManifestWriter()
+    manifest_writer = AtomicWorkflowManifestWriter(settings.outputs_dir)
     base_resolver = WorkflowBaseResolver(
         settings,
         kie,
-        presets,
         images_db,
         generated_db,
         image_jobs_db,
@@ -256,13 +244,13 @@ async def e2e_setup(tmp_settings: Settings):
     )
     workflow_runner = WorkflowRunner(
         settings,
-        kie,
         WorkflowRunnerDeps(
             repository=workflow_db,
             manifest_writer=manifest_writer,
             step_runner=step_runner,
             base_resolver=base_resolver,
         ),
+        ffmpeg=_FakeFFmpeg(),
     )
     lifecycle = WorkflowLifecycle(workflow_db)
     workflow_limiter = asyncio.Semaphore(1)
@@ -282,11 +270,11 @@ async def e2e_setup(tmp_settings: Settings):
         base_resolver,
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
-        presets_store=presets,
         uploaded_images=images_db,
         generated_images=generated_db,
     )
-    async def _fake_concat(_steps, output_dir: Path, *, ffmpeg_path: str = "ffmpeg") -> Path:
+
+    async def _fake_concat(_steps, output_dir: Path, *, ffmpeg: object) -> Path:
         final_video = output_dir / "final.mp4"
         final_audio = output_dir / "final_audio.mp3"
         final_video.write_bytes(b"final-video")
@@ -454,10 +442,11 @@ async def test_e2e_partially_failed_when_some_steps_fail(  # noqa: C901
                 self.task_counter += 1
                 tk = f"tk_{self.task_counter:04d}"
                 body = json.loads(request.content)
+                prompt = str(body.get("prompt", ""))
                 self.tasks[tk] = {
                     "model": body["model"],
                     "kind": "veo",
-                    "should_fail": body.get("prompt") != "Una mujer mira a cámara plano medio",
+                    "should_fail": "Una mujer mira a cámara plano medio" not in prompt,
                 }
                 return httpx.Response(200, json={"data": {"taskId": tk}})
             if path == "/api/v1/veo/record-info":
@@ -526,44 +515,30 @@ async def test_e2e_partially_failed_when_some_steps_fail(  # noqa: C901
     await image_jobs_db.init()
     workflow_db = WorkflowDB(settings.db_path)
     await workflow_db.init()
-    presets = VoicePresetsStore(settings.presets_dir)
-    await presets.init()
-    await presets.upsert(
-        VoicePreset(id="test_voice", label="Test", voice_id="N2lVS1w4EtoT3dr4eOWO")
-    )
-
     capacity_limiter = asyncio.Semaphore(4)
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=settings,
             client=kie,
             image_jobs_repo=image_jobs_db,
             generated_images_store=generated_db,
             uploaded_images_store=images_db,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=settings,
-            client=kie,
-            audio_jobs_repo=audio_jobs_db,
-            audios_store=audios_db,
-        ),
+        )
     )
     step_runner = WorkflowStepRunner(
         settings,
         kie,
         capacity_limiter,
-        audio_limiter=asyncio.Semaphore(1),
         video_limiter=asyncio.Semaphore(2),
         download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
         runner_factory=runner_factory,
     )
-    manifest_writer = AtomicWorkflowManifestWriter()
+    manifest_writer = AtomicWorkflowManifestWriter(settings.outputs_dir)
     base_resolver = WorkflowBaseResolver(
         settings,
         kie,
-        presets,
         images_db,
         generated_db,
         image_jobs_db,
@@ -574,13 +549,13 @@ async def test_e2e_partially_failed_when_some_steps_fail(  # noqa: C901
     )
     workflow_runner = WorkflowRunner(
         settings,
-        kie,
         WorkflowRunnerDeps(
             repository=workflow_db,
             manifest_writer=manifest_writer,
             step_runner=step_runner,
             base_resolver=base_resolver,
         ),
+        ffmpeg=_FakeFFmpeg(),
     )
     lifecycle = WorkflowLifecycle(workflow_db)
     queue: QueueManager[WorkflowJob, WorkflowJobUpdated] = QueueManager(
@@ -599,7 +574,6 @@ async def test_e2e_partially_failed_when_some_steps_fail(  # noqa: C901
         base_resolver,
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
-        presets_store=presets,
         uploaded_images=images_db,
         generated_images=generated_db,
     )

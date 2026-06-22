@@ -6,10 +6,13 @@ funciona end-to-end (sin tocar Kie real).
 
 from __future__ import annotations
 
+import json
+
 from textual.widgets import DataTable
 
 from kie_avatar_studio.app import KieAvatarStudioApp
 from kie_avatar_studio.config import Settings
+from kie_avatar_studio.infra.keys_store import KEYS_FILE_NAME
 
 
 def _build_app(tmp_path) -> KieAvatarStudioApp:
@@ -164,3 +167,12 @@ async def test_concurrency_tab_exposes_all_subsystem_limits(tmp_path) -> None:
             assert field.value == expected, (
                 f"{input_id} value={field.value!r} expected={expected!r}"
             )
+
+
+async def test_mount_does_not_sync_elevenlabs_key_into_keys_store(tmp_path) -> None:
+    app = _build_app(tmp_path)
+    app.settings = app.settings.model_copy(update={"elevenlabs_api_key": "sk-sync-123"})
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        payload = json.loads((app.settings.data_dir / KEYS_FILE_NAME).read_text(encoding="utf-8"))
+        assert "integrations" not in payload

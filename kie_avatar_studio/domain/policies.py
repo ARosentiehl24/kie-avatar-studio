@@ -78,6 +78,9 @@ MAX_IMAGE_REFS: Final[int] = 14
 KIE_DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
 KIE_MAX_RETRIES: Final[int] = 3
 KIE_BACKOFF_BASE_SECONDS: Final[float] = 1.0
+ELEVENLABS_CONNECT_TIMEOUT_SECONDS: Final[float] = 15.0
+ELEVENLABS_TOTAL_TIMEOUT_SECONDS: Final[float] = 60.0
+AUDIO_DOWNLOAD_TIMEOUT_SECONDS: Final[float] = 30.0
 KIE_CONNECT_TIMEOUT_SECONDS: Final[float] = 15.0
 KIE_TOTAL_TIMEOUT_SECONDS: Final[float] = 60.0
 
@@ -894,6 +897,11 @@ def _collect_step_warnings(step: WorkflowStep) -> list[str]:
             "Nano Banana compondrá el producto solo con el prompt de la escena. "
             "Agregá product_prompt para indicar cómo/dónde colocar el producto."
         )
+    if step.set_as_base and not (step.change_scene or step.include_product):
+        warnings.append(
+            f"step {step.step}: set_as_base=true pero el step no genera scene nueva "
+            "(change_scene=false e include_product=false). Este flag no tendrá efecto."
+        )
     return warnings
 
 
@@ -910,6 +918,7 @@ def validate_workflow(workflow: WorkflowJob) -> list[str]:
     if not workflow.steps:
         raise WorkflowValidationError("workflow debe tener al menos 1 step")
     validate_model_creation(workflow.pre_settings.model_creation)
+    validate_veo_settings(workflow.pre_settings.veo)
     if workflow.pre_settings.i2v_duration_seconds is not None:
         validate_i2v_duration(workflow.pre_settings.i2v_duration_seconds)
     if (
@@ -920,6 +929,8 @@ def validate_workflow(workflow: WorkflowJob) -> list[str]:
             f"image_aspect_ratio inválido: {workflow.pre_settings.image_aspect_ratio!r} "
             f"(válidos: {', '.join(ASPECT_RATIOS)})"
         )
+    if workflow.pre_settings.voice_changer is not None:
+        validate_voice_changer_settings(workflow.pre_settings.voice_changer)
     _validate_workflow_step_numbering(workflow)
     warnings: list[str] = []
     warnings.extend(_validate_product_promotion(workflow))
@@ -982,8 +993,7 @@ def validate_veo_settings(settings: VeoSettings) -> None:
     """Valida la configuración global de VEO 3.1 del workflow."""
     if settings.model not in VEO_MODELS:
         raise VeoValidationError(
-            f"modelo VEO inválido: {settings.model!r} "
-            f"(válidos: {', '.join(sorted(VEO_MODELS))})"
+            f"modelo VEO inválido: {settings.model!r} (válidos: {', '.join(sorted(VEO_MODELS))})"
         )
     if settings.aspect_ratio not in VEO_ASPECT_RATIOS:
         raise VeoValidationError(
@@ -1024,9 +1034,7 @@ def validate_veo_step(
     n = len(image_urls)
 
     if generation_type == "TEXT_2_VIDEO" and n > 0:
-        raise VeoValidationError(
-            f"TEXT_2_VIDEO no acepta image_urls (recibí {n})"
-        )
+        raise VeoValidationError(f"TEXT_2_VIDEO no acepta image_urls (recibí {n})")
     if generation_type == "FIRST_AND_LAST_FRAMES_2_VIDEO" and (
         n < 1 or n > VEO_FIRST_LAST_FRAMES_MAX_IMAGES
     ):
@@ -1037,8 +1045,7 @@ def validate_veo_step(
     if generation_type == "REFERENCE_2_VIDEO":
         if n < 1 or n > VEO_REFERENCE_MAX_IMAGES:
             raise VeoValidationError(
-                f"REFERENCE_2_VIDEO requiere 1-{VEO_REFERENCE_MAX_IMAGES} "
-                f"image_urls (recibí {n})"
+                f"REFERENCE_2_VIDEO requiere 1-{VEO_REFERENCE_MAX_IMAGES} image_urls (recibí {n})"
             )
         if model not in VEO_REFERENCE_MODELS:
             raise VeoValidationError(
@@ -1058,3 +1065,13 @@ def validate_voice_changer_settings(settings: VoiceChangerSettings) -> None:
         raise WorkflowValidationError("voice_changer.voice_id no puede estar vacío")
     if not settings.model_id or not settings.model_id.strip():
         raise WorkflowValidationError("voice_changer.model_id no puede estar vacío")
+    if settings.voice_settings is None:
+        return
+    try:
+        validate_voice_settings(settings.voice_settings)
+    except VoiceSettingsValidationError as exc:
+        raise WorkflowValidationError(f"voice_changer.voice_settings inválido: {exc}") from exc
+    if settings.voice_settings.language_code is not None:
+        raise WorkflowValidationError(
+            "voice_changer.voice_settings.language_code no aplica a ElevenLabs speech-to-speech"
+        )

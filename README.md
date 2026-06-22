@@ -1,11 +1,12 @@
 # Kie Avatar Studio
 
-App local **TUI en Python** para automatizar la generación de videos con avatar/lip-sync
-usando las APIs de Kie.ai. Cubre cuatro subsistemas con cola independiente,
-persistencia en SQLite y límites de paralelismo configurables:
+App local **TUI en Python** para automatizar la generación de videos con
+avatar/lip-sync usando las APIs de Kie.ai. Cubre cuatro subsistemas con cola
+independiente, persistencia en SQLite y límites de paralelismo configurables:
 
 - **Video con avatar** (Kling AI Avatar Pro): imagen + voz + script ⇒ lip-sync.
-- **B-roll con Kling 3.0** (`kling-3.0/video`): imagen + prompt ⇒ video animado (con o sin sound effects ambientales nativos).
+- **B-roll con Kling 3.0** (`kling-3.0/video`): imagen + prompt ⇒ video animado
+  (con o sin sound effects ambientales nativos).
 - **Audio TTS** (ElevenLabs vía Kie): voiceovers reusables como presets.
 - **Imágenes** (Nano Banana 2 / GPT Image 2): bases para video y escenas b-roll.
 - **Workflows declarativos** (JSON): orquesta a-rolls y b-rolls end-to-end con
@@ -45,9 +46,10 @@ scripts\check.sh             :: requiere Git Bash o WSL
 
 ## Code intelligence (CodeGraph)
 
-El repo viene cableado con **CodeGraph** vía MCP para que cualquier agente con soporte MCP
-(Copilot CLI, OpenCode, Claude Code, Cursor…) consulte el grafo del código en vez de hacer
-grep ciego. Reduce ~25% el costo y ~62% las tool calls de exploración.
+El repo viene cableado con **CodeGraph** vía MCP para que cualquier agente con
+soporte MCP (Copilot CLI, OpenCode, Claude Code, Cursor…) consulte el grafo del
+código en vez de hacer grep ciego. Reduce ~25% el costo y ~62% las tool calls de
+exploración.
 
 Instalación una sola vez por máquina:
 
@@ -56,8 +58,9 @@ pnpm i -g @colbymchenry/codegraph        # o npm i -g, o el install.sh standalon
 codegraph init -i                        # crea + indexa el repo (.codegraph/codegraph.db)
 ```
 
-Los archivos `.mcp.json` (Copilot CLI) y `opencode.jsonc` (OpenCode) ya están en el repo;
-cada cliente carga su archivo automáticamente al arrancar. Mantener el índice fresco:
+Los archivos `.mcp.json` (Copilot CLI) y `opencode.jsonc` (OpenCode) ya están en
+el repo; cada cliente carga su archivo automáticamente al arrancar. Mantener el
+índice fresco:
 
 ```bash
 codegraph sync         # incremental
@@ -67,14 +70,15 @@ codegraph status       # salud + archivos pendientes
 Si tu cliente MCP está activo, podés delegar la decisión `sync` vs `index` a un
 comando preconfigurado:
 
-| Cliente | Invocación |
-|---|---|
-| Copilot CLI | `/skill codegraph-sync` |
+| Cliente     | Invocación                                                         |
+| ----------- | ------------------------------------------------------------------ |
+| Copilot CLI | `/skill codegraph-sync`                                            |
 | OpenCode    | `/codegraph-sync` (o `/codegraph-sync full` para reindex completo) |
 
-Tools preferidas vs grep/view: `codegraph_context` (PRIMARY), `codegraph_search`,
-`codegraph_trace`, `codegraph_callers`, `codegraph_impact`, `codegraph_explore`,
-`codegraph_node`. Ver `.github/copilot-instructions.md` para la guía completa.
+Tools preferidas vs grep/view: `codegraph_context` (PRIMARY),
+`codegraph_search`, `codegraph_trace`, `codegraph_callers`, `codegraph_impact`,
+`codegraph_explore`, `codegraph_node`. Ver `.github/copilot-instructions.md`
+para la guía completa.
 
 ## Estructura
 
@@ -113,17 +117,17 @@ tests/
 ./scripts/check.sh
 ```
 
-   o `make check`. Si CI/pre-commit falla, el agente
-   `code-quality-reviewer` te explica por qué citando la regla.
+o `make check`. Si CI/pre-commit falla, el agente `code-quality-reviewer` te
+explica por qué citando la regla.
 
-4. Para invocar al agente sobre tu cambio:
+1. Para invocar al agente sobre tu cambio:
 
 ```text
 TUI (OpenCode):  /agent code-quality-reviewer   ← lee .opencode/agents/
 CLI (Copilot):   /agent code-quality-reviewer   ← lee .github/agents/
 ```
 
-5. El prompt es **único** en `docs/agents/code-quality-reviewer.prompt.md`. Cada
+1. El prompt es **único** en `docs/agents/code-quality-reviewer.prompt.md`. Cada
    sistema tiene su propio frontmatter:
 
 ```text
@@ -131,29 +135,28 @@ CLI (Copilot):   /agent code-quality-reviewer   ← lee .github/agents/
 .github/agents/code-quality-reviewer.agent.md      (Copilot CLI, tools[])
 ```
 
-   Para regenerar ambos desde la fuente:
+Para regenerar ambos desde la fuente:
 
 ```bash
 ./scripts/build_agent_profiles.sh
 ```
 
-   `scripts/check_agent_sync.sh` valida en pre-commit que los cuerpos coincidan.
+`scripts/check_agent_sync.sh` valida en pre-commit que los cuerpos coincidan.
 
 ## Variables de entorno
 
 La fuente de verdad es `.env.example` — copialo a `.env` y editá lo que
-necesites. Las variables más relevantes son las credenciales
-(`KIE_API_KEY`), los endpoints (`KIE_API_BASE`, `KIE_UPLOAD_BASE`), los
-límites de paralelismo (`MAX_PARALLEL_JOBS`, `MAX_PARALLEL_WORKFLOWS` y
-los específicos por subsistema) y los paths de almacenamiento
-(`DATA_DIR`, `OUTPUTS_DIR`, `INPUTS_DIR`, `PRESETS_DIR`,
-`BATCH_JOBS_DIR`, `WORKFLOWS_DIR`, `LOGS_DIR`).
+necesites. Las variables más relevantes son las credenciales (`KIE_API_KEY`),
+los endpoints (`KIE_API_BASE`, `KIE_UPLOAD_BASE`), los límites de paralelismo
+(`MAX_PARALLEL_JOBS`, `MAX_PARALLEL_WORKFLOWS` y los específicos por subsistema)
+y los paths de almacenamiento (`DATA_DIR`, `OUTPUTS_DIR`, `INPUTS_DIR`,
+`PRESETS_DIR`, `BATCH_JOBS_DIR`, `WORKFLOWS_DIR`, `LOGS_DIR`).
 
 `KIE_API_KEY` queda como **fallback**: si configurás keys en la pantalla
 **Configuración** (`/C`), se guardan en `data/keys.json` (`chmod 0o600`) y la
 key activa sobrescribe a la del `.env`. La pantalla también permite editar
-endpoints, paralelismo, polling y defaults, todo persistido en `.env` con
-backup `.env.bak`.
+endpoints, paralelismo, polling y defaults, todo persistido en `.env` con backup
+`.env.bak`.
 
 ## Limpiar estado local
 
@@ -165,22 +168,23 @@ python scripts/clean_runtime_state.py --yes
 
 Esto elimina solo `data/jobs.db`, `data/jobs.db-wal` y `data/jobs.db-shm`.
 Conserva `data/keys.json`, `outputs/`, `inputs/`, `presets/` y `workflows/`.
-También está disponible desde **Configuración → Mantenimiento → Limpiar DB runtime**.
+También está disponible desde **Configuración → Mantenimiento → Limpiar DB
+runtime**.
 
 ## Flujos por subsistema
 
-Cada subsistema tiene su propia state machine, su tabla en SQLite y su
-limitador de concurrencia. El composition root (`app.py`) las cablea con dos
-semáforos compartidos:
+Cada subsistema tiene su propia state machine, su tabla en SQLite y su limitador
+de concurrencia. El composition root (`app.py`) las cablea con dos semáforos
+compartidos:
 
-- `MAX_PARALLEL_JOBS` — capacidad global compartida entre video / audio /
-  image / sub-jobs de workflows.
-- `MAX_PARALLEL_WORKFLOWS` — slot exclusivo de la cola de workflows para
-  evitar deadlocks (un workflow no se queda esperando un slot que él mismo
-  necesita para sus sub-jobs).
+- `MAX_PARALLEL_JOBS` — capacidad global compartida entre video / audio / image
+  / sub-jobs de workflows.
+- `MAX_PARALLEL_WORKFLOWS` — slot exclusivo de la cola de workflows para evitar
+  deadlocks (un workflow no se queda esperando un slot que él mismo necesita
+  para sus sub-jobs).
 
-Las state machines completas (estados, transiciones, contratos de
-persistencia, eventos emitidos) viven en:
+Las state machines completas (estados, transiciones, contratos de persistencia,
+eventos emitidos) viven en:
 
 - `docs/SPEC.md` — spec maestra de comportamiento.
 - `docs/ARCHITECTURE.md` — capas, ports, ciclo de vida del job.
@@ -192,9 +196,9 @@ validate ─► upload_image  ┐
             create_audio  ┘─► wait_audio ─► create_avatar ─► wait_video ─► download ─► completed
 ```
 
-Solo el runner de cada subsistema muta el `status` de sus jobs, siempre
-con patrón write-ahead: asignar → `await repository.upsert(job)` →
-notificar listeners.
+Solo el runner de cada subsistema muta el `status` de sus jobs, siempre con
+patrón write-ahead: asignar → `await repository.upsert(job)` → notificar
+listeners.
 
 ## Restricciones de Kie
 

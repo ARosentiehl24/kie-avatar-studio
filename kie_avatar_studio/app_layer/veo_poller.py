@@ -17,7 +17,6 @@ genérico de /jobs/.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from loguru import logger
 
@@ -28,10 +27,10 @@ from ..domain.policies import (
     VEO_STATUS_SUCCESS,
     VEO_STATUS_UPSTREAM_FAILED,
 )
-from ..domain.ports import KieGateway
+from ..domain.ports import ExternalJsonObject, KieGateway
 
 
-def _extract_veo_result_url(detail: dict[str, Any]) -> str | None:
+def _extract_veo_result_url(detail: ExternalJsonObject) -> str | None:
     """Extrae la primera URL de resultado del response de VEO.
 
     Shape esperado: `data.response.resultUrls[0]`.
@@ -49,7 +48,7 @@ def _extract_veo_result_url(detail: dict[str, Any]) -> str | None:
     return None
 
 
-def _extract_veo_success_flag(detail: dict[str, Any]) -> int | None:
+def _extract_veo_success_flag(detail: ExternalJsonObject) -> int | None:
     """Extrae el `successFlag` del response de VEO polling.
 
     Shape esperado: `data.successFlag` (int).
@@ -61,7 +60,7 @@ def _extract_veo_success_flag(detail: dict[str, Any]) -> int | None:
     return int(flag) if isinstance(flag, int | float) else None
 
 
-def _extract_veo_error(detail: dict[str, Any]) -> str:
+def _extract_veo_error(detail: ExternalJsonObject) -> str:
     """Extrae un mensaje de error legible del response de VEO."""
     data = detail.get("data", {})
     if isinstance(data, dict):

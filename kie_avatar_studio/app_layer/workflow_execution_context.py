@@ -26,7 +26,6 @@ from ..domain.models import (
     WorkflowStep,
 )
 from ..domain.policies import expected_progress_keys_for_step, resolve_effective_i2v_duration
-from .visual_prompt_guard import append_image_visual_guard
 
 DEFAULT_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 
@@ -127,7 +126,7 @@ class WorkflowExecutionContext:
         """Devuelve voice_settings con `language_code` ajustado.
 
         Precedencia: el `audio_language` del JSON (específico del workflow)
-        tiene prioridad sobre el `voice_settings.language_code` del preset.
+        tiene prioridad sobre cualquier `voice_settings.language_code` vigente.
         """
         if self.audio_language is not None:
             base = self.voice_settings or VoiceSettings()
@@ -173,12 +172,22 @@ def needs_scene_generation(step: WorkflowStep) -> bool:
     return step.change_scene or step.include_product
 
 
-# Instrucción (en inglés, idioma de los prompts de Nano Banana) para
-# preservar el fondo de la base cuando se compone un producto sin cambiar
-# la escena (`include_product=True` + `change_scene=False`).
+# Instrucción para preservar el fondo de la base cuando se compone un
+# producto sin cambiar la escena. Solo aplica cuando también hay modelo
+# (`include_model=True`) para evitar mezclar instrucciones en steps de
+# "solo producto".
 _KEEP_BACKGROUND_HINT: Final[str] = (
-    "Keep the exact same background, environment and scene from the "
-    "reference person image; do not change the setting, only add the product"
+    "Mantén exactamente el mismo fondo, ambiente y escena de la imagen "
+    "de referencia de la persona; no cambies el entorno, solo añade el producto"
+)
+
+# Instrucción para steps donde SOLO se referencia el producto
+# (`include_product=True` + `include_model=False`).
+_PRODUCT_ONLY_HINT: Final[str] = (
+    "Usa únicamente la foto de referencia del producto para mantener su forma, "
+    "color, etiqueta y empaque; mantén el foco principal en el producto y "
+    "permite interacción humana parcial (por ejemplo, manos) sin que la "
+    "persona completa sea protagonista"
 )
 
 
@@ -187,8 +196,11 @@ def build_scene_prompt(step: WorkflowStep) -> str:
 
     Composición según los flags del step:
     - `change_scene=True`: incluye `scene_description` (cambia el entorno).
-    - `include_product=True` SIN `change_scene`: añade una instrucción para
-      preservar el fondo de la base (solo se compone el producto encima).
+    - `include_product=True` + `include_model=True` + `change_scene=False`:
+      añade una instrucción para preservar el fondo de la base.
+    - `include_product=True` + `include_model=False`: añade una instrucción
+      explícita de "solo producto" (la referencia es únicamente el producto),
+      permitiendo interacción humana parcial sin perder foco en el producto.
     - Siempre incluye el `prompt` del step (la acción/escena a animar).
     - `include_product=True`: añade `product_prompt` al final (cómo/dónde
       colocar el producto).
@@ -196,12 +208,30 @@ def build_scene_prompt(step: WorkflowStep) -> str:
     parts: list[str] = []
     if step.change_scene and step.scene_description.strip():
         parts.append(step.scene_description.strip())
-    elif step.include_product and not step.change_scene:
+    if step.include_product and not step.include_model:
+        parts.append(_PRODUCT_ONLY_HINT)
+    elif step.include_product and step.include_model and not step.change_scene:
         parts.append(_KEEP_BACKGROUND_HINT)
     parts.append(step.prompt.strip())
     if step.include_product and step.product_prompt.strip():
         parts.append(step.product_prompt.strip())
-    return append_image_visual_guard(". ".join(parts))
+    return ". ".join(parts)
+
+
+def build_veo_prompt(step: WorkflowStep) -> str:
+    """Construye el prompt final de VEO, incluyendo diálogo/narración.
+
+    VEO recibe siempre la acción visual (`step.prompt`). Si `step.text` viene
+    con contenido, se añade una instrucción explícita para que el video también
+    respete el texto hablado exacto (diálogo con modelo o voz en off).
+    """
+    visual_prompt = step.prompt.strip()
+    spoken_text = step.text.strip()
+    if not spoken_text:
+        return visual_prompt
+    if step.include_model:
+        return f'{visual_prompt}. La persona en escena debe decir exactamente: "{spoken_text}"'
+    return f'{visual_prompt}. Voz en off exacta: "{spoken_text}"'
 
 
 def ref_dict(ref: ImageAssetRef) -> dict[str, object]:
@@ -241,6 +271,7 @@ __all__ = [
     "DEFAULT_TURBO_MODEL",
     "WorkflowExecutionContext",
     "build_scene_prompt",
+    "build_veo_prompt",
     "initialize_progress",
     "is_b_roll_native_sound",
     "is_b_roll_silent",

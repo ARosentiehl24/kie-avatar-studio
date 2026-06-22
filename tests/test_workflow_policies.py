@@ -15,6 +15,8 @@ from kie_avatar_studio.domain.models import (
     ModelCreation,
     ModelCreationMethod,
     StepType,
+    VoiceChangerSettings,
+    VoiceSettings,
     WorkflowJob,
     WorkflowPreSettings,
     WorkflowProgressKey,
@@ -66,7 +68,6 @@ def _make_workflow(steps: list[WorkflowStep]) -> WorkflowJob:
         source_json_path="workflows/test.json",
         output_dir="outputs/wf_test_001",
         pre_settings=WorkflowPreSettings(
-            voice_preset_id="default",
             model_creation=ModelCreation(method=ModelCreationMethod.PROMPT, prompt="A woman"),
         ),
         steps=steps,
@@ -293,6 +294,21 @@ class TestValidateWorkflow:
         workflow = _make_workflow([_make_step()])
         workflow.pre_settings.model_creation = ModelCreation(method=ModelCreationMethod.PROMPT)
         with pytest.raises(WorkflowValidationError, match="requiere 'prompt'"):
+            validate_workflow(workflow)
+
+    def test_invalid_veo_settings_raise_at_workflow_level(self) -> None:
+        workflow = _make_workflow([_make_step()])
+        workflow.pre_settings.veo.aspect_ratio = "4:3"
+        with pytest.raises(WorkflowValidationError, match="aspect_ratio VEO inválido"):
+            validate_workflow(workflow)
+
+    def test_voice_changer_rejects_language_code_for_sts(self) -> None:
+        workflow = _make_workflow([_make_step()])
+        workflow.pre_settings.voice_changer = VoiceChangerSettings(
+            voice_id="voice_123",
+            voice_settings=VoiceSettings(language_code="es"),
+        )
+        with pytest.raises(WorkflowValidationError, match="language_code no aplica"):
             validate_workflow(workflow)
 
 
@@ -525,6 +541,12 @@ class TestProductPromotion:
         step = self._product_step(include_product=True, product_prompt="")
         warnings = validate_workflow_step(step)
         assert any("product_prompt vacío" in w for w in warnings)
+
+    def test_set_as_base_without_scene_generation_warns(self) -> None:
+        step = self._product_step(include_product=False)
+        step.set_as_base = True
+        warnings = validate_workflow_step(step)
+        assert any("set_as_base=true" in w for w in warnings)
 
 
 class TestImageAspectRatio:

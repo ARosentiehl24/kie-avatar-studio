@@ -43,6 +43,7 @@ from .veo_poller import poll_veo_task_for_url
 from .workflow_execution_context import (
     WorkflowExecutionContext,
     build_scene_prompt,
+    build_veo_prompt,
     initialize_progress,
     mark_remaining_progress_failed,
     needs_scene_generation,
@@ -72,7 +73,6 @@ class WorkflowStepRunner:
         client: KieGateway,
         image_limiter: asyncio.Semaphore,
         *,
-        audio_limiter: asyncio.Semaphore,
         video_limiter: asyncio.Semaphore,
         download_limiter: asyncio.Semaphore,
         image_jobs_repo: ImageJobRepository,
@@ -82,7 +82,6 @@ class WorkflowStepRunner:
         self._settings = settings
         self._client = client
         self._image_limiter = image_limiter
-        self._audio_limiter = audio_limiter
         self._video_limiter = video_limiter
         self._download_limiter = download_limiter
         self._image_jobs_repo = image_jobs_repo
@@ -101,7 +100,9 @@ class WorkflowStepRunner:
         self._reset_audio_outputs(step)
         step.started_at = datetime.now(UTC)
         try:
-            await self._run_veo(step, context, on_transition)
+            scene_ref = await self._run_veo(step, context, on_transition)
+            if step.set_as_base and needs_scene_generation(step):
+                context.base_image_ref = scene_ref
             step.status = WorkflowStepStatus.COMPLETED
             step.completed_at = datetime.now(UTC)
             await on_transition(step)
@@ -127,7 +128,7 @@ class WorkflowStepRunner:
         step: WorkflowStep,
         context: WorkflowExecutionContext,
         on_transition: StepTransition,
-    ) -> None:
+    ) -> ImageAssetRef:
         await self._transition(step, on_transition, status=WorkflowStepStatus.PREPARING)
         scene_ref = await self._prepare_scene_image(step, context, on_transition)
         await self._transition(
@@ -137,6 +138,7 @@ class WorkflowStepRunner:
             progress_updates={WorkflowProgressKey.VIDEO: WorkflowProgressStatus.RUNNING},
         )
         await self._render_veo_to_step(step, context, scene_ref, on_transition)
+        return scene_ref
 
     async def _render_veo_to_step(
         self,
@@ -145,8 +147,8 @@ class WorkflowStepRunner:
         scene_ref: ImageAssetRef,
         on_transition: StepTransition,
     ) -> None:
-        output_path = self._video_output_path(step, context)
-        video_url = await self._create_or_poll_veo_video(step, context, scene_ref)
+        output_path = await self._video_output_path(step, context)
+        video_url = await self._create_or_poll_veo_video(step, context, scene_ref, on_transition)
         download_key = self._download_progress_key(step)
         await self._transition(
             step,
@@ -167,6 +169,7 @@ class WorkflowStepRunner:
         step: WorkflowStep,
         context: WorkflowExecutionContext,
         scene_ref: ImageAssetRef,
+        on_transition: StepTransition,
     ) -> str:
         veo = context.veo_settings
         image_urls = [scene_ref.kie_url]
@@ -180,9 +183,10 @@ class WorkflowStepRunner:
             veo.duration,
         )
         if step.video_task_id is None:
+            veo_prompt = build_veo_prompt(step)
             async with self._video_limiter:
                 created = await self._client.create_veo_video_task(
-                    step.prompt,
+                    veo_prompt,
                     image_urls=image_urls,
                     model=veo.model,
                     generation_type=VEO_GENERATION_TYPE,
@@ -193,6 +197,7 @@ class WorkflowStepRunner:
                     watermark=veo.watermark,
                 )
             step.video_task_id = created.task_id
+            await on_transition(step)
         async with self._video_limiter:
             return await poll_veo_task_for_url(
                 self._client,
@@ -201,12 +206,14 @@ class WorkflowStepRunner:
                 timeout_seconds=self._settings.task_timeout_seconds,
             )
 
-    def _video_output_path(self, step: WorkflowStep, context: WorkflowExecutionContext) -> Path:
+    async def _video_output_path(
+        self, step: WorkflowStep, context: WorkflowExecutionContext
+    ) -> Path:
         step_dir = context.step_dir(step)
         output_path = step_dir / VIDEO_FILENAME
         if not is_path_inside(output_path, self._settings.outputs_dir):
             raise WorkflowStepError(f"step {step.step}: output video fuera de outputs_dir")
-        step_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(step_dir.mkdir, parents=True, exist_ok=True)
         return output_path
 
     @staticmethod
@@ -258,7 +265,7 @@ class WorkflowStepRunner:
         scene_path = step_dir / SCENE_IMAGE_FILENAME
         if not is_path_inside(scene_path, self._settings.outputs_dir):
             raise WorkflowStepError(f"step {step.step}: scene_image fuera de outputs_dir")
-        step_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(step_dir.mkdir, parents=True, exist_ok=True)
         set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.RUNNING)
         await on_transition(step)
         if not needs_scene_generation(step):
@@ -272,6 +279,10 @@ class WorkflowStepRunner:
             set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
             return context.base_image_ref
         if step.scene_image_approved_at is not None and step.bg_image_job_id:
+            ref = await self._reload_scene_ref(step, scene_path)
+            set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
+            return ref
+        if step.bg_image_job_id and not context.requires_scene_approval(step):
             ref = await self._reload_scene_ref(step, scene_path)
             set_progress(step, WorkflowProgressKey.SCENE_IMAGE, WorkflowProgressStatus.COMPLETED)
             return ref
@@ -317,9 +328,11 @@ class WorkflowStepRunner:
                 f"expirada en Kie ({ref.expires_at.isoformat()}); usá Regenerar "
                 "desde el modal de aprobación para crear una nueva"
             )
-        if not scene_path.exists():  # noqa: ASYNC240 - check sync trivial
+        if not await asyncio.to_thread(scene_path.exists):
             async with self._download_limiter:
-                await download_kie_asset(client=self._client, url=ref.kie_url, output_path=scene_path)
+                await download_kie_asset(
+                    client=self._client, url=ref.kie_url, output_path=scene_path
+                )
         step.scene_image_path = str(scene_path)
         return ref
 

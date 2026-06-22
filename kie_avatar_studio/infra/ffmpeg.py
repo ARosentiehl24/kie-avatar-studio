@@ -26,7 +26,7 @@ async def concat_videos(
 ) -> Path:
     """Concatena videos MP4 con el concat demuxer de FFmpeg sin re-encode."""
     if not video_paths:
-        raise ValueError("video_paths no puede estar vacío")
+        raise FFmpegError("video_paths no puede estar vacío")
 
     await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
     concat_list_path = _build_concat_list_path(output_path)
@@ -71,7 +71,7 @@ async def extract_audio(
     elif normalized_format == _AAC_FORMAT:
         codec_args = ["-vn", "-acodec", "copy"]
     else:
-        raise ValueError(f"audio_format no soportado: {audio_format!r}")
+        raise FFmpegError(f"audio_format no soportado: {audio_format!r}")
 
     await _run_ffmpeg(
         [
@@ -113,6 +113,19 @@ async def check_ffmpeg(*, ffmpeg_path: str = "ffmpeg") -> bool:
     if stderr_text:
         logger.debug("FFmpeg -version stderr: {}", stderr_text)
     return True
+
+
+class FFmpegCli:
+    """Implementación CLI del puerto `FFmpegGateway`."""
+
+    def __init__(self, *, ffmpeg_path: str = "ffmpeg") -> None:
+        self._ffmpeg_path = ffmpeg_path
+
+    async def concat_videos(self, video_paths: list[Path], output_path: Path) -> Path:
+        return await concat_videos(video_paths, output_path, ffmpeg_path=self._ffmpeg_path)
+
+    async def extract_audio(self, video_path: Path, output_path: Path) -> Path:
+        return await extract_audio(video_path, output_path, ffmpeg_path=self._ffmpeg_path)
 
 
 async def _run_ffmpeg(args: Sequence[str], *, accion: str) -> None:

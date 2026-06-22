@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 from ..domain.models import KieTaskCreated, KieUploadResult, VoiceSettings
 from ..domain.policies import (
@@ -13,7 +12,7 @@ from ..domain.policies import (
     DEFAULT_I2V_MODE,
     DEFAULT_I2V_MODEL,
 )
-from ..domain.ports import KieGateway
+from ..domain.ports import ExternalJsonObject, KieGateway
 
 
 class LimitedKieGateway:
@@ -26,6 +25,7 @@ class LimitedKieGateway:
         audio_limiter: asyncio.Semaphore,
         image_limiter: asyncio.Semaphore,
         video_limiter: asyncio.Semaphore,
+        veo_limiter: asyncio.Semaphore,
         upload_limiter: asyncio.Semaphore,
         download_limiter: asyncio.Semaphore,
     ) -> None:
@@ -33,6 +33,7 @@ class LimitedKieGateway:
         self._audio_limiter = audio_limiter
         self._image_limiter = image_limiter
         self._video_limiter = video_limiter
+        self._veo_limiter = veo_limiter
         self._upload_limiter = upload_limiter
         self._download_limiter = download_limiter
 
@@ -114,7 +115,7 @@ class LimitedKieGateway:
                 aspect_ratio=aspect_ratio,
             )
 
-    async def get_task_detail(self, task_id: str) -> dict[str, Any]:
+    async def get_task_detail(self, task_id: str) -> ExternalJsonObject:
         return await self._inner.get_task_detail(task_id)
 
     async def create_veo_video_task(
@@ -130,7 +131,7 @@ class LimitedKieGateway:
         enable_translation: bool = True,
         watermark: str | None = None,
     ) -> KieTaskCreated:
-        async with self._video_limiter:
+        async with self._veo_limiter:
             return await self._inner.create_veo_video_task(
                 prompt,
                 image_urls=image_urls,
@@ -143,7 +144,7 @@ class LimitedKieGateway:
                 watermark=watermark,
             )
 
-    async def get_veo_task_detail(self, task_id: str) -> dict[str, Any]:
+    async def get_veo_task_detail(self, task_id: str) -> ExternalJsonObject:
         return await self._inner.get_veo_task_detail(task_id)
 
     async def get_account_credits(self) -> float:

@@ -9,6 +9,7 @@ from kie_avatar_studio.domain.errors import (
     ElevenLabsInsufficientCreditsError,
     ElevenLabsServerError,
 )
+from kie_avatar_studio.domain.models import VoiceSettings
 from kie_avatar_studio.infra.elevenlabs_client import ElevenLabsClient
 
 
@@ -48,8 +49,14 @@ async def test_list_voices_happy(mock_transport_factory: callable) -> None:
     assert captured[0].headers["xi-api-key"] == "el-key"
 
 
-async def test_speech_to_speech_happy(mock_transport_factory: callable) -> None:
+async def test_speech_to_speech_to_file_happy(
+    tmp_path,
+    mock_transport_factory: callable,
+) -> None:
     audio = b"fake-audio"
+    audio_path = tmp_path / "input.mp3"
+    output_path = tmp_path / "out" / "converted.mp3"
+    audio_path.write_bytes(audio)
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
@@ -60,23 +67,33 @@ async def test_speech_to_speech_happy(mock_transport_factory: callable) -> None:
         assert b"custom-model" in body
         assert b'name="remove_background_noise"' in body
         assert b"true" in body
+        assert b'name="voice_settings"' in body
+        assert b'{"stability":0.8,"similarity_boost":0.9,"style":0.1,"speed":1.05}' in body
         assert b'name="audio"; filename="audio.mp3"' in body
         assert audio in body
         return httpx.Response(200, content=b"converted-audio", request=request)
 
     client = await _build_client("el-key", mock_transport_factory(handler))
     try:
-        result = await client.speech_to_speech(
+        result = await client.speech_to_speech_to_file(
             "voice_123",
-            audio,
+            audio_path,
+            output_path,
             model_id="custom-model",
             remove_background_noise=True,
             output_format="aac_44100",
+            voice_settings=VoiceSettings(
+                stability=0.8,
+                similarity_boost=0.9,
+                style=0.1,
+                speed=1.05,
+            ),
         )
     finally:
         await client.aclose()
 
-    assert result == b"converted-audio"
+    assert result == output_path
+    assert output_path.read_bytes() == b"converted-audio"
 
 
 async def test_list_models_happy(mock_transport_factory: callable) -> None:
@@ -123,27 +140,23 @@ async def test_list_models_404_raises_client_error(mock_transport_factory: calla
         await client.aclose()
 
 
-async def test_list_voices_429_retries_then_succeeds(
+async def test_list_voices_429_raises_client_error_without_retry(
     mock_transport_factory: callable,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(elevenlabs_module, "_BACKOFF_BASE_SECONDS", 0)
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        if calls["n"] < 3:
-            return httpx.Response(429, json={"detail": "slow down"}, request=request)
-        return httpx.Response(200, json={"voices": [{"voice_id": "ok"}]}, request=request)
+        return httpx.Response(429, json={"detail": "slow down"}, request=request)
 
     client = await _build_client("el-key", mock_transport_factory(handler))
     try:
-        voices = await client.list_voices()
+        with pytest.raises(ElevenLabsClientError, match="HTTP 429"):
+            await client.list_voices()
     finally:
         await client.aclose()
 
-    assert voices == [{"voice_id": "ok"}]
-    assert calls["n"] == 3
+    assert calls["n"] == 1
 
 
 async def test_list_models_500_retries_then_raises_server_error(
@@ -167,12 +180,16 @@ async def test_list_models_500_retries_then_raises_server_error(
     assert calls["n"] == 3
 
 
-async def test_speech_to_speech_timeout_retries_then_succeeds(
+async def test_speech_to_speech_to_file_timeout_retries_then_succeeds(
+    tmp_path,
     mock_transport_factory: callable,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(elevenlabs_module, "_BACKOFF_BASE_SECONDS", 0)
     calls = {"n": 0}
+    audio_path = tmp_path / "input.mp3"
+    output_path = tmp_path / "converted.mp3"
+    audio_path.write_bytes(b"audio")
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
@@ -182,9 +199,10 @@ async def test_speech_to_speech_timeout_retries_then_succeeds(
 
     client = await _build_client("el-key", mock_transport_factory(handler))
     try:
-        result = await client.speech_to_speech("voice_123", b"audio")
+        result = await client.speech_to_speech_to_file("voice_123", audio_path, output_path)
     finally:
         await client.aclose()
 
-    assert result == b"ok"
+    assert result == output_path
+    assert output_path.read_bytes() == b"ok"
     assert calls["n"] == 3

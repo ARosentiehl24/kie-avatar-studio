@@ -1,7 +1,7 @@
 """Modal para previsualizar la imagen base ANTES de encolar un workflow.
 
 Cuando el workflow especifica ``model_creation.method='prompt'``, la imagen
-base de la modelo se genera con Nano Banana 2 antes de cualquier step. Como
+base de la modelo se genera con GPT Image 2 antes de cualquier step. Como
 esto consume créditos y la imagen base condiciona TODO el resto del flujo
 (a-roll = lip-sync sobre esta cara, b-roll = misma cara en otros entornos),
 le damos al usuario la chance de:
@@ -32,6 +32,18 @@ from textual.widgets import Button, Label, LoadingIndicator, Select, Static, Tex
 from ...app_layer.workflow_controller import WorkflowController
 from ...domain.models import ImageAssetRef, ImageGenerationSettings
 from ...domain.policies import ASPECT_RATIOS, OUTPUT_FORMATS, RESOLUTIONS
+
+_DEFAULT_BASE_PROMPT_MODEL = "gpt-image-2-text-to-image"
+
+
+def _model_label_for_status(model: str) -> str:
+    """Devuelve una etiqueta humana para el modelo de generación base."""
+    normalized = model.strip().lower()
+    if normalized == "gpt-image-2-text-to-image":
+        return "GPT Image 2"
+    if normalized == "nano-banana-2":
+        return "Nano Banana 2"
+    return model
 
 
 class PreviewBaseImageScreen(ModalScreen[ImageAssetRef | None]):
@@ -102,7 +114,7 @@ class PreviewBaseImageScreen(ModalScreen[ImageAssetRef | None]):
                 # Indicador de carga adentro del scroll, junto al mensaje:
                 # cuando está `display=True` aparece arriba del status text
                 # con un spinner ASCII animado a ~10fps. Sin esto la
-                # generación parece colgada (la HTTP request a Nano Banana
+                # generación parece colgada (la HTTP request de generación
                 # tarda 15-30s).
                 yield LoadingIndicator(id="preview-base-loader")
                 yield Static(
@@ -131,6 +143,7 @@ class PreviewBaseImageScreen(ModalScreen[ImageAssetRef | None]):
         resolution = self.query_one("#preview-base-resolution", Select).value
         output_format = self.query_one("#preview-base-format", Select).value
         return ImageGenerationSettings(
+            model=self._initial_settings.model,
             aspect_ratio=str(aspect)
             if aspect is not Select.BLANK
             else self._initial_settings.aspect_ratio,
@@ -214,7 +227,8 @@ class PreviewBaseImageScreen(ModalScreen[ImageAssetRef | None]):
             )
             return
         settings = self._read_settings()
-        self._set_busy(True, "[yellow]Generando imagen base con Nano Banana 2…[/]")
+        model_label = _model_label_for_status(settings.model or _DEFAULT_BASE_PROMPT_MODEL)
+        self._set_busy(True, f"[yellow]Generando imagen base con {model_label}…[/]")
         try:
             ref, local_path = await self._controller.preview_base_from_prompt(
                 prompt,

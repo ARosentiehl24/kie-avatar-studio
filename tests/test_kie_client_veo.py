@@ -70,7 +70,9 @@ async def test_get_veo_task_detail_happy(mock_kie_client) -> None:
         assert request.url.params["taskId"] == "veo_123"
         return httpx.Response(
             200,
-            json={"data": {"successFlag": 1, "response": {"resultUrls": ["https://cdn/video.mp4"]}}},
+            json={
+                "data": {"successFlag": 1, "response": {"resultUrls": ["https://cdn/video.mp4"]}}
+            },
             request=request,
         )
 

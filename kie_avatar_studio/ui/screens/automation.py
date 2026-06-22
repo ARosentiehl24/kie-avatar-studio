@@ -20,12 +20,11 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
-from ...app_layer.audio_player import AudioPlayer
-from ...app_layer.presets_controller import VoicePresetsController
 from ...app_layer.workflow_controller import WorkflowController
 from ...domain.errors import (
     ImageValidationError,
     KieError,
+    WorkflowNotFoundError,
     WorkflowStepError,
     WorkflowValidationError,
 )
@@ -42,6 +41,7 @@ from ...domain.models import (
     WorkflowPreSettings,
     WorkflowStatus,
 )
+from ...domain.ports import AudioPreviewPlayer, ElevenLabsVoicesClient
 from .._counters import format_full_counters
 from .._icons import ERROR, OK
 from .._table_helpers import get_selected_row_key, select_row_by_key
@@ -55,7 +55,6 @@ from .configure_workflow import ConfigureResult, ConfigureWorkflowScreen
 from .file_picker import ImageFilePickerScreen
 from .preview_base_image import PreviewBaseImageScreen
 from .scene_image_approval import SceneImageApprovalScreen
-from .voice_changer_selector import ElevenLabsVoicesClient
 from .workflow_detail import WorkflowDetailScreen
 from .workflow_summary import CreditsLoader, WorkflowSummaryScreen
 
@@ -94,9 +93,8 @@ class AutomationScreen(Screen[None]):
         *,
         workflows_dir: str,
         check_credits: CreditsLoader,
-        presets_controller: VoicePresetsController,
-        audio_player: AudioPlayer,
         elevenlabs_client: ElevenLabsVoicesClient | None,
+        audio_player: AudioPreviewPlayer | None,
         default_input_dir: Path,
         open_local_path: Callable[[Path], Awaitable[None]],
         default_i2v_duration_seconds: int,
@@ -105,9 +103,8 @@ class AutomationScreen(Screen[None]):
         self._controller = controller
         self._workflows_dir = workflows_dir
         self._check_credits = check_credits
-        self._presets_controller = presets_controller
-        self._audio_player = audio_player
         self._elevenlabs_client = elevenlabs_client
+        self._audio_player = audio_player
         self._default_input_dir = default_input_dir
         self._open_local_path = open_local_path
         # Necesario para que el `WorkflowSummaryScreen` pueda mostrar la
@@ -227,12 +224,9 @@ class AutomationScreen(Screen[None]):
             if result is None:
                 # Usuario canceló — nada más que hacer.
                 return
-            voice_preset_id, audio_language, i2v_duration_override, approval_mode, voice_changer = (
-                result
-            )
+            audio_language, i2v_duration_override, approval_mode, voice_changer = result
             pre_settings = _merge_pre_settings(
                 entry,
-                voice_preset_id,
                 audio_language,
                 i2v_duration_override,
                 approval_mode,
@@ -240,7 +234,6 @@ class AutomationScreen(Screen[None]):
             )
             self._dispatch_base_resolution(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
             )
@@ -248,10 +241,9 @@ class AutomationScreen(Screen[None]):
         self.app.push_screen(
             ConfigureWorkflowScreen(
                 entry=entry,
-                presets_controller=self._presets_controller,
-                audio_player=self._audio_player,
                 default_i2v_duration_seconds=self._default_i2v_duration_seconds,
                 elevenlabs_client=self._elevenlabs_client,
+                audio_player=self._audio_player,
             ),
             _on_configure_dismissed,
         )
@@ -260,7 +252,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
     ) -> None:
@@ -275,21 +266,18 @@ class AutomationScreen(Screen[None]):
         if method == ModelCreationMethod.PROMPT:
             self._open_prompt_preview(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
             )
         elif method == ModelCreationMethod.LOCAL:
             self._open_local_picker(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
             )
         else:
             self._open_summary(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
                 base_ref=None,
@@ -299,7 +287,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
     ) -> None:
@@ -317,7 +304,6 @@ class AutomationScreen(Screen[None]):
                 return
             self._open_summary(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
                 base_ref=ref,
@@ -342,7 +328,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
     ) -> None:
@@ -363,7 +348,6 @@ class AutomationScreen(Screen[None]):
             self.app.run_worker(
                 self._upload_and_open_summary(
                     entry,
-                    voice_preset_id=voice_preset_id,
                     audio_language=audio_language,
                     pre_settings=pre_settings,
                     local_path=path,
@@ -380,7 +364,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
         local_path: Path,
@@ -400,7 +383,6 @@ class AutomationScreen(Screen[None]):
         self._set_status(f"{OK} imagen subida — revisá el resumen y confirmá")
         self._open_summary(
             entry,
-            voice_preset_id=voice_preset_id,
             audio_language=audio_language,
             pre_settings=pre_settings,
             base_ref=base_ref,
@@ -410,7 +392,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
         base_ref: ImageAssetRef | None,
@@ -427,7 +408,6 @@ class AutomationScreen(Screen[None]):
         if needs_product:
             self._open_product_picker(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
                 base_ref=base_ref,
@@ -435,7 +415,6 @@ class AutomationScreen(Screen[None]):
             return
         self._open_summary_screen(
             entry,
-            voice_preset_id=voice_preset_id,
             audio_language=audio_language,
             pre_settings=pre_settings,
             base_ref=base_ref,
@@ -445,7 +424,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
         base_ref: ImageAssetRef | None,
@@ -463,7 +441,6 @@ class AutomationScreen(Screen[None]):
             self.app.run_worker(
                 self._upload_product_and_open_summary(
                     entry,
-                    voice_preset_id=voice_preset_id,
                     audio_language=audio_language,
                     pre_settings=pre_settings,
                     base_ref=base_ref,
@@ -481,7 +458,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
         base_ref: ImageAssetRef | None,
@@ -494,7 +470,6 @@ class AutomationScreen(Screen[None]):
         )
         self._open_product_picker(
             entry,
-            voice_preset_id=voice_preset_id,
             audio_language=audio_language,
             pre_settings=pre_settings,
             base_ref=base_ref,
@@ -504,7 +479,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
         base_ref: ImageAssetRef | None,
@@ -516,7 +490,6 @@ class AutomationScreen(Screen[None]):
         except (ImageValidationError, WorkflowValidationError, KieError) as exc:
             self._retry_product_selection(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
                 base_ref=base_ref,
@@ -526,7 +499,6 @@ class AutomationScreen(Screen[None]):
         except Exception as exc:
             self._retry_product_selection(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 pre_settings=pre_settings,
                 base_ref=base_ref,
@@ -539,7 +511,6 @@ class AutomationScreen(Screen[None]):
         self._set_status(f"{OK} producto subido — revisá el resumen y confirmá")
         self._open_summary_screen(
             entry,
-            voice_preset_id=voice_preset_id,
             audio_language=audio_language,
             pre_settings=pre_settings,
             base_ref=base_ref,
@@ -549,7 +520,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         pre_settings: WorkflowPreSettings,
         base_ref: ImageAssetRef | None,
@@ -583,7 +553,6 @@ class AutomationScreen(Screen[None]):
             self.app.run_worker(
                 self._enqueue_after_summary(
                     entry,
-                    voice_preset_id=voice_preset_id,
                     audio_language=audio_language,
                     base_ref=base_ref,
                     local_path=local_path,
@@ -609,7 +578,6 @@ class AutomationScreen(Screen[None]):
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None,
         audio_language: str | None,
         base_ref: ImageAssetRef | None,
         local_path: str | None,
@@ -622,7 +590,6 @@ class AutomationScreen(Screen[None]):
         try:
             workflow = await self._controller.enqueue_entry(
                 entry,
-                voice_preset_id=voice_preset_id,
                 audio_language=audio_language,
                 resolved_base_ref=base_ref,
                 local_path=local_path,
@@ -651,9 +618,72 @@ class AutomationScreen(Screen[None]):
         workflow = await self._selected_db_workflow()
         if workflow is None:
             return
+        try:
+            product_ready = await self._controller.ensure_product_ready_for_retry(workflow.id)
+        except (WorkflowNotFoundError, WorkflowValidationError, KieError) as exc:
+            self._set_status(f"{ERROR} no pude preparar el retry: {exc}", error=True)
+            await self._refresh_db_table()
+            return
+        if not product_ready:
+            self._set_status(
+                f"{ERROR} workflow '{workflow.name}' necesita recargar producto antes de reintentar",
+                error=True,
+            )
+            self._open_retry_product_picker(workflow)
+            return
         ok = await self._controller.retry(workflow.id)
         if ok:
             self._set_status(f"{OK} workflow '{workflow.name}' reencolado")
+        else:
+            self._set_status(
+                f"{ERROR} workflow '{workflow.name}' no es reintentable (status={workflow.status.value})",
+                error=True,
+            )
+        await self._refresh_db_table()
+
+    def _open_retry_product_picker(self, workflow: WorkflowJob) -> None:
+        """Abre picker de producto para un workflow ya creado (flujo de retry)."""
+        start_dir = self._default_input_dir
+        product = workflow.pre_settings.product_image
+        if product and product.local_path:
+            candidate = Path(product.local_path)
+            try:
+                if candidate.is_file():
+                    start_dir = candidate.parent
+            except OSError:
+                pass
+
+        def _on_product_chosen(path: Path | None) -> None:
+            if path is None:
+                self._set_status(f"{ERROR} retry cancelado: no se recargó el producto", error=True)
+                return
+            self.app.run_worker(
+                self._replace_product_and_retry(workflow, path),
+                exclusive=False,
+            )
+
+        self.app.push_screen(
+            ImageFilePickerScreen(start_path=start_dir),
+            _on_product_chosen,
+        )
+
+    async def _replace_product_and_retry(self, workflow: WorkflowJob, product_path: Path) -> None:
+        self._set_status(
+            f"Recargando producto '{product_path.name}' para workflow '{workflow.name}'…"
+        )
+        try:
+            await self._controller.replace_workflow_product(workflow.id, product_path)
+        except (
+            ImageValidationError,
+            WorkflowValidationError,
+            KieError,
+            WorkflowNotFoundError,
+        ) as exc:
+            self._set_status(f"{ERROR} no pude recargar el producto: {exc}", error=True)
+            return
+        ok = await self._controller.retry(workflow.id)
+        if ok:
+            self._set_status(f"{OK} workflow '{workflow.name}' reencolado con producto recargado")
         else:
             self._set_status(
                 f"{ERROR} workflow '{workflow.name}' no es reintentable (status={workflow.status.value})",
@@ -845,7 +875,6 @@ def _product_already_resolved(pre_settings: WorkflowPreSettings) -> bool:
 
 def _merge_pre_settings(
     entry: WorkflowEntry,
-    voice_preset_id: str | None,
     audio_language: str | None,
     i2v_duration_override: int | None,
     approval_mode: SceneApprovalMode | None,
@@ -859,8 +888,6 @@ def _merge_pre_settings(
     """
     payload = (entry.workflow_payload or {}).get("pre_settings", {})
     pre = WorkflowPreSettings.model_validate(payload)
-    if voice_preset_id is not None:
-        pre.voice_preset_id = voice_preset_id
     if audio_language is not None:
         pre.audio_language = audio_language
     if i2v_duration_override is not None:

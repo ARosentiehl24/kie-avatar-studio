@@ -575,6 +575,10 @@ class VeoSettings(BaseModel):
     watermark: str | None = None
 
 
+DEFAULT_VOICE_CHANGER_MODEL_ID = "eleven_multilingual_sts_v2"
+DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT = "mp3_44100_128"
+
+
 class VoiceChangerSettings(BaseModel):
     """Configuración de ElevenLabs Speech-to-Speech (voice changer).
 
@@ -584,9 +588,10 @@ class VoiceChangerSettings(BaseModel):
     """
 
     voice_id: str
-    model_id: str = "eleven_multilingual_sts_v2"
+    model_id: str = DEFAULT_VOICE_CHANGER_MODEL_ID
     remove_background_noise: bool = True
-    output_format: str = "mp3_44100_128"
+    output_format: str = DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT
+    voice_settings: VoiceSettings | None = None
 
 
 # --- Workflow automation models -------------------------------------------
@@ -676,7 +681,7 @@ class ProductImage(BaseModel):
 class WorkflowPreSettings(BaseModel):
     """Pre-configuración del workflow: veo, voice changer, modelo base.
 
-    **v2.0.0**: los campos `audio_language`, `voice_preset_id` y
+    **v2.0.0**: los campos `audio_language` e
     `i2v_duration_seconds` están deprecated (eran del flujo Kling/TTS).
     Se mantienen para backward compat con workflows JSON v1 — el loader
     los acepta y emite warning. Los nuevos workflows deben usar
@@ -687,7 +692,6 @@ class WorkflowPreSettings(BaseModel):
 
     # --- deprecated (Kling/TTS era, mantener para backward compat) ---
     audio_language: str | None = None
-    voice_preset_id: str | None = Field(default=None, alias="voice_preset")
     i2v_duration_seconds: int | None = None
 
     # --- vigentes ---
@@ -852,6 +856,14 @@ class WorkflowStep(BaseModel):
     # b-rolls que son ilustraciones o planos de objeto donde no debe aparecer
     # la modelo, evitando que se mezcle su cara/cuerpo en la imagen).
     include_model: bool = True
+    # `set_as_base`: si `True`, la `scene_image` generada por este step
+    # reemplaza la base activa del workflow para los steps siguientes. Útil
+    # para mantener continuidad cuando cambias de locación y querés que los
+    # siguientes planos arranquen desde ese nuevo fondo.
+    #
+    # Nota: solo tiene efecto real cuando el step genera scene nueva
+    # (`change_scene=True` o `include_product=True`).
+    set_as_base: bool = False
     # `product_prompt`: texto que se añade al prompt de la escena para
     # indicarle a Nano Banana cómo/dónde colocar el producto. Solo se usa
     # si `include_product=True`. Vacío = Nano Banana lo compone solo con el

@@ -52,7 +52,6 @@ def _legacy_payload() -> dict[str, Any]:
     payload = _valid_payload()
     payload["pre_settings"] = {
         "audio_language": "es-419",
-        "voice_preset": "latina_warm_authentic",
         "i2v_duration_seconds": 5,
         "model_creation": {
             "method": "prompt",
@@ -195,19 +194,20 @@ async def test_loader_parses_promote_product_and_include_product(tmp_path: Path)
     payload = _valid_payload()
     payload["pre_settings"]["promote_product"] = True
     payload["run"][0]["include_product"] = True
+    payload["run"][0]["set_as_base"] = True
     payload["run"][0]["product_prompt"] = "Sostiene el frasco a la altura del pecho"
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
     assert len(entries) == 1
     assert entries[0].valid
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=tmp_path / "out"
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert wf.pre_settings.promote_product is True
     assert wf.steps[0].include_product is True
+    assert wf.steps[0].set_as_base is True
     assert wf.steps[0].product_prompt == "Sostiene el frasco a la altura del pecho"
     # Step 2 sin los campos → defaults.
     assert wf.steps[1].include_product is False
+    assert wf.steps[1].set_as_base is False
     assert wf.steps[1].product_prompt == ""
 
 
@@ -216,9 +216,7 @@ async def test_loader_include_product_defaults_when_omitted(tmp_path: Path) -> N
     payload = _valid_payload()
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=tmp_path / "out"
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert wf.pre_settings.promote_product is False
     assert all(not step.include_product for step in wf.steps)
 
@@ -243,9 +241,7 @@ async def test_loader_parses_v2_veo_voice_changer_and_attached(tmp_path: Path) -
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
     assert entries[0].valid
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=tmp_path / "out"
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert wf.pre_settings.veo.model == "veo3"
     assert wf.pre_settings.veo.aspect_ratio == "16:9"
     assert wf.pre_settings.veo.resolution == "1080p"
@@ -266,14 +262,20 @@ async def test_loader_warns_when_veo_missing_and_deprecated_fields_present(tmp_p
     assert entries[0].valid
     assert any("pre_settings.veo no está configurado" in w for w in entries[0].warnings)
     assert any("audio_language está deprecated" in w for w in entries[0].warnings)
-    assert any("voice_preset_id/voice_preset está deprecated" in w for w in entries[0].warnings)
     assert any("i2v_duration_seconds está deprecated" in w for w in entries[0].warnings)
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_legacy", output_dir=tmp_path / "out"
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_legacy", output_dir=tmp_path / "out")
     assert wf.pre_settings.audio_language == "es-419"
-    assert wf.pre_settings.voice_preset_id == "latina_warm_authentic"
     assert wf.pre_settings.i2v_duration_seconds == 5
+
+
+@pytest.mark.parametrize("legacy_key", ["voice_preset", "voice_preset_id"])
+async def test_loader_rejects_removed_voice_preset_fields(tmp_path: Path, legacy_key: str) -> None:
+    payload = _valid_payload()
+    payload["pre_settings"][legacy_key] = "demo"
+    (tmp_path / "legacy_voice.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await scan_workflows_dir(tmp_path)
+    assert not entries[0].valid
+    assert any("voice_preset/voice_preset_id ya no está soportado" in e for e in entries[0].errors)
 
 
 async def test_loader_rejects_voice_changer_without_voice_id(tmp_path: Path) -> None:
@@ -294,9 +296,7 @@ async def test_step_duration_seconds_omitted_defaults_to_none(tmp_path: Path) ->
     # No tocamos el payload original; ningún step trae duration_seconds.
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=tmp_path / "out"
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert all(step.duration_seconds is None for step in wf.steps)
 
 

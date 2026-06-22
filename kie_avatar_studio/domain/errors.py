@@ -51,7 +51,7 @@ class ElevenLabsServerError(ElevenLabsError):
 
 
 class FFmpegError(Exception):
-    """FFmpeg subprocess failed (non-zero exit or binary not found)."""
+    """El subprocess de FFmpeg falló o el binario no está disponible."""
 
 
 class JobValidationError(ValueError):

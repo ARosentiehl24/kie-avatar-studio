@@ -32,6 +32,7 @@ from .models import (
 )
 
 StatusT = TypeVar("StatusT", bound=StrEnum)
+ExternalJsonObject = dict[str, Any]  # Any: objeto JSON externo de APIs de proveedor.
 
 
 @runtime_checkable
@@ -135,7 +136,7 @@ class KieGateway(Protocol):
         aspect_ratio: str = ...,
     ) -> KieTaskCreated: ...
 
-    async def get_task_detail(self, task_id: str) -> dict[str, Any]: ...
+    async def get_task_detail(self, task_id: str) -> ExternalJsonObject: ...
 
     async def create_veo_video_task(
         self,
@@ -151,13 +152,62 @@ class KieGateway(Protocol):
         watermark: str | None = ...,
     ) -> KieTaskCreated: ...
 
-    async def get_veo_task_detail(self, task_id: str) -> dict[str, Any]: ...
+    async def get_veo_task_detail(self, task_id: str) -> ExternalJsonObject: ...
 
     async def get_account_credits(self) -> float: ...
 
     async def download_file(self, url: str, output_path: str | Path) -> Path: ...
 
     async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class FFmpegGateway(Protocol):
+    """Operaciones locales de FFmpeg inyectadas desde el composition root."""
+
+    async def concat_videos(self, video_paths: list[Path], output_path: Path) -> Path: ...
+
+    async def extract_audio(self, video_path: Path, output_path: Path) -> Path: ...
+
+
+@runtime_checkable
+class ElevenLabsSpeechToSpeechClient(Protocol):
+    """Operación directa de ElevenLabs usada por el postproceso STS."""
+
+    async def speech_to_speech_to_file(
+        self,
+        voice_id: str,
+        audio_path: Path,
+        output_path: Path,
+        *,
+        model_id: str = ...,
+        remove_background_noise: bool = ...,
+        output_format: str = ...,
+        voice_settings: VoiceSettings | None = ...,
+    ) -> Path: ...
+
+
+@runtime_checkable
+class ElevenLabsVoicesClient(Protocol):
+    """Catálogo de voces/modelos ElevenLabs usado por la UI."""
+
+    async def list_voices(
+        self,
+        *,
+        voice_type: str | None = None,
+        search: str | None = None,
+    ) -> list[ExternalJsonObject]: ...
+
+    async def list_models(self) -> list[ExternalJsonObject]: ...
+
+
+@runtime_checkable
+class AudioPreviewPlayer(Protocol):
+    """Reproductor de previews de voz inyectado desde la app."""
+
+    async def play_voice_preview(self, url: str) -> None: ...
+
+    async def stop(self) -> None: ...
 
 
 @runtime_checkable
@@ -200,7 +250,7 @@ class AudioJobRepository(Protocol):
 
 @runtime_checkable
 class KeyStore(Protocol):
-    """Persistencia de `KieKey` multi-perfil. Implementado por `infra.keys_store.KeysStore`.
+    """Persistencia de `KieKey`. Implementado por `KeysStore`.
 
     Una sola key puede estar marcada como "activa": es la que el composition
     root inyecta en `KieClient`. Si no hay activa, la app puede caer al

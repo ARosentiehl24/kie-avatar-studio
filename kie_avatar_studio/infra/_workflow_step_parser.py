@@ -54,6 +54,7 @@ def _build_step_kwargs(idx: int, raw_step: dict[str, Any]) -> dict[str, Any]:
         "voiceover": bool(raw_step.get("voiceover", True)),
         "include_product": bool(raw_step.get("include_product", False)),
         "include_model": bool(raw_step.get("include_model", True)),
+        "set_as_base": bool(raw_step.get("set_as_base", False)),
         "product_prompt": str(raw_step.get("product_prompt", "")),
         "image_aspect_ratio": (
             str(raw_step["image_aspect_ratio"])
