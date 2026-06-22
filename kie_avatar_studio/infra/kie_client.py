@@ -282,6 +282,64 @@ class KieClient:
         url = f"{self._settings.kie_api_base}/api/v1/jobs/recordInfo"
         return await self._request_json("GET", url, params={"taskId": task_id})
 
+    # --- VEO 3.1 endpoints ------------------------------------------------
+
+    async def create_veo_video_task(
+        self,
+        prompt: str,
+        *,
+        image_urls: list[str] | None = None,
+        model: str = "veo3_fast",
+        generation_type: str = "FIRST_AND_LAST_FRAMES_2_VIDEO",
+        aspect_ratio: str = "9:16",
+        resolution: str = "720p",
+        duration: int = 8,
+        enable_translation: bool = True,
+        watermark: str | None = None,
+    ) -> KieTaskCreated:
+        """POST /api/v1/veo/generate — crea task de VEO 3.1 video.
+
+        Endpoint propio de VEO (NO usa /jobs/createTask). Retorna taskId
+        compatible con `get_veo_task_detail` (polling vía /veo/record-info).
+
+        VEO genera audio nativo embebido en el MP4 — no se necesita paso
+        de TTS aparte. El prompt describe tanto lo visual como lo que la
+        persona dice/narra.
+
+        El caller valida los parámetros con `policies.validate_veo_step`
+        antes de llamar (CR-2.1: KieClient = solo HTTP).
+        """
+        body: dict[str, Any] = {
+            "prompt": prompt,
+            "model": model,
+            "generationType": generation_type,
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution,
+            "duration": duration,
+            "enableTranslation": enable_translation,
+        }
+        if image_urls:
+            body["imageUrls"] = image_urls
+        if watermark is not None:
+            body["watermark"] = watermark
+
+        url = f"{self._settings.kie_api_base}/api/v1/veo/generate"
+        payload = await self._request_json("POST", url, json=body)
+        data = self._extract_data(payload)
+        return KieTaskCreated(task_id=data["taskId"])
+
+    async def get_veo_task_detail(self, task_id: str) -> dict[str, Any]:
+        """GET /api/v1/veo/record-info?taskId=... — polling de VEO.
+
+        Response shape distinto al de /jobs/recordInfo:
+        - `data.successFlag`: 0=generando, 1=success, 2=failed, 3=upstream failed.
+        - `data.response.resultUrls[]`: URLs del video generado.
+        - `data.response.originUrls[]`: URLs originales (antes de post-proc).
+        - Result URLs expiran a los 14 días.
+        """
+        url = f"{self._settings.kie_api_base}/api/v1/veo/record-info"
+        return await self._request_json("GET", url, params={"taskId": task_id})
+
     async def download_file(self, url: str, output_path: str | Path) -> Path:
         """Descarga archivo binario (audio/video) por streaming, sin cargar en memoria.
 
@@ -290,7 +348,7 @@ class KieClient:
         """
         self._ensure_api_key()
         out = Path(output_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(out.parent.mkdir, parents=True, exist_ok=True)
         last_server_error: KieServerError | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             file_handle = await asyncio.to_thread(out.open, "wb")

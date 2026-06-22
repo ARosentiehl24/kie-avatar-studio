@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   voiceover              INTEGER NOT NULL DEFAULT 1,
   include_product        INTEGER NOT NULL DEFAULT 0,
   include_model          INTEGER NOT NULL DEFAULT 1,
+  set_as_base            INTEGER NOT NULL DEFAULT 0,
   product_prompt         TEXT NOT NULL DEFAULT '',
   scene_image_approved_at TEXT,
   image_aspect_ratio     TEXT,
@@ -123,13 +124,13 @@ INSERT INTO workflow_steps(
   workflow_id, step, scene_name, scene_slug, type, change_scene,
   scene_description, prompt, text, duration_seconds, voiceover, bg_image_job_id,
   audio_job_id, video_task_id, scene_image_path, audio_path, video_path,
-  scene_image_approved_at, include_product, include_model, product_prompt, image_aspect_ratio, status,
+  scene_image_approved_at, include_product, include_model, set_as_base, product_prompt, image_aspect_ratio, status,
   progress_json, error, started_at, completed_at
 ) VALUES (
   :workflow_id, :step, :scene_name, :scene_slug, :type, :change_scene,
   :scene_description, :prompt, :text, :duration_seconds, :voiceover, :bg_image_job_id,
   :audio_job_id, :video_task_id, :scene_image_path, :audio_path, :video_path,
-  :scene_image_approved_at, :include_product, :include_model, :product_prompt, :image_aspect_ratio, :status,
+  :scene_image_approved_at, :include_product, :include_model, :set_as_base, :product_prompt, :image_aspect_ratio, :status,
   :progress_json, :error, :started_at, :completed_at
 )
 ON CONFLICT(workflow_id, step) DO UPDATE SET
@@ -151,6 +152,7 @@ ON CONFLICT(workflow_id, step) DO UPDATE SET
   scene_image_approved_at=excluded.scene_image_approved_at,
   include_product=excluded.include_product,
   include_model=excluded.include_model,
+  set_as_base=excluded.set_as_base,
   product_prompt=excluded.product_prompt,
   image_aspect_ratio=excluded.image_aspect_ratio,
   status=excluded.status,
@@ -184,18 +186,27 @@ class WorkflowDB:
             #             humana cuando scene_approval_mode=manual).
             # 2026-06-07: `include_product` + `product_prompt` (producto
             #             promocional compuesto sobre la base con Nano Banana).
+            # 2026-06-19: `set_as_base` (permite que la scene_image de un step
+            #             pase a ser la nueva base para los siguientes).
+            # 2026-06-21: `manifest_write_failed` registra fallo best-effort al
+            #             escribir workflow.json.
+            # 2026-06-21: `video_task_id` permite reanudar polling VEO sin
+            #             recrear el render.
             # 2026-06-06: rename `change_background → change_scene` y
             #             `background_description → scene_description`
             #             (mejor semántica: el flag dispara regenerar TODA
             #             la scene image con Nano Banana, no solo el fondo).
             for column_ddl in (
+                "ALTER TABLE workflow_jobs ADD COLUMN manifest_write_failed INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE workflow_steps ADD COLUMN duration_seconds INTEGER",
                 "ALTER TABLE workflow_steps ADD COLUMN voiceover INTEGER NOT NULL DEFAULT 1",
                 "ALTER TABLE workflow_steps ADD COLUMN scene_image_approved_at TEXT",
                 "ALTER TABLE workflow_steps ADD COLUMN include_product INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE workflow_steps ADD COLUMN include_model INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE workflow_steps ADD COLUMN set_as_base INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE workflow_steps ADD COLUMN product_prompt TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE workflow_steps ADD COLUMN image_aspect_ratio TEXT",
+                "ALTER TABLE workflow_steps ADD COLUMN video_task_id TEXT",
             ):
                 try:
                     await db.execute(column_ddl)
@@ -338,6 +349,7 @@ class WorkflowDB:
             "voiceover": int(step.voiceover),
             "include_product": int(step.include_product),
             "include_model": int(step.include_model),
+            "set_as_base": int(step.set_as_base),
             "product_prompt": step.product_prompt,
             "image_aspect_ratio": step.image_aspect_ratio,
             "bg_image_job_id": step.bg_image_job_id,
@@ -395,6 +407,7 @@ class WorkflowDB:
             voiceover=bool(row["voiceover"]),
             include_product=bool(row["include_product"]),
             include_model=bool(row["include_model"]),
+            set_as_base=bool(row["set_as_base"]),
             product_prompt=row["product_prompt"],
             image_aspect_ratio=row["image_aspect_ratio"],
             bg_image_job_id=row["bg_image_job_id"],

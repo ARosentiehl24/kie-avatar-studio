@@ -1,4 +1,4 @@
-"""Test e2e con MockTransport: workflow completo con los 3 tipos de step."""
+"""Test e2e con MockTransport: workflow completo renderizado con VEO."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import asyncio
 import json
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
 
 from kie_avatar_studio.app_layer.queue_manager import QueueManager
 from kie_avatar_studio.app_layer.runner_factories import (
-    AudioRunnerDeps,
     ImageRunnerDeps,
     WorkflowRunnerFactory,
 )
@@ -28,7 +28,6 @@ from kie_avatar_studio.config import Settings
 from kie_avatar_studio.domain.events import WorkflowJobUpdated
 from kie_avatar_studio.domain.models import (
     SceneApprovalMode,
-    VoicePreset,
     WorkflowJob,
     WorkflowStatus,
     WorkflowStepStatus,
@@ -39,13 +38,22 @@ from kie_avatar_studio.infra.generated_images_db import GeneratedImagesDB
 from kie_avatar_studio.infra.image_jobs_db import ImageJobsDB
 from kie_avatar_studio.infra.images_db import ImagesDB
 from kie_avatar_studio.infra.kie_client import KieClient
-from kie_avatar_studio.infra.presets_store import VoicePresetsStore
 from kie_avatar_studio.infra.workflow_db import WorkflowDB
 from kie_avatar_studio.infra.workflow_loader import (
     build_workflow_from_entry,
     scan_workflows_dir,
 )
 from kie_avatar_studio.infra.workflow_manifest_writer import AtomicWorkflowManifestWriter
+
+
+class _FakeFFmpeg:
+    async def concat_videos(self, _video_paths: list[Path], output_path: Path) -> Path:
+        output_path.write_bytes(b"video")
+        return output_path
+
+    async def extract_audio(self, _video_path: Path, output_path: Path) -> Path:
+        output_path.write_bytes(b"audio")
+        return output_path
 
 
 class _MockKieAllSuccess:
@@ -56,7 +64,7 @@ class _MockKieAllSuccess:
         self.tasks: dict[str, dict] = {}
         self.requests: list[httpx.Request] = []
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
         self.requests.append(request)
         path = request.url.path
         if path == "/api/file-stream-upload":
@@ -72,15 +80,34 @@ class _MockKieAllSuccess:
                     }
                 },
             )
+        if path == "/api/v1/veo/generate":
+            self.task_counter += 1
+            task_id = f"tk_{self.task_counter:04d}"
+            body = json.loads(request.content)
+            self.tasks[task_id] = {"model": body["model"], "kind": "veo"}
+            return httpx.Response(200, json={"data": {"taskId": task_id}})
+        if path == "/api/v1/veo/record-info":
+            task_id = request.url.params.get("taskId")
+            if task_id not in self.tasks or self.tasks[task_id]["kind"] != "veo":
+                return httpx.Response(404)
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "successFlag": 1,
+                        "response": {"resultUrls": [f"https://tempfile.kie.ai/veo/{task_id}.mp4"]},
+                    }
+                },
+            )
         if path == "/api/v1/jobs/createTask":
             self.task_counter += 1
             task_id = f"tk_{self.task_counter:04d}"
             body = json.loads(request.content)
-            self.tasks[task_id] = {"model": body["model"]}
+            self.tasks[task_id] = {"model": body["model"], "kind": "jobs"}
             return httpx.Response(200, json={"data": {"taskId": task_id}})
         if path == "/api/v1/jobs/recordInfo":
             task_id = request.url.params.get("taskId")
-            if task_id not in self.tasks:
+            if task_id not in self.tasks or self.tasks[task_id]["kind"] != "jobs":
                 return httpx.Response(404)
             model = self.tasks[task_id]["model"]
             url = self._result_url(model, task_id)
@@ -111,12 +138,11 @@ class _MockKieAllSuccess:
 
 
 def _workflow_json_3_steps() -> dict:
-    """JSON con un step de cada tipo (a-roll, b-roll con text, b-roll silent)."""
+    """JSON con un step de cada tipo lógico, todos renderizados con VEO."""
     return {
         "workflow": "E2E Test 3 Steps",
         "pre_settings": {
             "audio_language": "es-419",
-            "voice_preset": "test_voice",
             "model_creation": {
                 "method": "prompt",
                 "prompt": "Photorealistic woman talking to camera",
@@ -184,48 +210,30 @@ async def e2e_setup(tmp_settings: Settings):
     workflow_db = WorkflowDB(settings.db_path)
     await workflow_db.init()
 
-    presets = VoicePresetsStore(settings.presets_dir)
-    await presets.init()
-    await presets.upsert(
-        VoicePreset(
-            id="test_voice",
-            label="Test Voice",
-            voice_id="N2lVS1w4EtoT3dr4eOWO",
-        )
-    )
-
     capacity_limiter = asyncio.Semaphore(4)
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=settings,
             client=kie,
             image_jobs_repo=image_jobs_db,
             generated_images_store=generated_db,
             uploaded_images_store=images_db,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=settings,
-            client=kie,
-            audio_jobs_repo=audio_jobs_db,
-            audios_store=audios_db,
-        ),
+        )
     )
     step_runner = WorkflowStepRunner(
         settings,
         kie,
         capacity_limiter,
-        audio_limiter=asyncio.Semaphore(1),
         video_limiter=asyncio.Semaphore(2),
         download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
         runner_factory=runner_factory,
     )
-    manifest_writer = AtomicWorkflowManifestWriter()
+    manifest_writer = AtomicWorkflowManifestWriter(settings.outputs_dir)
     base_resolver = WorkflowBaseResolver(
         settings,
         kie,
-        presets,
         images_db,
         generated_db,
         image_jobs_db,
@@ -236,13 +244,13 @@ async def e2e_setup(tmp_settings: Settings):
     )
     workflow_runner = WorkflowRunner(
         settings,
-        kie,
         WorkflowRunnerDeps(
             repository=workflow_db,
             manifest_writer=manifest_writer,
             step_runner=step_runner,
             base_resolver=base_resolver,
         ),
+        ffmpeg=_FakeFFmpeg(),
     )
     lifecycle = WorkflowLifecycle(workflow_db)
     workflow_limiter = asyncio.Semaphore(1)
@@ -262,18 +270,29 @@ async def e2e_setup(tmp_settings: Settings):
         base_resolver,
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
-        presets_store=presets,
         uploaded_images=images_db,
         generated_images=generated_db,
     )
-    yield {
-        "controller": controller,
-        "queue": queue,
-        "workflow_db": workflow_db,
-        "settings": settings,
-        "kie": kie,
-        "handler": handler,
-    }
+
+    async def _fake_concat(_steps, output_dir: Path, *, ffmpeg: object) -> Path:
+        final_video = output_dir / "final.mp4"
+        final_audio = output_dir / "final_audio.mp3"
+        final_video.write_bytes(b"final-video")
+        final_audio.write_bytes(b"final-audio")
+        return final_video
+
+    with patch(
+        "kie_avatar_studio.app_layer.workflow_runner.concatenate_workflow_videos",
+        side_effect=_fake_concat,
+    ):
+        yield {
+            "controller": controller,
+            "queue": queue,
+            "workflow_db": workflow_db,
+            "settings": settings,
+            "kie": kie,
+            "handler": handler,
+        }
     await kie.aclose()
 
 
@@ -306,18 +325,21 @@ async def test_e2e_workflow_with_3_step_types_completes(e2e_setup) -> None:
     output_dir = Path(finished.output_dir)
     assert (output_dir / "base.png").is_file(), "base.png debe existir"
     assert (output_dir / "workflow.json").is_file(), "manifest debe existir"
+    assert (output_dir / "final.mp4").is_file()
+    assert (output_dir / "final_audio.mp3").is_file()
 
-    # Step 1 (a-roll): scene.png + audio.mp3 + final.mp4.
+    # Step 1 (a-roll): scene.png + video.mp4.
     step1_dir = output_dir / "step_01_hook_a_roll"
     assert (step1_dir / "scene.png").is_file()
-    assert (step1_dir / "final.mp4").is_file()
-    assert (step1_dir / "audio.mp3").is_file()
+    assert (step1_dir / "video.mp4").is_file()
+    assert not (step1_dir / "audio.mp3").exists()
+    assert not (step1_dir / "final.mp4").exists()
 
-    # Step 2 (b-roll con text): scene.png + audio.mp3 + video.mp4.
+    # Step 2 (b-roll con text): scene.png + video.mp4.
     step2_dir = output_dir / "step_02_b_roll_con_audio"
     assert (step2_dir / "scene.png").is_file()
-    assert (step2_dir / "audio.mp3").is_file()
     assert (step2_dir / "video.mp4").is_file()
+    assert not (step2_dir / "audio.mp3").exists()
     assert not (step2_dir / "final.mp4").exists()
 
     # Step 3 (b-roll silent): solo scene.png + video.mp4.
@@ -332,11 +354,13 @@ async def test_e2e_workflow_with_3_step_types_completes(e2e_setup) -> None:
     assert manifest_data["id"] == workflow.id
     assert len(manifest_data["steps"]) == 3
     assert manifest_data["model_base"] is not None
+    assert manifest_data["outputs"]["video"] == str(output_dir / "final.mp4")
+    assert manifest_data["outputs"]["audio"] == str(output_dir / "final_audio.mp3")
     # Cada step tiene outputs poblados.
     assert "scene_image" in manifest_data["steps"][0]["outputs"]
     assert "video" in manifest_data["steps"][0]["outputs"]
-    assert "audio" in manifest_data["steps"][0]["outputs"]
-    assert "audio" in manifest_data["steps"][1]["outputs"]
+    assert "audio" not in manifest_data["steps"][0]["outputs"]
+    assert "audio" not in manifest_data["steps"][1]["outputs"]
     assert "video" in manifest_data["steps"][1]["outputs"]
 
 
@@ -350,16 +374,9 @@ async def test_e2e_workflow_steps_run_in_parallel(e2e_setup) -> None:
     # respuestas instantáneas no podemos medir tiempo, pero al menos
     # verificamos que TODAS las tareas Kie se crearon (handler.tasks).
     handler = e2e_setup["handler"]
-    # Para 3 steps: 1 base + 1 image scene (step2) + 1 image scene (step3) +
-    # 2 audios (step1, step2) + 1 avatar (step1) + 2 i2v (step2, step3) = 8.
-    # Más liberal: al menos los 3 videos y los 2 audios.
+    # Para 3 steps: 1 base + 2 scene images + 3 VEO = 6 tareas.
     models_called = Counter(t["model"] for t in handler.tasks.values())
-    assert models_called["kling/ai-avatar-pro"] == 1, "1 avatar para a-roll"
-    assert models_called["kling-3.0/video"] == 2, "2 i2v para b-rolls"
-    assert models_called["elevenlabs/text-to-speech-multilingual-v2"] == 2, (
-        "2 TTS para a-roll + b-roll-con-texto (siempre multilingual, nunca turbo)"
-    )
-    # 1 base (GPT Image 2) + 2 scenes (Nano Banana 2, change_scene=True).
+    assert models_called["veo3_fast"] == 3, "todos los steps deben renderizarse con VEO"
     assert models_called["gpt-image-2-text-to-image"] == 1, "1 base"
     assert models_called["nano-banana-2"] == 2, "2 scenes"
 
@@ -374,39 +391,39 @@ async def test_e2e_manifest_updated_throughout_execution(e2e_setup) -> None:
     manifest_data = json.loads((output_dir / "workflow.json").read_text(encoding="utf-8"))
     # progress_summary refleja el estado final.
     assert "3 completados" in manifest_data["progress_summary"]
-    # Cada step terminó con todas las progress keys en 'completed'.
+    # Cada step terminó con todas las progress keys en estado terminal.
     for step in manifest_data["steps"]:
         for value in step["progress"].values():
-            assert value == "completed", f"step {step['step']} progress={step['progress']}"
+            assert value in {"completed", "skipped"}, (
+                f"step {step['step']} progress={step['progress']}"
+            )
 
 
 async def test_e2e_never_uses_turbo_model_even_if_audio_language_set(e2e_setup) -> None:
-    """Incluso si `audio_language='es-419'` está seteado, se debe usar siempre
-    el modelo multilingual-v2 (nunca turbo) por requerimiento del usuario."""
+    """El flujo VEO no debe crear ninguna tarea TTS legacy."""
     controller = e2e_setup["controller"]
     entries = await controller.list_entries(refresh=True)
     workflow = await controller.enqueue_entry(entries[0])
     await _wait_for_terminal(controller, workflow.id, timeout=30.0)
     handler = e2e_setup["handler"]
     tts_models = [t["model"] for t in handler.tasks.values() if "text-to-speech" in t["model"]]
-    # TODAS las llamadas TTS usaron el modelo multilingual-v2 (porque turbo está baneado).
-    assert all("multilingual" in m for m in tts_models), f"TTS models: {tts_models}"
+    assert tts_models == [], f"No debe haber TTS por step en VEO: {tts_models}"
 
 
-async def test_e2e_partially_failed_when_some_steps_fail(
+async def test_e2e_partially_failed_when_some_steps_fail(  # noqa: C901
     tmp_settings: Settings,
 ) -> None:
     """Si algunos steps fallan y otros completan, el workflow queda PARTIALLY_FAILED."""
     _ = tmp_settings  # used via fixture chain below
     settings = tmp_settings.model_copy(update={"poll_interval_seconds": 1})
 
-    # Handler que falla SOLO para tasks de i2v (b-roll).
-    class _FailI2VHandler:
+    # Handler que deja pasar el a-roll (base image) y falla los VEO de b-roll.
+    class _FailBrollVeoHandler:
         def __init__(self) -> None:
             self.task_counter = 0
             self.tasks: dict[str, dict] = {}
 
-        def handle(self, request: httpx.Request) -> httpx.Response:
+        def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
             path = request.url.path
             if path == "/api/file-stream-upload":
                 return httpx.Response(
@@ -421,25 +438,50 @@ async def test_e2e_partially_failed_when_some_steps_fail(
                         }
                     },
                 )
+            if path == "/api/v1/veo/generate":
+                self.task_counter += 1
+                tk = f"tk_{self.task_counter:04d}"
+                body = json.loads(request.content)
+                prompt = str(body.get("prompt", ""))
+                self.tasks[tk] = {
+                    "model": body["model"],
+                    "kind": "veo",
+                    "should_fail": "Una mujer mira a cámara plano medio" not in prompt,
+                }
+                return httpx.Response(200, json={"data": {"taskId": tk}})
+            if path == "/api/v1/veo/record-info":
+                tk = request.url.params.get("taskId")
+                if tk not in self.tasks or self.tasks[tk]["kind"] != "veo":
+                    return httpx.Response(404)
+                if self.tasks[tk]["should_fail"]:
+                    return httpx.Response(
+                        200,
+                        json={"data": {"successFlag": 2, "errorCode": "veo down"}},
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "successFlag": 1,
+                            "response": {"resultUrls": [f"https://tempfile.kie.ai/veo/{tk}.mp4"]},
+                        }
+                    },
+                )
             if path == "/api/v1/jobs/createTask":
                 self.task_counter += 1
                 tk = f"tk_{self.task_counter:04d}"
                 body = json.loads(request.content)
-                if "kling-3.0/video" in body["model"]:
-                    return httpx.Response(400, json={"error": "i2v down"})
-                self.tasks[tk] = {"model": body["model"]}
+                self.tasks[tk] = {"model": body["model"], "kind": "jobs"}
                 return httpx.Response(200, json={"data": {"taskId": tk}})
             if path == "/api/v1/jobs/recordInfo":
                 tk = request.url.params.get("taskId")
-                if tk not in self.tasks:
+                if tk not in self.tasks or self.tasks[tk]["kind"] != "jobs":
                     return httpx.Response(404)
                 model = self.tasks[tk]["model"]
-                if "avatar-pro" in model:
-                    url = f"https://tempfile.kie.ai/avatar/{tk}.mp4"
-                elif "nano-banana" in model:
+                if "nano-banana" in model or "gpt-image" in model:
                     url = f"https://tempfile.kie.ai/img/{tk}.png"
                 else:
-                    url = f"https://tempfile.kie.ai/audio/{tk}.mp3"
+                    url = f"https://tempfile.kie.ai/generic/{tk}.bin"
                 return httpx.Response(
                     200,
                     json={
@@ -454,7 +496,7 @@ async def test_e2e_partially_failed_when_some_steps_fail(
     workflows_dir = settings.workflows_dir
     (workflows_dir / "x.json").write_text(json.dumps(_workflow_json_3_steps()), encoding="utf-8")
 
-    handler = _FailI2VHandler()
+    handler = _FailBrollVeoHandler()
     kie = KieClient(settings)
     await kie._client.aclose()
     kie._client = httpx.AsyncClient(
@@ -473,44 +515,30 @@ async def test_e2e_partially_failed_when_some_steps_fail(
     await image_jobs_db.init()
     workflow_db = WorkflowDB(settings.db_path)
     await workflow_db.init()
-    presets = VoicePresetsStore(settings.presets_dir)
-    await presets.init()
-    await presets.upsert(
-        VoicePreset(id="test_voice", label="Test", voice_id="N2lVS1w4EtoT3dr4eOWO")
-    )
-
     capacity_limiter = asyncio.Semaphore(4)
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=settings,
             client=kie,
             image_jobs_repo=image_jobs_db,
             generated_images_store=generated_db,
             uploaded_images_store=images_db,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=settings,
-            client=kie,
-            audio_jobs_repo=audio_jobs_db,
-            audios_store=audios_db,
-        ),
+        )
     )
     step_runner = WorkflowStepRunner(
         settings,
         kie,
         capacity_limiter,
-        audio_limiter=asyncio.Semaphore(1),
         video_limiter=asyncio.Semaphore(2),
         download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs_db,
         generated_images_store=generated_db,
         runner_factory=runner_factory,
     )
-    manifest_writer = AtomicWorkflowManifestWriter()
+    manifest_writer = AtomicWorkflowManifestWriter(settings.outputs_dir)
     base_resolver = WorkflowBaseResolver(
         settings,
         kie,
-        presets,
         images_db,
         generated_db,
         image_jobs_db,
@@ -521,13 +549,13 @@ async def test_e2e_partially_failed_when_some_steps_fail(
     )
     workflow_runner = WorkflowRunner(
         settings,
-        kie,
         WorkflowRunnerDeps(
             repository=workflow_db,
             manifest_writer=manifest_writer,
             step_runner=step_runner,
             base_resolver=base_resolver,
         ),
+        ffmpeg=_FakeFFmpeg(),
     )
     lifecycle = WorkflowLifecycle(workflow_db)
     queue: QueueManager[WorkflowJob, WorkflowJobUpdated] = QueueManager(
@@ -546,14 +574,13 @@ async def test_e2e_partially_failed_when_some_steps_fail(
         base_resolver,
         scan_loader=lambda: scan_workflows_dir(workflows_dir),
         entry_builder=build_workflow_from_entry,
-        presets_store=presets,
         uploaded_images=images_db,
         generated_images=generated_db,
     )
     entries = await controller.list_entries(refresh=True)
     workflow = await controller.enqueue_entry(entries[0])
     finished = await _wait_for_terminal(controller, workflow.id, timeout=30.0)
-    # 1 step OK (a-roll usa avatar-pro), 2 steps FAIL (b-rolls usan i2v).
+    # 1 step OK (a-roll con base image), 2 steps FAIL (b-rolls vía VEO).
     assert finished.status == WorkflowStatus.PARTIALLY_FAILED
     completed = sum(1 for s in finished.steps if s.status == WorkflowStepStatus.COMPLETED)
     failed = sum(1 for s in finished.steps if s.status == WorkflowStepStatus.FAILED)
@@ -595,14 +622,14 @@ async def test_e2e_workflow_steps_run_sequentially_in_manual_mode(e2e_setup) -> 
     handler = e2e_setup["handler"]
     models_called = Counter(t["model"] for t in handler.tasks.values())
 
-    # Step 1 (a-roll): corre completo -> 1 TTS (multilingual) y 1 avatar-pro.
-    assert models_called["kling/ai-avatar-pro"] == 1
+    # Step 1 (a-roll): corre completo -> 1 VEO.
+    assert models_called["veo3_fast"] == 1
     # Step 2 (b-roll): genera su scene_image con Nano Banana 2 y de inmediato lanza
     # StepAwaitingApprovalSignal.
     # Total llamadas: 1 (base con GPT) + 1 (step 2 scene_image con Nano Banana) = 2.
     # Step 3 nunca arrancó, por lo que NO hay llamadas extras.
     assert models_called["gpt-image-2-text-to-image"] == 1, "1 base"
     assert models_called["nano-banana-2"] == 1, "1 step 2 scene_image"
-    # El video i2v de Kling para step 2 y step 3 NO se debió llamar (step 2 pausó antes
-    # del render, step 3 ni arrancó).
-    assert models_called["kling-3.0/video"] == 0
+    # Los VEO de step 2/3 NO se debieron llamar (step 2 pausó antes del render,
+    # step 3 ni arrancó).
+    assert models_called["veo3_fast"] == 1

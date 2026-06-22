@@ -1,19 +1,29 @@
 # Kie Avatar Studio - Spec del proyecto
 
-Documento maestro. Léelo de arriba a abajo antes de tocar código.  
-Última revisión: 2026-05-31
+Documento maestro. Léelo de arriba a abajo antes de tocar código. Última
+revisión: 2026-06-15
 
 ---
 
 ## 1. Propósito
 
-App local en Python con interfaz **TUI (Textual)** para automatizar producción de videos con avatar/lip-sync usando las APIs de **Kie.ai**:
+App local en Python con interfaz **TUI (Textual)** para automatizar producción
+de video con las APIs de **Kie.ai**. Hoy conviven dos pipelines:
 
 ```text
+video manual clásico
 script + imagen + voz + prompt  -->  audio TTS + video Kling Avatar
+
+workflow v2.0.0
+modelo base + escenas + prompt  -->  VEO 3.1 (audio nativo)
+                                  -->  concat local + extracción de audio
+                                  -->  voice changer opcional (ElevenLabs)
 ```
 
-Optimizada para correr en una máquina personal sin exponer la API key, soportar **lotes** y **paralelismo controlado**, mantener un **historial persistente**, y servir de base reutilizable para una futura UI web/Electron sin reescribir la lógica.
+Optimizada para correr en una máquina personal sin exponer la API key, soportar
+**lotes** y **paralelismo controlado**, mantener un **historial persistente**, y
+servir de base reutilizable para una futura UI web/Electron sin reescribir la
+lógica.
 
 ---
 
@@ -21,19 +31,23 @@ Optimizada para correr en una máquina personal sin exponer la API key, soportar
 
 ### Objetivos
 
-- Crear y ejecutar un job de video punta a punta sin intervención manual entre pasos.
+- Crear y ejecutar un job de video punta a punta sin intervención manual entre
+  pasos.
 - Procesar varios jobs en cola con un límite configurable de paralelismo.
 - Persistir cada job y su estado en SQLite local.
 - Mostrar progreso live y logs por job.
 - Soportar procesamiento por lotes desde una carpeta `batch_jobs/`.
-- Hacer fácil sustituir la TUI por otra UI (web, Electron) sin cambiar la lógica de negocio.
+- Hacer fácil sustituir la TUI por otra UI (web, Electron) sin cambiar la lógica
+  de negocio.
 
 ### No-objetivos (por ahora)
 
 - Servidor multi-usuario o multi-tenant.
 - Autenticación por usuario.
 - UI web/Electron en la fase 1.
-- Edición de video / post-procesamiento (mux, subtítulos, etc.).
+- Edición manual tipo timeline / subtítulos / color grading. El post-proceso
+  automático de workflows (concat + extracción de audio + voice changer) sí
+  forma parte del producto.
 - Callbacks HTTP de Kie (se hace polling).
 
 ---
@@ -50,10 +64,25 @@ audio duración max      : 5 min
 audio formatos          : audio/mpeg, audio/wav, audio/x-wav, audio/aac, audio/mp4, audio/ogg
 modelo TTS              : elevenlabs/text-to-speech-multilingual-v2
 modelo Avatar           : kling/ai-avatar-pro
+modelos workflow video  : veo3, veo3_fast, veo3_lite
 endpoint upload         : POST https://kieai.redpandaai.co/api/file-stream-upload
 endpoint createTask     : POST https://api.kie.ai/api/v1/jobs/createTask
-endpoint recordInfo     : GET  https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<id>  (formato exacto a confirmar)
+endpoint recordInfo     : GET  https://api.kie.ai/api/v1/jobs/recordInfo?taskId=<id>
+endpoint veo generate   : POST https://api.kie.ai/api/v1/veo/generate
+endpoint veo polling    : GET  https://api.kie.ai/api/v1/veo/record-info?taskId=<id>
+endpoint sts directo    : POST https://api.elevenlabs.io/v1/speech-to-speech/<voice_id>
 ```
+
+Notas workflow v2.0.0:
+
+- `POST /api/v1/veo/generate` usa endpoints propios de VEO; **no** pasa por
+  `/jobs/createTask`.
+- Polling VEO usa `data.successFlag` (`0=generando`, `1=success`, `2=failed`,
+  `3=upstream failed`) y extrae el MP4 desde `data.response.resultUrls[]`.
+- El schema JSON v2 introduce `pre_settings.veo`, `pre_settings.voice_changer` y
+  `run[].attached`.
+- `audio_language` e `i2v_duration_seconds` quedan deprecated y el loader los
+  conserva solo por backward compat.
 
 Polling sugerido:
 
@@ -69,12 +98,17 @@ TASK_TIMEOUT_SECONDS=1800
 ### 4.1 Principios
 
 - **Capas claras**: la TUI no conoce httpx ni Kie; el dominio no conoce SQLite.
-- **Asíncrono de punta a punta** (`asyncio` + `httpx.AsyncClient` + `aiosqlite`).
-- **Inyección por composición**: las dependencias (`KieClient`, `JobsDB`) se pasan al `JobRunner` y `QueueManager`; no hay singletons globales.
+- **Asíncrono de punta a punta** (`asyncio` + `httpx.AsyncClient` +
+  `aiosqlite`).
+- **Inyección por composición**: las dependencias (`KieClient`, `JobsDB`) se
+  pasan al `JobRunner` y `QueueManager`; no hay singletons globales.
 - **Eventos > polling de UI**: la cola emite eventos que la TUI escucha.
-- **Idempotencia**: cada job tiene un `id` único y todos los upserts en DB se hacen por `id`.
-- **Reentrancia**: si la app se cae, al reabrir debe poder reanudar jobs `WAITING_*`.
-- **Sin secretos en código**: API keys vienen de `.env` validado con pydantic-settings.
+- **Idempotencia**: cada job tiene un `id` único y todos los upserts en DB se
+  hacen por `id`.
+- **Reentrancia**: si la app se cae, al reabrir debe poder reanudar jobs
+  `WAITING_*`.
+- **Sin secretos en código**: API keys vienen de `.env` validado con
+  pydantic-settings.
 
 ### 4.2 Capas
 
@@ -198,7 +232,8 @@ KieAvatarStudio/
     └── test_queue_manager.py
 ```
 
-Nota: el esqueleto actual usa rutas planas (`kie_client.py`, `job_runner.py`, etc.). En la primera tarea del Roadmap se reorganiza a este layout.
+Nota: el esqueleto actual usa rutas planas (`kie_client.py`, `job_runner.py`,
+etc.). En la primera tarea del Roadmap se reorganiza a este layout.
 
 ---
 
@@ -233,13 +268,12 @@ Reglas:
 - Solo `JobRunner` muta `status` de un `VideoJob`.
 - Las transiciones siempre se persisten antes de continuar (write-ahead).
 - Cancelación: la UI delega a `queue.cancel(id)` que consulta
-  `VideoJobLifecycle.is_cancellable` (rechaza `downloading` y los
-  terminales).
+  `VideoJobLifecycle.is_cancellable` (rechaza `downloading` y los terminales).
 
 ### 6.1.bis `AudioJobStatus` (state machine AudioJob)
 
-Cola separada introducida en ADR-0007. State machine más simple
-porque no hay upload de imagen ni download local (solo URL Kie).
+Cola separada introducida en ADR-0007. State machine más simple porque no hay
+upload de imagen ni download local (solo URL Kie).
 
 ```text
 queued
@@ -259,17 +293,17 @@ queued
 Reglas:
 
 - Solo `AudioJobRunner` muta `status` de un `AudioJob`.
-- Reanudable: `QUEUED | POLLING`. `CREATING` queda fuera porque sin
-  `task_id` persistido no podemos saber si el POST llegó a Kie →
-  al arrancar se barren a `FAILED` con error "indeterminado".
-- Resume idempotente: si `task_id` ya está poblado, el runner reusa
-  ese task en Kie en vez de crear uno nuevo (evita doble cobro).
-- Idempotencia de salida: el `GeneratedAudio` final usa el mismo
-  `id` que el `AudioJob` → un reintento exitoso hace upsert sobre
-  la misma fila en `generated_audios`.
-- Las dos colas (`queue` para video, `audio_queue` para audio)
-  comparten un único `asyncio.Semaphore(max_parallel_jobs)` →
-  el límite global de paralelismo SIEMPRE se respeta.
+- Reanudable: `QUEUED | POLLING`. `CREATING` queda fuera porque sin `task_id`
+  persistido no podemos saber si el POST llegó a Kie → al arrancar se barren a
+  `FAILED` con error "indeterminado".
+- Resume idempotente: si `task_id` ya está poblado, el runner reusa ese task en
+  Kie en vez de crear uno nuevo (evita doble cobro).
+- Idempotencia de salida: el `GeneratedAudio` final usa el mismo `id` que el
+  `AudioJob` → un reintento exitoso hace upsert sobre la misma fila en
+  `generated_audios`.
+- Las dos colas (`queue` para video, `audio_queue` para audio) comparten un
+  único `asyncio.Semaphore(max_parallel_jobs)` → el límite global de paralelismo
+  SIEMPRE se respeta.
 
 ### 6.2 `VideoJob`
 
@@ -316,7 +350,8 @@ class JobLog:
     message: str
 ```
 
-`QueueManager` mantiene `add_listener(cb)` y los emite tras cada cambio de estado.
+`QueueManager` mantiene `add_listener(cb)` y los emite tras cada cambio de
+estado.
 
 ### 6.4 `UploadedImage` (galería persistente — ADR-0005)
 
@@ -375,10 +410,12 @@ serializa como JSON nullable. Validaciones en `policies.validate_tts_script`,
 `validate_voice_id(allow_custom)`, `validate_voice_settings`.
 
 Retención (política Kie):
+
 - `KIE_GENERATED_RETENTION_DAYS = 14` — audios TTS y videos.
 - `KIE_UPLOAD_RETENTION_HOURS = 24` — uploads (imágenes via file-stream-upload).
-- `KIE_FILE_RETENTION_DAYS = 14` — alias backwards-compat usado por `UploadedImage`
-  hasta migración pendiente (ver ADR-0006 §"Aclaración sobre retención").
+- `KIE_FILE_RETENTION_DAYS = 14` — alias backwards-compat usado por
+  `UploadedImage` hasta migración pendiente (ver ADR-0006 §"Aclaración sobre
+  retención").
 
 ---
 
@@ -424,9 +461,11 @@ async def delete(job_id: str) -> None: ...
 
 Reglas:
 
-- `aiosqlite` con `PRAGMA journal_mode = WAL` para no bloquear lectura/escritura concurrente.
+- `aiosqlite` con `PRAGMA journal_mode = WAL` para no bloquear lectura/escritura
+  concurrente.
 - Cada operación abre/cierra su conexión (simple y seguro para esta escala).
-- Migraciones manuales por ahora: cualquier cambio de esquema añade columnas con `ALTER TABLE`.
+- Migraciones manuales por ahora: cualquier cambio de esquema añade columnas con
+  `ALTER TABLE`.
 
 ---
 
@@ -440,12 +479,26 @@ class KieClient:
     async def create_tts_task(text, voice, model="elevenlabs/text-to-speech-multilingual-v2") -> KieTaskCreated
     async def create_avatar_task(image_url, audio_url, prompt, model="kling/ai-avatar-pro") -> KieTaskCreated
     async def get_task_detail(task_id) -> dict
+    async def create_veo_video_task(
+        prompt,
+        *,
+        image_urls=None,
+        model="veo3_fast",
+        generation_type="FIRST_AND_LAST_FRAMES_2_VIDEO",
+        aspect_ratio="9:16",
+        resolution="720p",
+        duration=8,
+        enable_translation=True,
+        watermark=None,
+    ) -> KieTaskCreated
+    async def get_veo_task_detail(task_id) -> dict
     async def download_file(url, output_path) -> Path
 ```
 
 Reglas:
 
-- `httpx.AsyncClient` con `timeout=60s` (conexión 15s) y `Authorization: Bearer`.
+- `httpx.AsyncClient` con `timeout=60s` (conexión 15s) y
+  `Authorization: Bearer`.
 - Retries simples para 5xx con backoff exponencial (3 intentos, base 1s).
 - Errores 4xx no se retryean; se propagan como `KieClientError`.
 - Streaming en `download_file` para no cargar el video en memoria.
@@ -515,7 +568,119 @@ async def drain() -> None
 def add_listener(cb: Callable[[VideoJob], None]) -> None
 ```
 
-- Recuperación al arranque: cargar de DB todos los jobs en estados `WAITING_AUDIO|WAITING_VIDEO|CREATING_*|DOWNLOADING` y re-encolarlos (idempotente, el runner sabe re-pedir el `task_id` si ya existe).
+- Recuperación al arranque: cargar de DB todos los jobs en estados
+  `WAITING_AUDIO|WAITING_VIDEO|CREATING_*|DOWNLOADING` y re-encolarlos
+  (idempotente, el runner sabe re-pedir el `task_id` si ya existe).
+
+### 10.1 Automatización (workflows v2.0.0)
+
+La automatización dejó de dividir los steps entre Avatar Pro, Kling 3.0 y TTS
+por separado. Desde **v2.0.0**, todos los steps renderizan video con **VEO 3.1**
+y el audio se trata como una preocupación de post-proceso.
+
+#### State machine del workflow
+
+```text
+WorkflowJob
+queued
+  └─► preparing_base
+        └─► running
+              ├─► awaiting_approval      (solo si scene_approval_mode=manual)
+              ├─► completed
+              ├─► partially_failed
+              ├─► failed
+              └─► cancelled
+```
+
+#### Flow de un step
+
+```text
+WorkflowStep
+queued
+  └─► preparing
+        └─► scene_image opcional (Nano Banana / reuso de base)
+              └─► awaiting_approval?
+                    └─► rendering (VEO 3.1)
+                          └─► downloading (video.mp4)
+                                └─► completed | failed | cancelled
+```
+
+Reglas:
+
+- `WorkflowStepRunner` unifica el runtime en `_run_veo()`; ya no existen ramas
+  separadas por `a-roll`/`b-roll` para elegir backend de video.
+- `type=a-roll` y `type=b-roll` siguen existiendo, pero ahora describen el **rol
+  editorial** de la escena (talento vs recurso), no el motor de render.
+- El prompt del step alimenta directamente a VEO. Cuando la escena necesita una
+  `scene_image`, primero se genera/reutiliza la imagen y luego se pasa en
+  `imageUrls[]` con `generationType=FIRST_AND_LAST_FRAMES_2_VIDEO`.
+- `attached=true` (default) indica que el `video.mp4` del step entra al reel
+  final; `attached=false` lo deja solo como output individual.
+
+#### Post-proceso al terminar los steps
+
+```text
+steps completed
+  └─► concatenar videos attached         -> outputs/<wf_id>/final.mp4
+        └─► extraer audio con FFmpeg     -> outputs/<wf_id>/final_audio.mp3
+              └─► speech-to-speech opcional
+                    (pre_settings.voice_changer)
+                    -> outputs/<wf_id>/voice_changed_audio.mp3
+```
+
+Detalles del pipeline:
+
+- La concatenación usa FFmpeg local y omite steps no attached o sin `video.mp4`
+  descargado.
+- Si hay un solo clip attached, se copia tal cual a `final.mp4` y luego se
+  extrae su audio igualmente.
+- `pre_settings.voice_changer` apunta a ElevenLabs directo (`speech-to-speech`)
+  y trabaja sobre `final_audio.mp3`, nunca por step.
+- Cada transición persiste DB + manifest atómico (`workflow.json`) antes de
+  notificar a la UI.
+
+#### Schema JSON v2 resumido
+
+```json
+{
+  "pre_settings": {
+    "model_creation": { "method": "prompt" },
+    "veo": {
+      "model": "veo3_fast",
+      "aspect_ratio": "9:16",
+      "resolution": "720p",
+      "duration": 8,
+      "enable_translation": true,
+      "watermark": null
+    },
+    "voice_changer": {
+      "voice_id": "voice_123",
+      "model_id": "eleven_multilingual_sts_v2",
+      "remove_background_noise": true,
+      "output_format": "mp3_44100_128",
+      "voice_settings": {
+        "stability": 0.75,
+        "similarity_boost": 0.85,
+        "style": 0.0,
+        "speed": 1.0
+      }
+    }
+  },
+  "run": [
+    {
+      "step": 1,
+      "type": "a-roll",
+      "attached": true,
+      "prompt": "Persona a cámara, audio nativo VEO"
+    }
+  ]
+}
+```
+
+Campos deprecated aceptados solo para compatibilidad de carga:
+
+- `pre_settings.audio_language`
+- `pre_settings.i2v_duration_seconds`
 
 ---
 
@@ -580,11 +745,14 @@ Archivo único `kie_avatar_studio/ui/styles.tcss`. No CSS inline en cada widget.
 KIE_API_KEY=
 KIE_API_BASE=https://api.kie.ai
 KIE_UPLOAD_BASE=https://kieai.redpandaai.co
+ELEVENLABS_API_KEY=
 MAX_PARALLEL_JOBS=2
+MAX_PARALLEL_VEO_JOBS=1
 POLL_INTERVAL_SECONDS=10
 TASK_TIMEOUT_SECONDS=1800
 DEFAULT_VOICE=EkK5I93UQWFDigLMpZcX
 DEFAULT_PROMPT=Mirada a cámara, expresión natural, gestos suaves, tono confiado.
+FFMPEG_PATH=ffmpeg
 DATA_DIR=./data
 OUTPUTS_DIR=./outputs
 INPUTS_DIR=./inputs
@@ -603,9 +771,11 @@ Reglas:
 
 ## 14. Logging
 
-- `loguru` con sink doble: stderr + archivo rotado `logs/kie-avatar-studio.log` (10 MB, 14 días).
+- `loguru` con sink doble: stderr + archivo rotado `logs/kie-avatar-studio.log`
+  (10 MB, 14 días).
 - Cada log de job incluye `job_id` como `extra`.
-- `LOG_LEVEL` configurable. En `DEBUG` se loguean payloads (truncados a 1 KB) sin secretos.
+- `LOG_LEVEL` configurable. En `DEBUG` se loguean payloads (truncados a 1 KB)
+  sin secretos.
 
 ---
 
@@ -636,14 +806,17 @@ Cobertura mínima en fase 1:
 
 - `domain/models`, `domain/policies` 100 %.
 - `infra/db`: init, upsert, list_recent, list_by_status, get, delete.
-- `infra/kie_client`: cada método con `MockTransport` (incluye 200 / 4xx / 5xx + retry).
-- `app_layer/job_runner`: happy path + cada rama de fallo (validation, upload error, timeout, download error).
+- `infra/kie_client`: cada método con `MockTransport` (incluye 200 / 4xx / 5xx +
+  retry).
+- `app_layer/job_runner`: happy path + cada rama de fallo (validation, upload
+  error, timeout, download error).
 - `app_layer/queue_manager`: semáforo respetado, cancel, retry, drain.
 
 Reglas:
 
 - Cero llamadas reales a Kie en CI; siempre mockear.
-- Fixtures en `tests/conftest.py`: `tmp_settings`, `mock_kie_client`, `inmemory_db`.
+- Fixtures en `tests/conftest.py`: `tmp_settings`, `mock_kie_client`,
+  `inmemory_db`.
 
 ---
 
@@ -661,18 +834,22 @@ Reglas:
 ## 18. Seguridad
 
 - `.env` jamás se versiona (ya está en `.gitignore`).
-- `presets/` puede ir a Git; nunca metas `voice_id` privados ahí si lo abrirás público.
+- `presets/` puede ir a Git; nunca metas `voice_id` privados ahí si lo abrirás
+  público.
 - `data/jobs.db` es local; si se borra, se pierde el historial.
 - En logs, los `Authorization` se redactean (`Bearer ***`).
-- Validar siempre `output_path` para que no escape de `OUTPUTS_DIR` (path traversal en batch).
+- Validar siempre `output_path` para que no escape de `OUTPUTS_DIR` (path
+  traversal en batch).
 
 ---
 
 ## 19. Estrategia de despliegue / portabilidad
 
 - Único requisito: Python 3.11+ y `pip install -r requirements.txt`.
-- Sin Docker para fase 1. Se puede agregar `Dockerfile` después si se necesita correr en VPS.
-- `pyproject.toml` ya define `kie-avatar-studio` como entry-point; opcionalmente `pipx install .`.
+- Sin Docker para fase 1. Se puede agregar `Dockerfile` después si se necesita
+  correr en VPS.
+- `pyproject.toml` ya define `kie-avatar-studio` como entry-point; opcionalmente
+  `pipx install .`.
 
 ---
 
@@ -684,7 +861,8 @@ Ver `docs/ROADMAP.md`.
 
 ## 21. Decisiones (ADRs)
 
-Cada decisión arquitectónica grande va en `docs/adr/NNNN-titulo.md`. Tres iniciales:
+Cada decisión arquitectónica grande va en `docs/adr/NNNN-titulo.md`. Tres
+iniciales:
 
 ```text
 0001-async-stack.md      -> por qué asyncio + httpx
@@ -705,5 +883,6 @@ Cada decisión arquitectónica grande va en `docs/adr/NNNN-titulo.md`. Tres inic
 - [ ] Pantalla `new_job` funcional.
 - [ ] Pantalla `queue` con live updates.
 - [ ] Pantalla `job_detail` con logs.
-- [ ] BatchLoader procesa `batch_jobs/video_001/` y deja `outputs/video_001/final.mp4`.
+- [ ] BatchLoader procesa `batch_jobs/video_001/` y deja
+      `outputs/video_001/final.mp4`.
 - [ ] README con quickstart y troubleshooting básico.

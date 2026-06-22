@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kie-avatar-studio"
-version = "1.4.0"
+version = "2.0.0"
 description = "TUI local en Python para automatizar generación de videos con Kie.ai (File Upload + ElevenLabs TTS + Kling Avatar Pro)"
 readme = "README.md"
 requires-python = ">=3.11"

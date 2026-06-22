@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import stat
 import sys
@@ -51,6 +53,15 @@ async def test_upsert_and_get(store: KeysStore) -> None:
     fetched = await store.get("dev")
     assert fetched is not None
     assert fetched.label == "Cuenta dev"
+
+
+async def test_upsert_roundtrips_last_known_credits(store: KeysStore) -> None:
+    key = _key()
+    key.last_known_credits = 123.45
+    await store.upsert(key)
+    fetched = await store.get("dev")
+    assert fetched is not None
+    assert fetched.last_known_credits == 123.45
 
 
 async def test_upsert_updates_existing(store: KeysStore) -> None:

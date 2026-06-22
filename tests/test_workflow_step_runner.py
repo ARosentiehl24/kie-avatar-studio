@@ -1,4 +1,4 @@
-"""Tests del `WorkflowStepRunner` con los 3 paths (a-roll / b-roll / b-roll silent)."""
+"""Tests del `WorkflowStepRunner` unificado sobre VEO 3.1."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ import httpx
 import pytest
 
 from kie_avatar_studio.app_layer.runner_factories import (
-    AudioRunnerDeps,
     ImageRunnerDeps,
     WorkflowRunnerFactory,
 )
 from kie_avatar_studio.app_layer.workflow_execution_context import (
     WorkflowExecutionContext,
+    build_veo_prompt,
 )
 from kie_avatar_studio.app_layer.workflow_step_runner import (
     A_ROLL_VIDEO_FILENAME,
@@ -32,14 +32,13 @@ from kie_avatar_studio.domain.models import (
     ImageAssetRef,
     SceneApprovalMode,
     StepType,
+    VeoSettings,
     VoiceSettings,
     WorkflowProgressKey,
     WorkflowProgressStatus,
     WorkflowStep,
     WorkflowStepStatus,
 )
-from kie_avatar_studio.infra.audio_jobs_db import AudioJobsDB
-from kie_avatar_studio.infra.audios_db import AudiosDB
 from kie_avatar_studio.infra.generated_images_db import GeneratedImagesDB
 from kie_avatar_studio.infra.image_jobs_db import ImageJobsDB
 from kie_avatar_studio.infra.images_db import ImagesDB
@@ -59,11 +58,15 @@ class _MockKieHandler:
         self.uploaded_files: list[Path] = []
         self.requests: list[httpx.Request] = []
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
         self.requests.append(request)
         path = request.url.path
         if path == "/api/file-stream-upload":
             return self._handle_upload(request)
+        if path == "/api/v1/veo/generate":
+            return self._handle_create_veo_task(request)
+        if path == "/api/v1/veo/record-info":
+            return self._handle_veo_record_info(request)
         if path == "/api/v1/jobs/createTask":
             return self._handle_create_task(request)
         if path == "/api/v1/jobs/recordInfo":
@@ -91,12 +94,16 @@ class _MockKieHandler:
         self.task_counter += 1
         task_id = f"tk_{self.task_counter:04d}"
         body = json.loads(request.content)
-        self.tasks[task_id] = {"model": body["model"], "input": body.get("input", {})}
+        self.tasks[task_id] = {
+            "model": body["model"],
+            "input": body.get("input", {}),
+            "kind": "jobs",
+        }
         return httpx.Response(200, json={"data": {"taskId": task_id}})
 
     def _handle_record_info(self, request: httpx.Request) -> httpx.Response:
         task_id = request.url.params.get("taskId")
-        if task_id is None or task_id not in self.tasks:
+        if task_id is None or task_id not in self.tasks or self.tasks[task_id]["kind"] != "jobs":
             return httpx.Response(404, json={"error": "not found"})
         model = self.tasks[task_id]["model"]
         result_url = self._result_url_for_model(model, task_id)
@@ -106,6 +113,27 @@ class _MockKieHandler:
                 "data": {
                     "state": "success",
                     "resultJson": json.dumps({"resultUrls": [result_url]}),
+                }
+            },
+        )
+
+    def _handle_create_veo_task(self, request: httpx.Request) -> httpx.Response:
+        self.task_counter += 1
+        task_id = f"tk_{self.task_counter:04d}"
+        body = json.loads(request.content)
+        self.tasks[task_id] = {"model": body["model"], "body": body, "kind": "veo"}
+        return httpx.Response(200, json={"data": {"taskId": task_id}})
+
+    def _handle_veo_record_info(self, request: httpx.Request) -> httpx.Response:
+        task_id = request.url.params.get("taskId")
+        if task_id is None or task_id not in self.tasks or self.tasks[task_id]["kind"] != "veo":
+            return httpx.Response(404, json={"error": "not found"})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "successFlag": 1,
+                    "response": {"resultUrls": [f"https://tempfile.kie.ai/veo/{task_id}.mp4"]},
                 }
             },
         )
@@ -147,10 +175,6 @@ async def step_runner_setup(
 ) -> tuple[WorkflowStepRunner, asyncio.Semaphore, Path]:
     images_db = ImagesDB(tmp_settings.db_path)
     await images_db.init()
-    audios_db = AudiosDB(tmp_settings.db_path)
-    await audios_db.init()
-    audio_jobs = AudioJobsDB(tmp_settings.db_path)
-    await audio_jobs.init()
     image_jobs = ImageJobsDB(tmp_settings.db_path)
     await image_jobs.init()
     generated = GeneratedImagesDB(tmp_settings.db_path)
@@ -169,29 +193,21 @@ async def step_runner_setup(
         )
     )
     image_limiter = asyncio.Semaphore(2)
-    audio_limiter = asyncio.Semaphore(1)
     video_limiter = asyncio.Semaphore(2)
     download_limiter = asyncio.Semaphore(2)
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=tmp_settings,
             client=kie_with_handler,
             image_jobs_repo=image_jobs,
             generated_images_store=generated,
             uploaded_images_store=images_db,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=tmp_settings,
-            client=kie_with_handler,
-            audio_jobs_repo=audio_jobs,
-            audios_store=audios_db,
-        ),
+        )
     )
     runner = WorkflowStepRunner(
         tmp_settings,
         kie_with_handler,
         image_limiter,
-        audio_limiter=audio_limiter,
         video_limiter=video_limiter,
         download_limiter=download_limiter,
         image_jobs_repo=image_jobs,
@@ -270,23 +286,15 @@ async def test_a_roll_path_creates_final_mp4_and_separate_audio(
     assert result.video_path is not None
     assert result.video_path.endswith(A_ROLL_VIDEO_FILENAME)
     assert result.scene_image_path is not None
-    # A-roll conserva audio embebido en final.mp4 y además descarga audio.mp3 para post.
-    assert result.audio_path is not None
-    assert result.audio_path.endswith(AUDIO_FILENAME)
-    # Pero el AudioJob SÍ se creó y persistió (visible en pantalla Audios).
-    assert result.audio_job_id is not None
-    # Final mp4 existe en filesystem.
+    # VEO genera el audio nativo dentro del MP4; no hay artefactos TTS aparte.
+    assert result.audio_path is None
+    assert result.audio_job_id is None
     assert Path(result.video_path).is_file()
-    # Audio TTS separado existe en filesystem.
-    assert Path(result.audio_path).is_file()
-    # Scene image existe en filesystem.
     assert Path(result.scene_image_path).is_file()
-    # Progress completo.
     assert result.progress[WorkflowProgressKey.SCENE_IMAGE] == WorkflowProgressStatus.COMPLETED
-    assert result.progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.COMPLETED
+    assert result.progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.SKIPPED
     assert result.progress[WorkflowProgressKey.VIDEO] == WorkflowProgressStatus.COMPLETED
     assert result.progress[WorkflowProgressKey.DOWNLOAD] == WorkflowProgressStatus.COMPLETED
-    # NO debe tener keys de b-roll.
     assert WorkflowProgressKey.DOWNLOAD_VIDEO not in result.progress
     assert WorkflowProgressKey.DOWNLOAD_AUDIO not in result.progress
 
@@ -305,18 +313,16 @@ async def test_b_roll_with_text_downloads_video_and_audio_separately(
     assert result.status == WorkflowStepStatus.COMPLETED
     assert result.video_path is not None
     assert result.video_path.endswith(B_ROLL_VIDEO_FILENAME)
-    # B-roll con text: SÍ descarga audio aparte.
-    assert result.audio_path is not None
-    assert result.audio_path.endswith(AUDIO_FILENAME)
+    assert result.audio_path is None
+    assert result.audio_job_id is None
     assert result.scene_image_path is not None
-    # Filesystem: 3 archivos en el step dir.
     step_dir = Path(result.video_path).parent
     assert (step_dir / SCENE_IMAGE_FILENAME).is_file()
-    assert (step_dir / AUDIO_FILENAME).is_file()
     assert (step_dir / B_ROLL_VIDEO_FILENAME).is_file()
-    # Progress keys de b-roll-con-text.
+    assert not (step_dir / AUDIO_FILENAME).exists()
+    assert result.progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.SKIPPED
     assert result.progress[WorkflowProgressKey.DOWNLOAD_VIDEO] == WorkflowProgressStatus.COMPLETED
-    assert result.progress[WorkflowProgressKey.DOWNLOAD_AUDIO] == WorkflowProgressStatus.COMPLETED
+    assert result.progress[WorkflowProgressKey.DOWNLOAD_AUDIO] == WorkflowProgressStatus.SKIPPED
 
 
 async def test_b_roll_silent_only_creates_video_no_audio(
@@ -333,9 +339,8 @@ async def test_b_roll_silent_only_creates_video_no_audio(
     assert result.status == WorkflowStepStatus.COMPLETED
     assert result.video_path is not None
     assert result.audio_path is None
-    assert result.audio_job_id is None  # NO se creó audio job
+    assert result.audio_job_id is None
     assert result.scene_image_path is not None
-    # Progress: solo scene_image + video + download (sin audio key).
     assert WorkflowProgressKey.AUDIO not in result.progress
 
 
@@ -357,7 +362,7 @@ async def test_scene_image_path_outside_outputs_fails_without_creating_dir(
     assert not (outside_output / "step_03_product_reveal").exists()
 
 
-def test_b_roll_output_paths_outside_outputs_fails_before_mkdir(
+async def test_video_output_path_outside_outputs_fails_before_mkdir(
     step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
     tmp_path: Path,
 ) -> None:
@@ -366,8 +371,8 @@ def test_b_roll_output_paths_outside_outputs_fails_before_mkdir(
     step = _b_roll_with_text_step()
     context = _make_context(outside_output)
 
-    with pytest.raises(WorkflowStepError, match="output b-roll fuera"):
-        runner._b_roll_output_paths(step, context, with_audio=True)
+    with pytest.raises(WorkflowStepError, match="output video fuera"):
+        await runner._video_output_path(step, context)
 
     assert not (outside_output / "step_02_pain_b_roll").exists()
 
@@ -428,6 +433,95 @@ async def test_transitions_callback_invoked_multiple_times(
     assert WorkflowStepStatus.COMPLETED in transitions
 
 
+async def test_veo_payload_uses_context_settings(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    mock_handler: _MockKieHandler,
+) -> None:
+    runner, _limiter, output_dir = step_runner_setup
+    step = _a_roll_step()
+    context = _make_context(output_dir)
+    context.veo_settings = VeoSettings(
+        model="veo3_lite",
+        aspect_ratio="16:9",
+        resolution="1080p",
+        duration=6,
+        enable_translation=False,
+        watermark="KIE",
+    )
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    await runner.run(step, context, on_transition)
+    veo_calls = [task["body"] for task in mock_handler.tasks.values() if task["kind"] == "veo"]
+    assert len(veo_calls) == 1
+    body = veo_calls[0]
+    assert body["prompt"] == build_veo_prompt(step)
+    assert body["imageUrls"] == ["https://tempfile.kie.ai/base.png"]
+    assert body["model"] == "veo3_lite"
+    assert body["generationType"] == "FIRST_AND_LAST_FRAMES_2_VIDEO"
+    assert body["aspect_ratio"] == "16:9"
+    assert body["resolution"] == "1080p"
+    assert body["duration"] == 6
+    assert body["enableTranslation"] is False
+    assert body["watermark"] == "KIE"
+
+
+async def test_step_runner_runs_veo_create_poll_and_download_flow(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    mock_handler: _MockKieHandler,
+) -> None:
+    runner, _limiter, output_dir = step_runner_setup
+    step = _a_roll_step()
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    result = await runner.run(step, _make_context(output_dir), on_transition)
+
+    assert result.status == WorkflowStepStatus.COMPLETED
+    assert result.video_task_id is not None
+    veo_paths = [
+        request.url.path
+        for request in mock_handler.requests
+        if request.url.path in {"/api/v1/veo/generate", "/api/v1/veo/record-info"}
+        or request.url.path.endswith(f"/veo/{result.video_task_id}.mp4")
+    ]
+    assert veo_paths == [
+        "/api/v1/veo/generate",
+        "/api/v1/veo/record-info",
+        f"/veo/{result.video_task_id}.mp4",
+    ]
+
+
+async def test_step_runner_preserves_attached_flag_through_pipeline(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+) -> None:
+    runner, _limiter, output_dir = step_runner_setup
+    step = WorkflowStep(
+        step=4,
+        scene_name="Detached B Roll",
+        scene_slug="detached_b_roll",
+        type=StepType.B_ROLL,
+        change_scene=True,
+        scene_description="Plano detalle del producto",
+        prompt="Slow motion product close-up",
+        text="Narración opcional",
+        attached=False,
+    )
+    attached_values: list[bool] = []
+
+    async def on_transition(s: WorkflowStep) -> None:
+        attached_values.append(s.attached)
+
+    result = await runner.run(step, _make_context(output_dir), on_transition)
+
+    assert result.status == WorkflowStepStatus.COMPLETED
+    assert result.attached is False
+    assert attached_values
+    assert attached_values == [False] * len(attached_values)
+
+
 async def test_failed_step_marks_remaining_progress_as_failed(tmp_settings: Settings) -> None:
     """Si el step falla a mitad, las keys de progress en RUNNING/PENDING
     se marcan FAILED para reflejar el estado real."""
@@ -441,34 +535,23 @@ async def test_failed_step_marks_remaining_progress_as_failed(tmp_settings: Sett
     )
     images_db = ImagesDB(settings.db_path)
     await images_db.init()
-    audios_db = AudiosDB(settings.db_path)
-    await audios_db.init()
-    audio_jobs = AudioJobsDB(settings.db_path)
-    await audio_jobs.init()
     image_jobs = ImageJobsDB(settings.db_path)
     await image_jobs.init()
     generated = GeneratedImagesDB(settings.db_path)
     await generated.init()
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=settings,
             client=client,
             image_jobs_repo=image_jobs,
             generated_images_store=generated,
             uploaded_images_store=images_db,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=settings,
-            client=client,
-            audio_jobs_repo=audio_jobs,
-            audios_store=audios_db,
-        ),
+        )
     )
     runner = WorkflowStepRunner(
         settings,
         client,
         asyncio.Semaphore(2),
-        audio_limiter=asyncio.Semaphore(1),
         video_limiter=asyncio.Semaphore(2),
         download_limiter=asyncio.Semaphore(2),
         image_jobs_repo=image_jobs,
@@ -780,6 +863,7 @@ async def test_include_product_without_change_scene_still_generates_keeping_back
         prompt="Hold the product up",
         text="",
         include_product=True,
+        include_model=True,
         product_prompt="Jar in hand",
     )
 
@@ -794,7 +878,74 @@ async def test_include_product_without_change_scene_still_generates_keeping_back
     assert len(nano_inputs) == 1
     assert len(nano_inputs[0]["image_input"]) == 2
     # El prompt incluye la instrucción de mantener el fondo de la base.
-    assert "Keep the exact same background" in nano_inputs[0]["prompt"]
+    assert "Mantén exactamente el mismo fondo" in nano_inputs[0]["prompt"]
+
+
+async def test_include_product_without_model_uses_product_only_prompt_hint(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    mock_handler: _MockKieHandler,
+) -> None:
+    """Sin modelo (`include_model=false`), Nano Banana debe usar SOLO la ref
+    del producto y el prompt debe explicitar modo "solo producto"."""
+    runner, _limiter, output_dir = step_runner_setup
+    await _seed_product(runner)
+    step = WorkflowStep(
+        step=2,
+        scene_name="Producto solo",
+        scene_slug="producto_solo",
+        type=StepType.B_ROLL,
+        change_scene=False,
+        scene_description="",
+        prompt="Plano detalle del suplemento sobre superficie limpia",
+        text="",
+        include_product=True,
+        include_model=False,
+        product_prompt="Frasco ámbar centrado con etiqueta visible",
+    )
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    result = await runner.run(step, _make_product_context(output_dir), on_transition)
+    assert result.status == WorkflowStepStatus.COMPLETED
+    nano_inputs = _nano_banana_inputs(mock_handler)
+    assert len(nano_inputs) == 1
+    image_input = nano_inputs[0]["image_input"]
+    assert len(image_input) == 1
+    assert image_input == ["https://tempfile.kie.ai/product.png"]
+    assert "Usa únicamente la foto de referencia del producto" in nano_inputs[0]["prompt"]
+    assert "permite interacción humana parcial" in nano_inputs[0]["prompt"]
+    assert "Mantén exactamente el mismo fondo" not in nano_inputs[0]["prompt"]
+
+
+async def test_set_as_base_promotes_generated_scene_for_next_steps(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+) -> None:
+    """Si `set_as_base=true`, el step debe reemplazar la base activa del context."""
+    runner, _limiter, output_dir = step_runner_setup
+    step = WorkflowStep(
+        step=2,
+        scene_name="Cambio de locación",
+        scene_slug="cambio_locacion",
+        type=StepType.B_ROLL,
+        change_scene=True,
+        scene_description="Sala nueva con ventanal",
+        prompt="Plano medio de la modelo en el nuevo entorno",
+        text="",
+        include_model=True,
+        set_as_base=True,
+    )
+    context = _make_product_context(output_dir)
+    original_base_id = context.base_image_ref.id
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    result = await runner.run(step, context, on_transition)
+    assert result.status == WorkflowStepStatus.COMPLETED
+    assert result.bg_image_job_id is not None
+    assert context.base_image_ref.id == result.bg_image_job_id
+    assert context.base_image_ref.id != original_base_id
 
 
 async def test_a_roll_with_product_does_not_pause_in_manual(

@@ -24,7 +24,7 @@ from kie_avatar_studio.domain.models import AudioJob, AudioJobStatus
 from kie_avatar_studio.infra.audio_jobs_db import AudioJobsDB
 
 
-def _build_app(tmp_path: Path) -> KieAvatarStudioApp:
+def _build_app(tmp_path: Path, *, elevenlabs_api_key: str = "") -> KieAvatarStudioApp:
     settings = Settings(
         kie_api_key="test-key",
         data_dir=tmp_path / "data",
@@ -32,6 +32,7 @@ def _build_app(tmp_path: Path) -> KieAvatarStudioApp:
         inputs_dir=tmp_path / "inputs",
         presets_dir=tmp_path / "presets",
         logs_dir=tmp_path / "logs",
+        elevenlabs_api_key=elevenlabs_api_key,
     )
     settings.ensure_dirs()
     app = KieAvatarStudioApp(settings=settings)
@@ -111,14 +112,8 @@ async def test_on_mount_restores_pending_audio_jobs(tmp_path: Path) -> None:
         await app.audio_jobs_db.upsert(job)
         return job
 
+    app.audio_runner.run = fake_run  # type: ignore[method-assign]
     async with app.run_test(size=(120, 40)) as pilot:
-        # Reemplazamos el runner DESPUÉS de mount (cuando ya está cableado)
-        # pero ANTES de que las tareas restauradas terminen. Aceptamos un
-        # pequeño compromiso: si el runner real arrancó, los stubea para
-        # las próximas iteraciones. Por eso esperamos a que processed
-        # contenga los IDs esperados con un timeout.
-        app.audio_runner.run = fake_run  # type: ignore[method-assign]
-        # Esperamos a que el queue procese ambos jobs.
         for _ in range(20):
             await pilot.pause()
             await asyncio.sleep(0.05)
@@ -220,12 +215,22 @@ async def test_rebuild_kie_client_rebinds_workflow_subsystem(tmp_path: Path) -> 
         assert (
             app.workflow_runner_factory._image_deps.client is app.kie  # type: ignore[attr-defined]
         )
-        assert (
-            app.workflow_runner_factory._audio_deps.client is app.kie  # type: ignore[attr-defined]
-        )
+
         # El controller usa el queue NUEVO (no el viejo).
         assert app.workflow_controller._queue is app.workflow_queue  # type: ignore[attr-defined]
         # El notification bridge se re-suscribió a las queues nuevas.
         assert (
             app.notification_bridge.on_workflow_event in app.workflow_queue._listeners  # type: ignore[attr-defined]
         )
+
+
+async def test_reload_elevenlabs_client_rebinds_workflow_runner(tmp_path: Path) -> None:
+    app = _build_app(tmp_path, elevenlabs_api_key="el-key")
+    assert app.elevenlabs_client is not None
+    assert app.workflow_runner._elevenlabs_client is app.elevenlabs_client  # type: ignore[attr-defined]
+
+    app.settings = app.settings.model_copy(update={"elevenlabs_api_key": ""})
+    await app._reload_elevenlabs_client()
+
+    assert app.elevenlabs_client is None
+    assert app.workflow_runner._elevenlabs_client is None  # type: ignore[attr-defined]

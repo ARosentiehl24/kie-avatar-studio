@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,16 +14,16 @@ from kie_avatar_studio.infra.workflow_loader import (
 )
 
 
-def _valid_payload() -> dict:
+def _valid_payload() -> dict[str, Any]:
     return {
         "workflow": "Sample Automation",
         "pre_settings": {
-            "audio_language": "es-419",
-            "voice_preset": "latina_warm_authentic",
             "model_creation": {
                 "method": "prompt",
                 "prompt": "Photorealistic medium shot of a Latina woman talking.",
             },
+            "veo": {},
+            "voice_changer": None,
         },
         "run": [
             {
@@ -45,6 +46,19 @@ def _valid_payload() -> dict:
             },
         ],
     }
+
+
+def _legacy_payload() -> dict[str, Any]:
+    payload = _valid_payload()
+    payload["pre_settings"] = {
+        "audio_language": "es-419",
+        "i2v_duration_seconds": 5,
+        "model_creation": {
+            "method": "prompt",
+            "prompt": "Photorealistic medium shot of a Latina woman talking.",
+        },
+    }
+    return payload
 
 
 async def test_returns_empty_list_when_dir_missing(tmp_path: Path) -> None:
@@ -134,7 +148,7 @@ async def test_build_workflow_from_entry_assigns_id_and_output_dir(tmp_path: Pat
     assert workflow.output_dir == str(tmp_path / "outputs" / "wf_20260605_abc")
     assert workflow.slug == "sample_automation"
     assert len(workflow.steps) == 2
-    assert workflow.pre_settings.voice_preset_id == "latina_warm_authentic"
+    assert workflow.pre_settings.veo.model == "veo3_fast"
 
 
 async def test_build_workflow_from_entry_raises_on_invalid(tmp_path: Path) -> None:
@@ -167,7 +181,7 @@ async def test_step_duration_seconds_parsed_as_int(tmp_path: Path) -> None:
     assert entry.valid
     # `build_workflow_from_entry` materializa los steps; usamos el payload
     # parseado del entry para verificar que el campo viajó.
-    wf = build_workflow_from_entry(entry, workflow_id="wf_test", output_dir=str(tmp_path / "out"))
+    wf = build_workflow_from_entry(entry, workflow_id="wf_test", output_dir=tmp_path / "out")
     assert wf.steps[1].duration_seconds == 10
 
 
@@ -180,19 +194,20 @@ async def test_loader_parses_promote_product_and_include_product(tmp_path: Path)
     payload = _valid_payload()
     payload["pre_settings"]["promote_product"] = True
     payload["run"][0]["include_product"] = True
+    payload["run"][0]["set_as_base"] = True
     payload["run"][0]["product_prompt"] = "Sostiene el frasco a la altura del pecho"
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
     assert len(entries) == 1
     assert entries[0].valid
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=str(tmp_path / "out")
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert wf.pre_settings.promote_product is True
     assert wf.steps[0].include_product is True
+    assert wf.steps[0].set_as_base is True
     assert wf.steps[0].product_prompt == "Sostiene el frasco a la altura del pecho"
     # Step 2 sin los campos → defaults.
     assert wf.steps[1].include_product is False
+    assert wf.steps[1].set_as_base is False
     assert wf.steps[1].product_prompt == ""
 
 
@@ -201,11 +216,78 @@ async def test_loader_include_product_defaults_when_omitted(tmp_path: Path) -> N
     payload = _valid_payload()
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=str(tmp_path / "out")
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert wf.pre_settings.promote_product is False
     assert all(not step.include_product for step in wf.steps)
+
+
+async def test_loader_parses_v2_veo_voice_changer_and_attached(tmp_path: Path) -> None:
+    payload = _valid_payload()
+    payload["pre_settings"]["veo"] = {
+        "model": "veo3",
+        "aspect_ratio": "16:9",
+        "resolution": "1080p",
+        "duration": 6,
+        "enable_translation": False,
+        "watermark": "KIE",
+    }
+    payload["pre_settings"]["voice_changer"] = {
+        "voice_id": "voice_123",
+        "model_id": "eleven_multilingual_sts_v2",
+        "remove_background_noise": False,
+        "output_format": "mp3_44100_128",
+    }
+    payload["run"][1]["attached"] = False
+    (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await scan_workflows_dir(tmp_path)
+    assert entries[0].valid
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
+    assert wf.pre_settings.veo.model == "veo3"
+    assert wf.pre_settings.veo.aspect_ratio == "16:9"
+    assert wf.pre_settings.veo.resolution == "1080p"
+    assert wf.pre_settings.veo.duration == 6
+    assert wf.pre_settings.veo.enable_translation is False
+    assert wf.pre_settings.veo.watermark == "KIE"
+    assert wf.pre_settings.voice_changer is not None
+    assert wf.pre_settings.voice_changer.voice_id == "voice_123"
+    assert wf.pre_settings.voice_changer.remove_background_noise is False
+    assert wf.steps[0].attached is True
+    assert wf.steps[1].attached is False
+
+
+async def test_loader_warns_when_veo_missing_and_deprecated_fields_present(tmp_path: Path) -> None:
+    payload = _legacy_payload()
+    (tmp_path / "legacy.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await scan_workflows_dir(tmp_path)
+    assert entries[0].valid
+    assert any("pre_settings.veo no está configurado" in w for w in entries[0].warnings)
+    assert any("audio_language está deprecated" in w for w in entries[0].warnings)
+    assert any("i2v_duration_seconds está deprecated" in w for w in entries[0].warnings)
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_legacy", output_dir=tmp_path / "out")
+    assert wf.pre_settings.audio_language == "es-419"
+    assert wf.pre_settings.i2v_duration_seconds == 5
+
+
+@pytest.mark.parametrize("legacy_key", ["voice_preset", "voice_preset_id"])
+async def test_loader_rejects_removed_voice_preset_fields(tmp_path: Path, legacy_key: str) -> None:
+    payload = _valid_payload()
+    payload["pre_settings"][legacy_key] = "demo"
+    (tmp_path / "legacy_voice.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await scan_workflows_dir(tmp_path)
+    assert not entries[0].valid
+    assert any("voice_preset/voice_preset_id ya no está soportado" in e for e in entries[0].errors)
+
+
+async def test_loader_rejects_voice_changer_without_voice_id(tmp_path: Path) -> None:
+    payload = _valid_payload()
+    payload["pre_settings"]["voice_changer"] = {
+        "voice_id": "   ",
+        "model_id": "eleven_multilingual_sts_v2",
+    }
+    (tmp_path / "bad_voice_changer.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await scan_workflows_dir(tmp_path)
+    assert not entries[0].valid
+    assert any("voice_changer.voice_id no puede estar vacío" in e for e in entries[0].errors)
 
 
 async def test_step_duration_seconds_omitted_defaults_to_none(tmp_path: Path) -> None:
@@ -214,9 +296,7 @@ async def test_step_duration_seconds_omitted_defaults_to_none(tmp_path: Path) ->
     # No tocamos el payload original; ningún step trae duration_seconds.
     (tmp_path / "wf.json").write_text(json.dumps(payload), encoding="utf-8")
     entries = await scan_workflows_dir(tmp_path)
-    wf = build_workflow_from_entry(
-        entries[0], workflow_id="wf_test", output_dir=str(tmp_path / "out")
-    )
+    wf = build_workflow_from_entry(entries[0], workflow_id="wf_test", output_dir=tmp_path / "out")
     assert all(step.duration_seconds is None for step in wf.steps)
 
 
@@ -251,6 +331,6 @@ async def test_duration_seconds_parsing_tolerant(
     # acá es la robustez del parser, no del validator.
     if entries[0].valid:
         wf = build_workflow_from_entry(
-            entries[0], workflow_id="wf_test", output_dir=str(tmp_path / "out")
+            entries[0], workflow_id="wf_test", output_dir=tmp_path / "out"
         )
         assert wf.steps[1].duration_seconds == expected

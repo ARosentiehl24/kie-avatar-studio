@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from kie_avatar_studio.config import Settings
@@ -24,7 +26,6 @@ from kie_avatar_studio.infra.workflow_db import WorkflowDB
 def _make_pre_settings() -> WorkflowPreSettings:
     return WorkflowPreSettings(
         audio_language="es-419",
-        voice_preset_id="latina_warm",
         model_creation=ModelCreation(method=ModelCreationMethod.PROMPT, prompt="A woman"),
     )
 
@@ -69,6 +70,65 @@ async def test_init_creates_tables(workflow_db: WorkflowDB) -> None:
     assert loaded is not None
 
 
+async def test_init_migrates_manifest_and_video_task_columns(tmp_path) -> None:
+    db_path = tmp_path / "legacy_workflows.db"
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            """
+            CREATE TABLE workflow_jobs (
+              id TEXT PRIMARY KEY,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              status TEXT NOT NULL,
+              name TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              source_json_path TEXT NOT NULL,
+              output_dir TEXT NOT NULL,
+              pre_settings_json TEXT NOT NULL,
+              error TEXT
+            );
+            CREATE TABLE workflow_steps (
+              workflow_id TEXT NOT NULL,
+              step INTEGER NOT NULL,
+              scene_name TEXT NOT NULL,
+              scene_slug TEXT NOT NULL,
+              type TEXT NOT NULL,
+              change_scene INTEGER NOT NULL DEFAULT 0,
+              scene_description TEXT NOT NULL DEFAULT '',
+              prompt TEXT NOT NULL,
+              text TEXT NOT NULL DEFAULT '',
+              duration_seconds INTEGER,
+              voiceover INTEGER NOT NULL DEFAULT 1,
+              include_product INTEGER NOT NULL DEFAULT 0,
+              include_model INTEGER NOT NULL DEFAULT 1,
+              set_as_base INTEGER NOT NULL DEFAULT 0,
+              product_prompt TEXT NOT NULL DEFAULT '',
+              scene_image_approved_at TEXT,
+              image_aspect_ratio TEXT,
+              bg_image_job_id TEXT,
+              audio_job_id TEXT,
+              scene_image_path TEXT,
+              audio_path TEXT,
+              video_path TEXT,
+              status TEXT NOT NULL,
+              progress_json TEXT NOT NULL DEFAULT '{}',
+              error TEXT,
+              started_at TEXT,
+              completed_at TEXT,
+              PRIMARY KEY (workflow_id, step)
+            );
+            """
+        )
+
+    workflow_db = WorkflowDB(db_path)
+    await workflow_db.init()
+    with sqlite3.connect(db_path) as db:
+        workflow_columns = {row[1] for row in db.execute("PRAGMA table_info(workflow_jobs)")}
+        step_columns = {row[1] for row in db.execute("PRAGMA table_info(workflow_steps)")}
+    assert "manifest_write_failed" in workflow_columns
+    assert "video_task_id" in step_columns
+
+
 async def test_upsert_and_get_roundtrip(workflow_db: WorkflowDB) -> None:
     workflow = _make_workflow()
     await workflow_db.upsert_workflow(workflow)
@@ -80,7 +140,7 @@ async def test_upsert_and_get_roundtrip(workflow_db: WorkflowDB) -> None:
     assert len(loaded.steps) == 2
     assert loaded.steps[0].type == StepType.A_ROLL
     assert loaded.steps[1].type == StepType.B_ROLL
-    assert loaded.pre_settings.voice_preset_id == "latina_warm"
+    assert loaded.pre_settings.audio_language == "es-419"
 
 
 async def test_get_returns_none_for_unknown_id(workflow_db: WorkflowDB) -> None:
@@ -346,3 +406,13 @@ async def test_roundtrip_step_include_model(workflow_db: WorkflowDB) -> None:
     loaded = await workflow_db.get(workflow.id)
     assert loaded is not None
     assert loaded.steps[0].include_model is False
+
+
+async def test_roundtrip_step_set_as_base(workflow_db: WorkflowDB) -> None:
+    """`step.set_as_base` debe sobrevivir el roundtrip por DB."""
+    workflow = _make_workflow()
+    workflow.steps[0].set_as_base = True
+    await workflow_db.upsert_workflow(workflow)
+    loaded = await workflow_db.get(workflow.id)
+    assert loaded is not None
+    assert loaded.steps[0].set_as_base is True

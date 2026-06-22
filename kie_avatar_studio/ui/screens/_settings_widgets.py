@@ -46,6 +46,8 @@ def compose_settings_layout(snapshot: EditableSettings) -> ComposeResult:
                 yield from compose_concurrency_tab(snapshot)
             with TabPane("Defaults", id="tab-defaults"):
                 yield from compose_defaults_tab(snapshot)
+            with TabPane("Integraciones", id="tab-integrations"):
+                yield from compose_integrations_tab(snapshot)
             with TabPane("Mantenimiento", id="tab-maintenance"):
                 yield from compose_maintenance_tab()
         yield Static("", id="status-bar")
@@ -115,6 +117,23 @@ def compose_defaults_tab(snapshot: EditableSettings) -> ComposeResult:
         yield Input(value=snapshot.default_prompt, id="default-prompt")
     with Horizontal(classes="actions-row actions-row-save"):
         yield Button("Guardar defaults", id="save-defaults", variant="primary")
+
+
+def compose_integrations_tab(snapshot: EditableSettings) -> ComposeResult:
+    yield Static(
+        "Credenciales directas usadas por proveedores externos. "
+        "Podés dejar el campo vacío para deshabilitar la integración."
+    )
+    with Vertical(classes="field-row"):
+        yield Label("ELEVENLABS_API_KEY (voice changer)")
+        yield Input(
+            value=snapshot.elevenlabs_api_key,
+            id="elevenlabs-api-key",
+            password=True,
+            placeholder="sk_...",
+        )
+    with Horizontal(classes="actions-row actions-row-save"):
+        yield Button("Guardar integraciones", id="save-integrations", variant="primary")
 
 
 def compose_maintenance_tab() -> ComposeResult:

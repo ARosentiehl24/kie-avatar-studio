@@ -1,8 +1,8 @@
 # Arquitectura
 
-Complementa a `SPEC.md` con la arquitectura **real construida** y las reglas que cualquier
-cambio debe respetar. Si esta página entra en conflicto con el SPEC, esta gana hasta que el
-SPEC se actualice.
+Complementa a `SPEC.md` con la arquitectura **real construida** y las reglas que
+cualquier cambio debe respetar. Si esta página entra en conflicto con el SPEC,
+esta gana hasta que el SPEC se actualice.
 
 ## Resumen
 
@@ -14,10 +14,10 @@ domain      → nada interno          (models, policies, errors, events, ports)
 app.py      → infra, app_layer, ui, config     (composition root, única excepción)
 ```
 
-Capas implementadas como paquetes Python con el mismo nombre. El **composition root** es
-`kie_avatar_studio/app.py`: es el único módulo autorizado a construir clases concretas de
-`infra/` e inyectarlas a `app_layer/` y `ui/`. El resto del código depende solo de los
-`Protocol` declarados en `domain/ports.py`.
+Capas implementadas como paquetes Python con el mismo nombre. El **composition
+root** es `kie_avatar_studio/app.py`: es el único módulo autorizado a construir
+clases concretas de `infra/` e inyectarlas a `app_layer/` y `ui/`. El resto del
+código depende solo de los `Protocol` declarados en `domain/ports.py`.
 
 ## Layout real
 
@@ -55,6 +55,30 @@ kie_avatar_studio/
         └── main_menu.py
 ```
 
+## Automatización v2.0.0 (VEO + postproceso)
+
+Layout conceptual del subsistema de workflows tras la migración mayor:
+
+```text
+app_layer/
+├── workflow_runner.py          orquestación global + manifest + notify
+├── workflow_step_runner.py     state machine del step (`_run_veo`)
+├── workflow_concat.py          concat de videos attached + extract audio
+├── workflow_voice_changer.py   speech-to-speech final con ElevenLabs
+└── veo_poller.py               polling dedicado de /api/v1/veo/record-info
+
+infra/
+├── kie_client.py               VEO generate + VEO record-info
+├── elevenlabs_client.py        API directa /v1/speech-to-speech y /v2/voices
+└── ffmpeg.py                   wrapper async del binario FFmpeg
+```
+
+Dependencias externas nuevas del pipeline:
+
+- **ElevenLabs API**: voice selector + speech-to-speech final (`voice_changer`).
+- **FFmpeg** (binario local): concat demuxer + extracción de audio
+  (`final_audio.mp3`).
+
 ## Reglas de dependencia (contractuales)
 
 ```text
@@ -67,8 +91,8 @@ tests/      puede importar:  todo
 ```
 
 Estas reglas se documentan aquí y se **fuerzan en CI** con `import-linter`
-(`.importlinter`). Cualquier import nuevo que las rompa hace fallar `pre-commit` y el script
-`scripts/check.sh`.
+(`.importlinter`). Cualquier import nuevo que las rompa hace fallar `pre-commit`
+y el script `scripts/check.sh`.
 
 ## Vida de un job
 
@@ -109,29 +133,31 @@ queued → validating → creating → polling → completed | failed | cancelle
 
 Recuperación al arrancar (`QueueManager.restore_pending`):
 
-- **Video**: jobs en `WAITING_AUDIO | WAITING_VIDEO | CREATING_AVATAR
-  | DOWNLOADING` se re-encolan; el runner re-pide el `task_id` si ya
-  existe.
-- **Audio**: jobs en `QUEUED | POLLING` se re-encolan; los que
-  quedaron en `CREATING` (estado indeterminado: el POST a Kie pudo o
-  no haberse procesado) se barren a `FAILED` con error
-  "indeterminado" para que el usuario decida.
+- **Video**: jobs en
+  `WAITING_AUDIO | WAITING_VIDEO | CREATING_AVATAR | DOWNLOADING` se re-encolan;
+  el runner re-pide el `task_id` si ya existe.
+- **Audio**: jobs en `QUEUED | POLLING` se re-encolan; los que quedaron en
+  `CREATING` (estado indeterminado: el POST a Kie pudo o no haberse procesado)
+  se barren a `FAILED` con error "indeterminado" para que el usuario decida.
 
 ## Concurrencia
 
 - Una sola event-loop principal manejada por Textual.
-- `JobRunner`, `AudioJobRunner` y todos los `QueueManager` viven en
-  esa misma loop.
-- `httpx.AsyncClient` único compartido en `KieClient`. Timeouts
-  diferenciados para upload, json y download.
-- `JobsDB` / `AudioJobsDB` abren y cierran conexión `aiosqlite` por
-  operación; `PRAGMA journal_mode=WAL` evita bloqueos lector/escritor.
-- **Paralelismo selectivo entre jobs Kie**: el composition root crea
-  semáforos separados para video, audio TTS, imágenes, uploads y descargas
+- `JobRunner`, `AudioJobRunner` y todos los `QueueManager` viven en esa misma
+  loop.
+- `httpx.AsyncClient` único compartido en `KieClient`. Timeouts diferenciados
+  para upload, json y download.
+- `JobsDB` / `AudioJobsDB` abren y cierran conexión `aiosqlite` por operación;
+  `PRAGMA journal_mode=WAL` evita bloqueos lector/escritor.
+- **Paralelismo selectivo entre jobs Kie**: el composition root crea semáforos
+  separados para video, audio TTS, imágenes, uploads y descargas
   (`max_parallel_video_jobs`, `max_parallel_audio_jobs`,
   `max_parallel_image_jobs`, `max_parallel_upload_jobs`,
   `max_parallel_download_jobs`). Esto permite subir throughput de imagen/video
   sin saturar TTS, que suele ser el endpoint más frágil.
+- **Límite específico para VEO**: el workflow step runner usa además
+  `max_parallel_veo_jobs` para no disparar demasiados renders caros al mismo
+  tiempo (VEO 3.1 consume muchos más créditos que Nano Banana o uploads).
 
 ## Inversión de dependencias (DIP)
 
@@ -162,6 +188,8 @@ class KieGateway(Protocol):
     async def create_tts_task(self, ...): ...
     async def create_avatar_task(self, ...): ...
     async def get_task_detail(self, ...): ...
+    async def create_veo_video_task(self, ...): ...
+    async def get_veo_task_detail(self, ...): ...
     async def download_file(self, ...): ...
     async def aclose(self): ...
 
@@ -210,9 +238,39 @@ audio_queue = QueueManager(
 )
 ```
 
-Los tests pueden reemplazar `KieClient` / `JobsDB` / `AudioJobsDB`
-por dobles in-memory siempre que cumplan los `Protocol` (validable
-con `isinstance(obj, KieGateway)`).
+Los tests pueden reemplazar `KieClient` / `JobsDB` / `AudioJobsDB` por dobles
+in-memory siempre que cumplan los `Protocol` (validable con
+`isinstance(obj, KieGateway)`).
+
+## Flujo workflow v2.0.0
+
+```text
+WorkflowRunner
+  ├─ resolve voice/base + persist header
+  ├─ lanza N WorkflowStep en paralelo
+  │    └─ WorkflowStepRunner
+  │         ├─ prepara/reusa scene_image
+  │         ├─ opcional: awaiting_approval
+  │         ├─ create_veo_video_task()
+  │         ├─ veo_poller.poll_veo_task_for_url()
+  │         └─ download_kie_asset() -> step_x/video.mp4
+  └─ postproceso final
+       ├─ workflow_concat.concatenate_workflow_videos()
+       │    ├─ FFmpeg concat -> final.mp4
+       │    └─ FFmpeg extract audio -> final_audio.mp3
+       └─ workflow_voice_changer.apply_voice_changer() opcional
+            └─ ElevenLabsClient.speech_to_speech() -> voice_changed_audio.mp3
+```
+
+Notas de diseño:
+
+- `StepType` (`a-roll` / `b-roll`) se mantiene como semántica editorial/UI, pero
+  ambos tipos convergen al mismo backend de render: **VEO 3.1**.
+- `attached` decide si el clip participa del concat final; nunca impide la
+  generación ni la descarga individual del step.
+- El postproceso es **local** y deliberadamente queda fuera de `KieClient`: Kie
+  termina en URL de video; desde ahí manda `workflow_concat` y, si aplica,
+  `workflow_voice_changer`.
 
 ## Manejo de errores
 
@@ -223,47 +281,48 @@ Timeout de polling         → KieTimeoutError
 Validación de dominio      → JobValidationError | AudioValidationError
 ```
 
-- `JobRunner` y `AudioJobRunner` son los **únicos** que capturan
-  excepciones para marcar `FAILED`; las demás capas dejan propagar la
-  jerarquía `KieError`/`JobValidationError`. Prohibido `except
-  Exception: pass` en cualquier capa.
+- `JobRunner` y `AudioJobRunner` son los **únicos** que capturan excepciones
+  para marcar `FAILED`; las demás capas dejan propagar la jerarquía
+  `KieError`/`JobValidationError`. Prohibido `except Exception: pass` en
+  cualquier capa.
 
 ## Atajos y comportamiento de UI
 
-- La UI no llama a `KieClient`, `JobsDB` ni `AudioJobsDB`. Solo usa
-  los controllers:
-  - `audios_controller.enqueue_generation(...)`, `.cancel(id)`,
-    `.retry(id)`, `.subscribe(cb)`, `.delete_job(id)`.
+- La UI no llama a `KieClient`, `JobsDB` ni `AudioJobsDB`. Solo usa los
+  controllers:
+  - `audios_controller.enqueue_generation(...)`, `.cancel(id)`, `.retry(id)`,
+    `.subscribe(cb)`, `.delete_job(id)`.
   - `history_controller.list_recent_entries(...)`, `.subscribe(cb)`.
-  - (Video tendrá su controller equivalente cuando se implemente la
-    pantalla `new_job`.)
-- Los listeners del queue son sync y se ejecutan dentro de
-  `_notify`. Para evitar re-entrada, las pantallas convierten el
-  evento en un `Message` de Textual via `post_message` y manejan el
-  refresh en su propio turno del event loop.
-- El menú principal vive en `ui/menu.py` como **registry declarativo**.
-  La fuente de verdad es `MAIN_MENU_GROUPS: tuple[MenuSection, ...]`
-  (4 secciones: Crear / Monitoreo / Biblioteca / Sistema). Cada
-  `MenuSection` agrupa items relacionados y aporta su `label` para
-  renderizar un header visual. `MAIN_MENU: tuple[MenuItem, ...]` es la
-  vista flat derivada (orden de aparición) que `app.py` consume para
-  registrar atajos globales vía `MENU_BY_ID`. Agregar opciones se hace
-  declarando un `MenuItem` más dentro de la `MenuSection` que
-  corresponda; nunca editando el dispatcher.
-- `Ctrl+C` dispara `queue.drain()` y `audio_queue.drain()` antes de
-  cerrar; `KieClient.aclose()` se llama en `on_unmount`.
+  - (Video tendrá su controller equivalente cuando se implemente la pantalla
+    `new_job`.)
+- Los listeners del queue son sync y se ejecutan dentro de `_notify`. Para
+  evitar re-entrada, las pantallas convierten el evento en un `Message` de
+  Textual via `post_message` y manejan el refresh en su propio turno del event
+  loop.
+- El menú principal vive en `ui/menu.py` como **registry declarativo**. La
+  fuente de verdad es `MAIN_MENU_GROUPS: tuple[MenuSection, ...]` (4 secciones:
+  Crear / Monitoreo / Biblioteca / Sistema). Cada `MenuSection` agrupa items
+  relacionados y aporta su `label` para renderizar un header visual.
+  `MAIN_MENU: tuple[MenuItem, ...]` es la vista flat derivada (orden de
+  aparición) que `app.py` consume para registrar atajos globales vía
+  `MENU_BY_ID`. Agregar opciones se hace declarando un `MenuItem` más dentro de
+  la `MenuSection` que corresponda; nunca editando el dispatcher.
+- `Ctrl+C` dispara `queue.drain()` y `audio_queue.drain()` antes de cerrar;
+  `KieClient.aclose()` se llama en `on_unmount`.
 
 ## Plantilla de ADR
 
 ```markdown
 # NNNN. Título corto
 
-Fecha: YYYY-MM-DD
-Estado: Propuesto | Aceptado | Reemplazado por #NNNN
+Fecha: YYYY-MM-DD Estado: Propuesto | Aceptado | Reemplazado por #NNNN
 
 ## Contexto
+
 ## Decisión
+
 ## Consecuencias
+
 ## Alternativas consideradas
 ```
 

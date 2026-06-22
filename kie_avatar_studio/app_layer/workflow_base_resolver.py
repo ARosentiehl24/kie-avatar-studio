@@ -4,14 +4,12 @@ Extraído de `workflow_runner.py` para CR-3.2 (≤300 líneas) y separar la
 responsabilidad de "preparación pre-ejecución" de la orquestación de
 steps. El resolver:
 
-1. Mapea `pre_settings.voice_preset_id` → (voice_id, voice_settings)
-   consultando el `VoicePresetStore`.
-2. Resuelve `pre_settings.model_creation` según `method`:
-   - `prompt` → genera con Nano Banana 2 vía `ImageJobRunner` ad-hoc.
+1. Resuelve `pre_settings.model_creation` según `method`:
+   - `prompt` → genera con GPT Image 2 vía `ImageJobRunner` ad-hoc.
    - `local` → sube el archivo local con `KieGateway.upload_file` (con
      revalidación pre-upload del path).
    - `catalog` → busca en `ImageStore`/`GeneratedImageStore`.
-3. Descarga `base.png` eager al output_dir antes de empezar steps.
+2. Descarga `base.png` eager al output_dir antes de empezar steps.
 
 NO mutea status del workflow ni emite eventos: solo devuelve los
 artefactos resueltos. El `WorkflowRunner` se encarga de las transiciones.
@@ -38,7 +36,6 @@ from ..domain.models import (
     ModelCreation,
     ModelCreationMethod,
     UploadedImage,
-    VoicePreset,
     VoiceSettings,
     WorkflowJob,
 )
@@ -53,11 +50,9 @@ from ..domain.ports import (
     ImageJobRepository,
     ImageStore,
     KieGateway,
-    VoicePresetStore,
 )
 from .ids import new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
-from .visual_prompt_guard import append_image_visual_guard
 
 BASE_IMAGE_FILENAME: Final[str] = "base.png"
 
@@ -75,7 +70,6 @@ class WorkflowBaseResolver:
         self,
         settings: Settings,
         client: KieGateway,
-        presets_store: VoicePresetStore,
         uploaded_images: ImageStore,
         generated_images: GeneratedImageStore,
         image_jobs_repo: ImageJobRepository,
@@ -86,7 +80,6 @@ class WorkflowBaseResolver:
     ) -> None:
         self._settings = settings
         self._client = client
-        self._presets_store = presets_store
         self._uploaded_images = uploaded_images
         self._generated_images = generated_images
         self._image_jobs_repo = image_jobs_repo
@@ -96,22 +89,9 @@ class WorkflowBaseResolver:
         self._runner_factory = runner_factory
 
     async def resolve_voice(self, workflow: WorkflowJob) -> tuple[str, VoiceSettings | None]:
-        """Devuelve `(voice_id, voice_settings)` resueltos desde el preset.
-
-        Si `voice_preset_id` está vacío, usa `settings.default_voice` como
-        fallback (CR-3.3: no hardcodear ids duplicados). Si está seteado
-        pero el preset no existe, falla con `WorkflowValidationError`.
-        """
-        preset_id = workflow.pre_settings.voice_preset_id
-        if not preset_id:
-            return self._settings.default_voice, None
-        preset = await self._presets_store.get(preset_id)
-        if preset is None:
-            raise WorkflowValidationError(
-                f"voice_preset '{preset_id}' no existe en el catálogo "
-                "(revisá los presets configurados)."
-            )
-        return _voice_from_preset(preset)
+        """Devuelve la voz por defecto para metadatos/compat del contexto."""
+        _ = workflow
+        return self._settings.default_voice, None
 
     async def resolve_base_image(self, workflow: WorkflowJob) -> ImageAssetRef:
         """Resuelve la imagen base según `pre_settings.model_creation.method`.
@@ -165,7 +145,7 @@ class WorkflowBaseResolver:
         download_to: Path | None = None,
         settings: ImageGenerationSettings | None = None,
     ) -> ImageAssetRef:
-        """Genera una imagen base con Nano Banana 2 SIN un workflow asociado.
+        """Genera una imagen base con GPT Image 2 SIN un workflow asociado.
 
         Pensado para usarse desde la UI ANTES de encolar, para que el
         usuario pueda previsualizar la modelo base generada y decidir
@@ -178,7 +158,7 @@ class WorkflowBaseResolver:
 
         `settings` permite override de `aspect_ratio` / `resolution` /
         `output_format`. Cuando es `None` se usa el preset por defecto
-        del modelo Nano Banana 2.
+        para base (`gpt-image-2-text-to-image`).
         """
         if not prompt:
             raise WorkflowValidationError("model_creation.method='prompt' requiere prompt no vacío")
@@ -190,7 +170,7 @@ class WorkflowBaseResolver:
         image_job = ImageJob(
             id=new_image_job_id(),
             label=f"[wf-preview]{label_hint}",
-            prompt=append_image_visual_guard(prompt),
+            prompt=prompt,
             settings_json=effective_settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,
@@ -214,7 +194,7 @@ class WorkflowBaseResolver:
             expires_at=generated.expires_at(KIE_GENERATED_RETENTION_DAYS),
         )
         if download_to is not None:
-            download_to.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(download_to.parent.mkdir, parents=True, exist_ok=True)
             async with self._download_limiter:
                 await self._client.download_file(ref.kie_url, download_to)
         return ref
@@ -293,7 +273,7 @@ class WorkflowBaseResolver:
         return ImageJob(
             id=new_image_job_id(),
             label=f"[wf-base]{workflow.slug}",
-            prompt=append_image_visual_guard(prompt),
+            prompt=prompt,
             settings_json=settings.model_dump_json(exclude_none=True),
             refs_json=json.dumps([]),
             status=ImageJobStatus.QUEUED,
@@ -385,10 +365,6 @@ class WorkflowBaseResolver:
         )
         creation.resolved_image_ref = ref
         return ref
-
-
-def _voice_from_preset(preset: VoicePreset) -> tuple[str, VoiceSettings | None]:
-    return preset.voice_id, preset.voice_settings
 
 
 __all__ = ["BASE_IMAGE_FILENAME", "WorkflowBaseResolver"]

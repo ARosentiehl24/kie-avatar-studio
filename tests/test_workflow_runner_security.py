@@ -85,7 +85,6 @@ async def test_workflow_runner_rejects_output_dir_outside_outputs(tmp_settings, 
     repo = _Repo()
     runner = WorkflowRunner(
         tmp_settings,
-        client=None,  # type: ignore[arg-type]
         deps=WorkflowRunnerDeps(
             repository=repo,  # type: ignore[arg-type]
             manifest_writer=_ManifestWriter(),  # type: ignore[arg-type]

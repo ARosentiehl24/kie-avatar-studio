@@ -2,8 +2,7 @@
 
 Capa de aplicación que orquesta:
 - Listar workflows del filesystem (`workflows/*.json`) merge con DB.
-- Validar (existencia del voice_preset, archivos locales, etc.) antes
-  de encolar.
+- Validar archivos locales y shape final antes de encolar.
 - Encolar workflows en el `workflow_queue` (cola con su propio limiter
   `_workflows_limiter` distinto del global de Kie).
 - Cancelar / reintentar / borrar.
@@ -24,28 +23,34 @@ from loguru import logger
 
 from ..config import Settings
 from ..domain.errors import (
+    ImageValidationError,
     WorkflowNotFoundError,
     WorkflowValidationError,
 )
 from ..domain.events import WorkflowJobUpdated
 from ..domain.models import (
+    ImageAssetKind,
     ImageAssetRef,
     ImageGenerationSettings,
     ModelCreationMethod,
     ProductImage,
     SceneApprovalMode,
-    VoicePreset,
+    VoiceChangerSettings,
     WorkflowEntry,
     WorkflowJob,
     WorkflowStatus,
     WorkflowStep,
     WorkflowStepStatus,
 )
-from ..domain.policies import is_path_inside, validate_image_path
+from ..domain.policies import (
+    KIE_GENERATED_RETENTION_DAYS,
+    KIE_UPLOAD_RETENTION_HOURS,
+    is_path_inside,
+    validate_image_path,
+)
 from ..domain.ports import (
     GeneratedImageStore,
     ImageStore,
-    VoicePresetStore,
     WorkflowManifestWriter,
     WorkflowRepository,
 )
@@ -67,6 +72,19 @@ _PREVIEWS_SUBDIR: Final[str] = "_previews"
 # regenera varias veces seguidas dentro del mismo segundo.
 _PREVIEW_TS_FMT: Final[str] = "%Y%m%d_%H%M%S_%f"
 _PREVIEW_FILENAME_FMT: Final[str] = "base_{ts}.{ext}"
+_RECREATABLE_WORKFLOW_STATUSES: Final[frozenset[WorkflowStatus]] = frozenset(
+    {
+        WorkflowStatus.COMPLETED,
+        WorkflowStatus.PARTIALLY_FAILED,
+        WorkflowStatus.FAILED,
+        WorkflowStatus.CANCELLED,
+    }
+)
+_FINAL_OUTPUT_FILENAMES: Final[tuple[str, ...]] = (
+    "final.mp4",
+    "final_audio.mp3",
+    "voice_changed_audio.mp3",
+)
 
 
 class WorkflowController:
@@ -82,7 +100,6 @@ class WorkflowController:
         *,
         scan_loader: WorkflowScanLoader,
         entry_builder: WorkflowEntryBuilder,
-        presets_store: VoicePresetStore,
         uploaded_images: ImageStore,
         generated_images: GeneratedImageStore,
     ) -> None:
@@ -93,7 +110,6 @@ class WorkflowController:
         self._base_resolver = base_resolver
         self._scan_loader = scan_loader
         self._entry_builder = entry_builder
-        self._presets_store = presets_store
         self._uploaded_images = uploaded_images
         self._generated_images = generated_images
         self._entries_cache: list[WorkflowEntry] | None = None
@@ -119,7 +135,6 @@ class WorkflowController:
         self,
         entry: WorkflowEntry,
         *,
-        voice_preset_id: str | None = None,
         audio_language: str | None = None,
         resolved_base_ref: ImageAssetRef | None = None,
         local_path: str | None = None,
@@ -127,13 +142,12 @@ class WorkflowController:
         scene_approval_mode: SceneApprovalMode | None = None,
         product_ref: ImageAssetRef | None = None,
         product_local_path: str | None = None,
+        voice_changer: VoiceChangerSettings | None = None,
+        set_voice_changer: bool = False,
     ) -> WorkflowJob:
-        """Encola un workflow validando preset + archivos locales.
+        """Encola un workflow validando archivos locales.
 
-        Si `voice_preset_id` se pasa, sobreescribe el del JSON. Idem
-        `audio_language`. La validación cruzada (preset existe en
-        `VoicePresetStore`) se hace acá para fallar early sin gastar
-        créditos.
+        Si `audio_language` se pasa, sobreescribe el del JSON.
 
         Si `resolved_base_ref` se pasa, la UI ya resolvió la imagen base
         (preview aprobado para method=prompt, foto subida para
@@ -157,6 +171,11 @@ class WorkflowController:
         a Kie y pasa la ref + el path acá; se persisten en
         `pre_settings.product_image` para que el runner componga el producto
         en los steps con `include_product=true`.
+
+        `voice_changer`: snapshot completo del selector del modal
+        Configurar. Si `set_voice_changer=True`, este valor reemplaza el
+        `pre_settings.voice_changer` del JSON (incluyendo `None` para
+        desactivar la conversión).
         """
         if not entry.valid:
             raise WorkflowValidationError(
@@ -165,8 +184,6 @@ class WorkflowController:
         workflow_id = self._new_workflow_id()
         output_dir = self._build_output_dir(workflow_id)
         workflow = self._entry_builder(entry, workflow_id=workflow_id, output_dir=output_dir)
-        if voice_preset_id is not None:
-            workflow.pre_settings.voice_preset_id = voice_preset_id
         if audio_language is not None:
             workflow.pre_settings.audio_language = audio_language
         if resolved_base_ref is not None:
@@ -177,8 +194,11 @@ class WorkflowController:
             workflow.pre_settings.i2v_duration_seconds = i2v_duration_override
         if scene_approval_mode is not None:
             workflow.pre_settings.scene_approval_mode = scene_approval_mode
+        if set_voice_changer:
+            workflow.pre_settings.voice_changer = (
+                voice_changer.model_copy(deep=True) if voice_changer is not None else None
+            )
         self._apply_product_selection(workflow, product_ref, product_local_path)
-        await self._validate_voice_preset(workflow)
         # Si la base ya fue resuelta por la UI, el runner la reusará sin
         # tocar el path local: skip de la revalidación del path.
         if resolved_base_ref is None:
@@ -216,7 +236,7 @@ class WorkflowController:
         label_hint: str,
         settings: ImageGenerationSettings | None = None,
     ) -> tuple[ImageAssetRef, Path]:
-        """Genera la imagen base con Nano Banana 2 y la descarga local para previsualizarla.
+        """Genera la imagen base con GPT Image 2 y la descarga local para previsualizarla.
 
         Devuelve `(ref, local_path)`. La UI muestra `local_path` y permite
         al usuario aprobar/regenerar antes de encolar el workflow real.
@@ -224,8 +244,8 @@ class WorkflowController:
         para que el usuario pueda regenerar y comparar.
 
         `settings` permite override de `aspect_ratio` / `resolution` /
-        `output_format`. Si es `None`, usa los defaults del catálogo
-        Nano Banana 2 (auto / 1K / jpg).
+        `output_format`. Si es `None`, usa defaults de generación base
+        (auto / 1K / jpg) y fuerza modelo GPT Image 2.
         """
         preview_dir = self._settings.outputs_dir / _PREVIEWS_SUBDIR
         timestamp = datetime.now(UTC).strftime(_PREVIEW_TS_FMT)
@@ -253,45 +273,7 @@ class WorkflowController:
         """
         return await self._base_resolver.upload_local_standalone(path)
 
-    # --- preset / path validators ---------------------------------------
-
-    async def _validate_voice_preset(self, workflow: WorkflowJob) -> VoicePreset | None:
-        """Resuelve el `voice_preset` del workflow contra `VoicePresetStore`.
-
-        Acepta tanto el `id` (slug) como el `label` (nombre humano) del
-        preset. Si encuentra match por label, **normaliza el campo del
-        workflow al id real** antes de persistir, así la DB siempre tiene
-        el id canónico (y el runner no tiene que volver a hacer fuzzy
-        matching al ejecutar).
-        """
-        preset_ref = workflow.pre_settings.voice_preset_id
-        if not preset_ref:
-            return None
-        preset = await self._resolve_preset(preset_ref)
-        if preset is None:
-            raise WorkflowValidationError(
-                f"voice_preset '{preset_ref}' no existe en el catálogo. "
-                "Creá uno en la pantalla Presets o desde el modal 'Configurar y ejecutar' "
-                "antes de ejecutar este workflow."
-            )
-        # Normalizamos al id real (puede ser distinto si el JSON usaba el label).
-        workflow.pre_settings.voice_preset_id = preset.id
-        return preset
-
-    async def _resolve_preset(self, preset_ref: str) -> VoicePreset | None:
-        """Match por id exacto > match por label exacto (case-insensitive)."""
-        target = preset_ref.strip()
-        if not target:
-            return None
-        direct = await self._presets_store.get(target)
-        if direct is not None:
-            return direct
-        all_presets = await self._presets_store.list_all()
-        target_lower = target.lower()
-        for preset in all_presets:
-            if preset.label.lower() == target_lower:
-                return preset
-        return None
+    # --- path validators --------------------------------------------------
 
     async def _validate_local_model_path(self, workflow: WorkflowJob) -> None:
         creation = workflow.pre_settings.model_creation
@@ -324,7 +306,116 @@ class WorkflowController:
         workflow = await self._repository.get(workflow_id)
         if workflow is None:
             return False
+        if workflow.status == WorkflowStatus.COMPLETED and await self._needs_postprocess_repair(
+            workflow
+        ):
+            workflow.status = WorkflowStatus.QUEUED
+            workflow.error = None
+            await self._repository.update_workflow_header(workflow)
+            await self._manifest_writer.write(workflow)
+            self._queue.enqueue(workflow)
+            logger.info(
+                "Workflow {} reencolado para reprocesar artefactos finales faltantes",
+                workflow.id,
+            )
+            return True
         return await self._queue.retry(workflow)
+
+    async def recreate_step(self, workflow_id: str, step_number: int) -> WorkflowJob:
+        """Recrea el render de video de un step terminal y reencola el workflow.
+
+        Uso esperado: un workflow ya terminó, pero un clip salió con bug visual.
+        Se conserva la `scene_image` ya aprobada/generada para no gastar otra
+        imagen; se descarta la tarea VEO/video del step y los finales
+        (`final.mp4`, `final_audio.mp3`, `voice_changed_audio.mp3`) para que el
+        postproceso los reconstruya con el nuevo clip.
+        """
+        workflow = await self._repository.get(workflow_id)
+        if workflow is None:
+            raise WorkflowNotFoundError(f"workflow {workflow_id!r} no existe")
+        if workflow.status not in _RECREATABLE_WORKFLOW_STATUSES:
+            raise WorkflowValidationError(
+                "solo se puede recrear un step cuando el workflow está en estado terminal"
+            )
+        step = self._find_step(workflow, step_number)
+        if step is None:
+            raise WorkflowValidationError(f"workflow {workflow_id!r} no tiene step {step_number}")
+        if step.status != WorkflowStepStatus.COMPLETED:
+            raise WorkflowValidationError(
+                f"solo se puede recrear un step completed (actual: {step.status.value})"
+            )
+        if step.video_task_id is None and step.video_path is None:
+            raise WorkflowValidationError(f"step {step_number} no tiene video generado")
+
+        await self._delete_step_video_if_safe(workflow, step)
+        await self._delete_final_outputs_if_safe(workflow)
+
+        step.status = WorkflowStepStatus.QUEUED
+        step.error = None
+        step.started_at = None
+        step.completed_at = None
+        step.progress.clear()
+        step.audio_job_id = None
+        step.audio_path = None
+        step.video_task_id = None
+        step.video_path = None
+
+        workflow.status = WorkflowStatus.QUEUED
+        workflow.error = None
+        workflow.manifest_write_failed = False
+        await self._persist_workflow_and_step(workflow, step)
+        self._queue.enqueue(workflow)
+        logger.info(
+            "Workflow {} step {}: render descartado, recreando step",
+            workflow.id,
+            step_number,
+        )
+        return workflow
+
+    async def ensure_product_ready_for_retry(self, workflow_id: str) -> bool:
+        """Asegura que el producto siga reutilizable antes de reintentar.
+
+        Devuelve:
+        - `True` si no hace falta producto, si la ref sigue vigente, o si
+          pudo recargarla automáticamente desde `product.local_path`.
+        - `False` si necesita intervención del usuario para volver a elegir
+          el archivo del producto.
+        """
+        workflow = await self._repository.get(workflow_id)
+        if workflow is None:
+            raise WorkflowNotFoundError(f"workflow {workflow_id!r} no existe")
+        if not await self._workflow_requires_product_reload(workflow):
+            return True
+        product = workflow.pre_settings.product_image
+        if product is None or not product.local_path:
+            return False
+        try:
+            local_path = Path(product.local_path)
+            validate_image_path(local_path)
+        except ImageValidationError:
+            return False
+        product_ref = await self.upload_local_product(local_path)
+        self._apply_product_selection(workflow, product_ref, str(local_path))
+        await self._repository.upsert_workflow(workflow)
+        await self._manifest_writer.write(workflow)
+        logger.info(
+            "Workflow {}: producto recargado automáticamente para retry",
+            workflow.id,
+        )
+        return True
+
+    async def replace_workflow_product(self, workflow_id: str, product_path: Path) -> WorkflowJob:
+        """Reemplaza el producto de un workflow existente y lo persiste en DB."""
+        workflow = await self._repository.get(workflow_id)
+        if workflow is None:
+            raise WorkflowNotFoundError(f"workflow {workflow_id!r} no existe")
+        if not workflow.pre_settings.promote_product:
+            raise WorkflowValidationError(f"workflow {workflow_id!r} no usa promote_product=true")
+        product_ref = await self.upload_local_product(product_path)
+        self._apply_product_selection(workflow, product_ref, str(product_path))
+        await self._repository.upsert_workflow(workflow)
+        await self._manifest_writer.write(workflow)
+        return workflow
 
     # --- approval flow (SceneApprovalMode.MANUAL) -------------------------
 
@@ -450,6 +541,88 @@ class WorkflowController:
         await self._repository.upsert_step(workflow.id, step)
         await self._repository.update_workflow_header(workflow)
         await self._manifest_writer.write(workflow)
+
+    @staticmethod
+    def _find_step(workflow: WorkflowJob, step_number: int) -> WorkflowStep | None:
+        for step in workflow.steps:
+            if step.step == step_number:
+                return step
+        return None
+
+    async def _delete_step_video_if_safe(self, workflow: WorkflowJob, step: WorkflowStep) -> None:
+        if not step.video_path:
+            return
+        video_path = Path(step.video_path)
+        if not is_path_inside(video_path, self._settings.outputs_dir):
+            logger.warning(
+                "Workflow {} step {}: no borro video_path fuera de outputs_dir: {}",
+                workflow.id,
+                step.step,
+                video_path,
+            )
+            return
+        await asyncio.to_thread(_unlink_silent, video_path)
+
+    async def _delete_final_outputs_if_safe(self, workflow: WorkflowJob) -> None:
+        output_dir = Path(workflow.output_dir)
+        if not is_path_inside(output_dir, self._settings.outputs_dir):
+            logger.warning(
+                "Workflow {}: no borro finales porque output_dir queda fuera de outputs_dir: {}",
+                workflow.id,
+                output_dir,
+            )
+            return
+        for filename in _FINAL_OUTPUT_FILENAMES:
+            await asyncio.to_thread(_unlink_silent, output_dir / filename)
+
+    async def _needs_postprocess_repair(self, workflow: WorkflowJob) -> bool:
+        """`True` si el workflow terminó pero faltan artefactos finales.
+
+        Caso de recuperación para runs históricas marcadas `completed` pero sin
+        `final.mp4`/`final_audio.mp3` pese a tener videos de steps en disco.
+        """
+        output_dir = Path(workflow.output_dir)
+        if not is_path_inside(output_dir, self._settings.outputs_dir):
+            return False
+        final_video = output_dir / "final.mp4"
+        final_audio = output_dir / "final_audio.mp3"
+        has_final_video = await asyncio.to_thread(final_video.is_file)
+        has_final_audio = await asyncio.to_thread(final_audio.is_file)
+        if has_final_video and has_final_audio:
+            return False
+
+        for step in workflow.steps:
+            if step.status != WorkflowStepStatus.COMPLETED or not step.video_path:
+                continue
+            video_path = Path(step.video_path)
+            if not is_path_inside(video_path, self._settings.outputs_dir):
+                continue
+            if await asyncio.to_thread(video_path.is_file):
+                return True
+        return False
+
+    async def _workflow_requires_product_reload(self, workflow: WorkflowJob) -> bool:
+        """Indica si el retry necesita recargar la ref del producto.
+
+        Solo aplica cuando aún hay steps pendientes (`status != COMPLETED`)
+        que usan `include_product=true`.
+        """
+        pending_product_steps = any(
+            step.include_product and step.status != WorkflowStepStatus.COMPLETED
+            for step in workflow.steps
+        )
+        if not workflow.pre_settings.promote_product or not pending_product_steps:
+            return False
+        product = workflow.pre_settings.product_image
+        if product is None or product.resolved_image_ref is None:
+            return True
+        ref = product.resolved_image_ref
+        now = datetime.now(UTC)
+        if ref.kind == ImageAssetKind.UPLOADED:
+            uploaded = await self._uploaded_images.get(ref.id)
+            return uploaded is None or uploaded.is_expired(KIE_UPLOAD_RETENTION_HOURS, now=now)
+        generated = await self._generated_images.get(ref.id)
+        return generated is None or generated.is_expired(KIE_GENERATED_RETENTION_DAYS, now=now)
 
     async def delete(self, workflow_id: str) -> None:
         await self._repository.delete(workflow_id)

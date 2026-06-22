@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from kie_avatar_studio.app_layer.runner_factories import (
-    AudioRunnerDeps,
     ImageRunnerDeps,
     WorkflowRunnerFactory,
 )
@@ -55,7 +54,6 @@ def _build_resolver(tmp_settings: Settings) -> WorkflowBaseResolver:
     client = MagicMock()
     client.upload_file = AsyncMock()
     client.download_file = AsyncMock()
-    presets_store = MagicMock()
     uploaded_images = MagicMock()
     uploaded_images.get = AsyncMock(return_value=None)
     uploaded_images.upsert = AsyncMock()
@@ -66,24 +64,17 @@ def _build_resolver(tmp_settings: Settings) -> WorkflowBaseResolver:
     upload_limiter = asyncio.Semaphore(1)
     download_limiter = asyncio.Semaphore(1)
     runner_factory = WorkflowRunnerFactory(
-        image_deps=ImageRunnerDeps(
+        ImageRunnerDeps(
             settings=tmp_settings,
             client=client,
             image_jobs_repo=image_jobs_repo,
             generated_images_store=generated_images,
             uploaded_images_store=uploaded_images,
-        ),
-        audio_deps=AudioRunnerDeps(
-            settings=tmp_settings,
-            client=client,
-            audio_jobs_repo=MagicMock(),
-            audios_store=MagicMock(),
-        ),
+        )
     )
     return WorkflowBaseResolver(
         tmp_settings,
         client,
-        presets_store,
         uploaded_images,
         generated_images,
         image_jobs_repo,

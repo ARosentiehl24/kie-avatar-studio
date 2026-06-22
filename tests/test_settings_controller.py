@@ -56,6 +56,12 @@ def test_snapshot_includes_all_concurrency_fields() -> None:
     assert snap.max_parallel_download_jobs == 8
 
 
+def test_snapshot_includes_elevenlabs_api_key() -> None:
+    controller, _ = _build_controller(elevenlabs_api_key="sk_test")
+    snap = controller.snapshot()
+    assert snap.elevenlabs_api_key == "sk_test"
+
+
 def test_update_concurrency_persists_all_five_keys() -> None:
     controller, env = _build_controller()
     controller.update_concurrency(audio=1, image=2, video=3, upload=4, download=5)
@@ -121,3 +127,15 @@ def test_update_concurrency_accepts_boundary_values() -> None:
         "MAX_PARALLEL_UPLOAD_JOBS": "16",
         "MAX_PARALLEL_DOWNLOAD_JOBS": "1",
     }
+
+
+def test_update_integrations_persists_elevenlabs_api_key() -> None:
+    controller, env = _build_controller()
+    controller.update_integrations(elevenlabs_api_key="  sk_live_test  ")
+    assert env.values == {"ELEVENLABS_API_KEY": "sk_live_test"}
+
+
+def test_update_integrations_allows_empty_elevenlabs_api_key() -> None:
+    controller, env = _build_controller()
+    controller.update_integrations(elevenlabs_api_key="  ")
+    assert env.values == {"ELEVENLABS_API_KEY": ""}

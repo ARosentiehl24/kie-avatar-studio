@@ -70,6 +70,13 @@ class JobsDB:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(_SCHEMA)
+            # 2026-06-21: `video_task_id` permite reanudar polling de video
+            # manual tras restart sin recrear el task en Kie.
+            try:
+                await db.execute("ALTER TABLE jobs ADD COLUMN video_task_id TEXT")
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
             await db.commit()
 
     async def upsert(self, job: VideoJob) -> None:

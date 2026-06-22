@@ -34,6 +34,26 @@ class KieTimeoutError(KieError):
     """El polling de un task superó `task_timeout_seconds`."""
 
 
+class ElevenLabsError(Exception):
+    """Raíz de errores de ElevenLabs API directa."""
+
+
+class ElevenLabsClientError(ElevenLabsError):
+    """HTTP 4xx desde ElevenLabs. No se reintenta."""
+
+
+class ElevenLabsInsufficientCreditsError(ElevenLabsClientError):
+    """HTTP 402/403 — créditos insuficientes o tier no soporta la operación."""
+
+
+class ElevenLabsServerError(ElevenLabsError):
+    """HTTP 5xx persistente tras reintentos."""
+
+
+class FFmpegError(Exception):
+    """El subprocess de FFmpeg falló o el binario no está disponible."""
+
+
 class JobValidationError(ValueError):
     """Un `VideoJob` no cumple las restricciones del dominio (chars, tamaño, formato)."""
 

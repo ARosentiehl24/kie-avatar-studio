@@ -1,3 +1,5 @@
+import sqlite3
+
 from kie_avatar_studio.domain.models import JobStatus, VideoJob
 from kie_avatar_studio.infra.db import JobsDB
 
@@ -55,3 +57,34 @@ async def test_upsert_updates_existing(jobs_db: JobsDB) -> None:
     assert fetched is not None
     assert fetched.status is JobStatus.COMPLETED
     assert fetched.output_path == "/tmp/x.mp4"
+
+
+async def test_init_migrates_video_task_id_column(tmp_path) -> None:
+    db_path = tmp_path / "legacy.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            CREATE TABLE jobs (
+              id TEXT PRIMARY KEY,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              status TEXT NOT NULL,
+              script TEXT NOT NULL,
+              image_path TEXT NOT NULL,
+              prompt TEXT NOT NULL,
+              voice TEXT NOT NULL,
+              image_url TEXT,
+              audio_task_id TEXT,
+              audio_url TEXT,
+              video_url TEXT,
+              output_path TEXT,
+              error TEXT
+            )
+            """
+        )
+    jobs_db = JobsDB(db_path)
+    await jobs_db.init()
+    await jobs_db.upsert(_job(video_task_id="veo_123"))
+    fetched = await jobs_db.get("job_1")
+    assert fetched is not None
+    assert fetched.video_task_id == "veo_123"

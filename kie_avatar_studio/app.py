@@ -34,7 +34,6 @@ from .app_layer.notification_bridge import JobNotificationBridge
 from .app_layer.presets_controller import VoicePresetsController
 from .app_layer.queue_manager import QueueManager
 from .app_layer.runner_factories import (
-    AudioRunnerDeps,
     ImageRunnerDeps,
     WorkflowRunnerFactory,
 )
@@ -82,7 +81,9 @@ from .infra.audio_jobs_db import AudioJobsDB
 from .infra.audios_db import AudiosDB
 from .infra.batch_loader import scan_batch_dir
 from .infra.db import JobsDB
+from .infra.elevenlabs_client import ElevenLabsClient
 from .infra.env_writer import DotenvWriter
+from .infra.ffmpeg import FFmpegCli, check_ffmpeg
 from .infra.generated_images_db import GeneratedImagesDB
 from .infra.github_releases import get_latest_release
 from .infra.image_jobs_db import ImageJobsDB
@@ -189,6 +190,7 @@ class KieAvatarStudioApp(App[None]):
         self.keys_store = KeysStore(self.settings.data_dir / KEYS_FILE_NAME)
         self.env_writer = DotenvWriter(self.settings.data_dir.parent / _ENV_FILE_NAME)
         self.kie = self._build_kie_client()
+        self.elevenlabs_client = self._build_elevenlabs_client()
         self._reset_kie_limiters()
         self._limited_kie = self._build_limited_kie_gateway()
         self.runner = JobRunner(self.settings, self._limited_kie, self.db)
@@ -235,28 +237,21 @@ class KieAvatarStudioApp(App[None]):
         # para evitar deadlock cuando el orquestador toma un slot esperando
         # que sus sub-jobs (que también compiten por el global) terminen.
         self.workflow_db = WorkflowDB(self.settings.db_path)
-        self.workflow_manifest_writer = AtomicWorkflowManifestWriter()
+        self.workflow_manifest_writer = AtomicWorkflowManifestWriter(self.settings.outputs_dir)
         self.workflow_runner_factory = WorkflowRunnerFactory(
-            image_deps=ImageRunnerDeps(
+            ImageRunnerDeps(
                 settings=self.settings,
                 client=self.kie,
                 image_jobs_repo=self.image_jobs_db,
                 generated_images_store=self.generated_images_db,
                 uploaded_images_store=self.images_db,
-            ),
-            audio_deps=AudioRunnerDeps(
-                settings=self.settings,
-                client=self.kie,
-                audio_jobs_repo=self.audio_jobs_db,
-                audios_store=self.audios_db,
-            ),
+            )
         )
         self.workflow_step_runner = WorkflowStepRunner(
             self.settings,
             self.kie,
             self._image_limiter,
-            audio_limiter=self._audio_limiter,
-            video_limiter=self._video_limiter,
+            video_limiter=self._veo_limiter,
             download_limiter=self._download_limiter,
             image_jobs_repo=self.image_jobs_db,
             generated_images_store=self.generated_images_db,
@@ -265,7 +260,6 @@ class KieAvatarStudioApp(App[None]):
         self.workflow_base_resolver = WorkflowBaseResolver(
             self.settings,
             self.kie,
-            self.presets_store,
             self.images_db,
             self.generated_images_db,
             self.image_jobs_db,
@@ -276,13 +270,14 @@ class KieAvatarStudioApp(App[None]):
         )
         self.workflow_runner = WorkflowRunner(
             self.settings,
-            self.kie,
             WorkflowRunnerDeps(
                 repository=self.workflow_db,
                 manifest_writer=self.workflow_manifest_writer,
                 step_runner=self.workflow_step_runner,
                 base_resolver=self.workflow_base_resolver,
             ),
+            elevenlabs_client=self.elevenlabs_client,
+            ffmpeg=FFmpegCli(ffmpeg_path=self.settings.ffmpeg_path),
         )
         self.workflow_lifecycle = WorkflowLifecycle(self.workflow_db)
         self._workflows_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_workflows))
@@ -338,7 +333,6 @@ class KieAvatarStudioApp(App[None]):
             self.workflow_base_resolver,
             scan_loader=self._scan_workflows_dir,
             entry_builder=build_workflow_from_entry,
-            presets_store=self.presets_store,
             uploaded_images=self.images_db,
             generated_images=self.generated_images_db,
         )
@@ -363,6 +357,7 @@ class KieAvatarStudioApp(App[None]):
         await self._init_stores()
         await self._apply_active_key_if_any()
         self._warn_if_no_api_key()
+        await self._warn_if_ffmpeg_unavailable()
         self._wire_background_workers()
         expired_images = await self.images_controller.cleanup_expired()
         expired_audios = await self.audios_controller.cleanup_expired()
@@ -635,6 +630,8 @@ class KieAvatarStudioApp(App[None]):
         await self.audio_queue.drain()
         await self.image_queue.drain()
         await self.workflow_queue.drain()
+        if self.elevenlabs_client is not None:
+            await self.elevenlabs_client.aclose()
         await self.kie.aclose()
         logger.info("Kie Avatar Studio cerrado limpiamente")
 
@@ -676,6 +673,7 @@ class KieAvatarStudioApp(App[None]):
                     settings_controller=self.settings_controller,
                     on_kie_credentials_changed=self._reload_kie_client,
                     on_endpoints_changed=self._reload_kie_client_after_env_change,
+                    on_integrations_changed=self._reload_integrations_after_env_change,
                     on_runtime_cleanup=self._cleanup_runtime_state,
                 )
             )
@@ -753,7 +751,7 @@ class KieAvatarStudioApp(App[None]):
                     controller=self.workflow_controller,
                     workflows_dir=str(self.settings.workflows_dir),
                     check_credits=self._check_credits,
-                    presets_controller=self.presets_controller,
+                    elevenlabs_client=self.elevenlabs_client,
                     audio_player=self.audio_player,
                     default_input_dir=self.settings.inputs_dir,
                     open_local_path=open_local_path,
@@ -841,14 +839,31 @@ class KieAvatarStudioApp(App[None]):
     def _build_kie_client(self) -> KieClient:
         return KieClient(self.settings)
 
+    def _build_elevenlabs_client(self) -> ElevenLabsClient | None:
+        """Construye el cliente opcional de ElevenLabs si hay credenciales."""
+        if not self.settings.elevenlabs_api_key:
+            logger.debug("ELEVENLABS_API_KEY vacío; ElevenLabsClient deshabilitado")
+            return None
+        return ElevenLabsClient(self.settings.elevenlabs_api_key)
+
     def _reset_kie_limiters(self) -> None:
         """Reconstruye los semáforos selectivos derivados de `Settings`."""
         self._video_job_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_jobs))
         self._video_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_video_jobs))
         self._audio_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_audio_jobs))
         self._image_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_image_jobs))
+        self._veo_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_veo_jobs))
         self._upload_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_upload_jobs))
         self._download_limiter = asyncio.Semaphore(max(1, self.settings.max_parallel_download_jobs))
+
+    async def _warn_if_ffmpeg_unavailable(self) -> None:
+        """Loguea una advertencia si FFmpeg no está disponible al arrancar."""
+        if await check_ffmpeg(ffmpeg_path=self.settings.ffmpeg_path):
+            return
+        logger.warning(
+            "FFmpeg no disponible en '{}'; los workflows que lo requieran fallarán en runtime.",
+            self.settings.ffmpeg_path,
+        )
 
     def _build_limited_kie_gateway(self) -> LimitedKieGateway:
         return LimitedKieGateway(
@@ -856,6 +871,7 @@ class KieAvatarStudioApp(App[None]):
             audio_limiter=self._audio_limiter,
             image_limiter=self._image_limiter,
             video_limiter=self._video_limiter,
+            veo_limiter=self._veo_limiter,
             upload_limiter=self._upload_limiter,
             download_limiter=self._download_limiter,
         )
@@ -892,9 +908,30 @@ class KieAvatarStudioApp(App[None]):
         # Preservar la key activa elegida en runtime (no la del .env).
         new_settings = new_settings.model_copy(update={"kie_api_key": self.settings.kie_api_key})
         self.settings = new_settings
+        await self._reload_elevenlabs_client()
         await self._rebuild_kie_client()
         self.notify(
             "Endpoints recargados. Los próximos jobs usan la nueva configuración.",
+            title="Configuración",
+            timeout=_NOTIFY_RELOAD_TIMEOUT,
+        )
+
+    async def _reload_elevenlabs_client(self) -> None:
+        """Recarga el cliente opcional de ElevenLabs desde `self.settings`."""
+        old = self.elevenlabs_client
+        self.elevenlabs_client = self._build_elevenlabs_client()
+        self.workflow_runner.set_elevenlabs_client(self.elevenlabs_client)
+        if old is not None:
+            await old.aclose()
+
+    async def _reload_integrations_after_env_change(self) -> None:
+        """Relee `.env` y reconstruye clientes de integraciones externas."""
+        new_settings = load_settings()
+        new_settings = new_settings.model_copy(update={"kie_api_key": self.settings.kie_api_key})
+        self.settings = new_settings
+        await self._reload_elevenlabs_client()
+        self.notify(
+            "Integraciones recargadas desde .env.",
             title="Configuración",
             timeout=_NOTIFY_RELOAD_TIMEOUT,
         )
@@ -970,26 +1007,19 @@ class KieAvatarStudioApp(App[None]):
         # Sin esto, el preview de la imagen base falla con "client has been
         # closed" después de que el usuario configura/cambia una API key.
         self.workflow_runner_factory = WorkflowRunnerFactory(
-            image_deps=ImageRunnerDeps(
+            ImageRunnerDeps(
                 settings=self.settings,
                 client=self.kie,
                 image_jobs_repo=self.image_jobs_db,
                 generated_images_store=self.generated_images_db,
                 uploaded_images_store=self.images_db,
-            ),
-            audio_deps=AudioRunnerDeps(
-                settings=self.settings,
-                client=self.kie,
-                audio_jobs_repo=self.audio_jobs_db,
-                audios_store=self.audios_db,
-            ),
+            )
         )
         self.workflow_step_runner = WorkflowStepRunner(
             self.settings,
             self.kie,
             self._image_limiter,
-            audio_limiter=self._audio_limiter,
-            video_limiter=self._video_limiter,
+            video_limiter=self._veo_limiter,
             download_limiter=self._download_limiter,
             image_jobs_repo=self.image_jobs_db,
             generated_images_store=self.generated_images_db,
@@ -998,7 +1028,6 @@ class KieAvatarStudioApp(App[None]):
         self.workflow_base_resolver = WorkflowBaseResolver(
             self.settings,
             self.kie,
-            self.presets_store,
             self.images_db,
             self.generated_images_db,
             self.image_jobs_db,
@@ -1009,13 +1038,14 @@ class KieAvatarStudioApp(App[None]):
         )
         self.workflow_runner = WorkflowRunner(
             self.settings,
-            self.kie,
             WorkflowRunnerDeps(
                 repository=self.workflow_db,
                 manifest_writer=self.workflow_manifest_writer,
                 step_runner=self.workflow_step_runner,
                 base_resolver=self.workflow_base_resolver,
             ),
+            elevenlabs_client=self.elevenlabs_client,
+            ffmpeg=FFmpegCli(ffmpeg_path=self.settings.ffmpeg_path),
         )
         self.workflow_queue = QueueManager(
             self.settings,
@@ -1066,7 +1096,6 @@ class KieAvatarStudioApp(App[None]):
             self.workflow_base_resolver,
             scan_loader=self._scan_workflows_dir,
             entry_builder=build_workflow_from_entry,
-            presets_store=self.presets_store,
             uploaded_images=self.images_db,
             generated_images=self.generated_images_db,
         )

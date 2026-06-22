@@ -1,15 +1,16 @@
 # 0002. Persistencia local con SQLite + aiosqlite
 
-Fecha: 2026-05-31
-Estado: Aceptado
+Fecha: 2026-05-31 Estado: Aceptado
 
 ## Contexto
 
-Necesitamos historial, recuperación de jobs en `WAITING_*` y consultas simples desde la TUI. La app es local y monousuario.
+Necesitamos historial, recuperación de jobs en `WAITING_*` y consultas simples
+desde la TUI. La app es local y monousuario.
 
 ## Decisión
 
-SQLite via **aiosqlite**, con `PRAGMA journal_mode=WAL`. Un solo archivo `data/jobs.db`. Repositorio `JobsDB` con API mínima.
+SQLite via **aiosqlite**, con `PRAGMA journal_mode=WAL`. Un solo archivo
+`data/jobs.db`. Repositorio `JobsDB` con API mínima.
 
 ## Consecuencias
 

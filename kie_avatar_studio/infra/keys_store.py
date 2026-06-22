@@ -1,4 +1,4 @@
-"""Persistencia multi-perfil de credenciales Kie sobre `data/keys.json`.
+"""Persistencia de credenciales sobre `data/keys.json`.
 
 Decisiones:
 - Formato JSON simple e inspeccionable a ojo (CR-7.3 — el usuario quiere ver qué
@@ -23,10 +23,17 @@ from ..domain.models import KeyValidationStatus, KieKey
 KEYS_FILE_NAME: Final[str] = "keys.json"
 _FILE_MODE: Final[int] = 0o600
 _INDENT: Final[int] = 2
+KeyStoreState = dict[str, Any]  # Any: JSON local legacy puede traer campos desconocidos.
+KeyRow = dict[str, Any]  # Any: fila JSON legacy de una key.
+
+
+def _empty_state() -> KeyStoreState:
+    """State por defecto del store de credenciales."""
+    return {"active_key_id": None, "keys": []}
 
 
 class KeysStore:
-    """Repositorio de `KieKey` sobre un único archivo JSON local."""
+    """Repositorio de `KieKey` sobre un JSON local."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -36,7 +43,7 @@ class KeysStore:
         """Crea el archivo vacío si no existe y asegura permisos `0o600`."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         if not self._path.exists():
-            await self._write_state({"active_key_id": None, "keys": []})
+            await self._write_state(_empty_state())
         else:
             await asyncio.to_thread(self._path.chmod, _FILE_MODE)
 
@@ -53,7 +60,7 @@ class KeysStore:
     async def upsert(self, key: KieKey) -> None:
         async with self._lock:
             state = await self._read_state()
-            keys: list[dict[str, Any]] = state.get("keys", [])
+            keys: list[KeyRow] = state.get("keys", [])
             updated = False
             for index, row in enumerate(keys):
                 if row.get("id") == key.id:
@@ -68,7 +75,7 @@ class KeysStore:
     async def delete(self, key_id: str) -> None:
         async with self._lock:
             state = await self._read_state()
-            keys: list[dict[str, Any]] = state.get("keys", [])
+            keys: list[KeyRow] = state.get("keys", [])
             new_keys = [row for row in keys if row.get("id") != key_id]
             if len(new_keys) == len(keys):
                 raise KeyNotFoundError(f"no existe ninguna key con id={key_id!r}")
@@ -99,19 +106,23 @@ class KeysStore:
 
     # --- IO helpers --------------------------------------------------------
 
-    async def _read_state(self) -> dict[str, Any]:
+    async def _read_state(self) -> KeyStoreState:
         if not self._path.exists():
-            return {"active_key_id": None, "keys": []}
+            return _empty_state()
         raw = await asyncio.to_thread(self._path.read_text, "utf-8")
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            return {"active_key_id": None, "keys": []}
+            return _empty_state()
         if not isinstance(parsed, dict):
-            return {"active_key_id": None, "keys": []}
+            return _empty_state()
+        if "active_key_id" not in parsed:
+            parsed["active_key_id"] = None
+        if not isinstance(parsed.get("keys"), list):
+            parsed["keys"] = []
         return parsed
 
-    async def _write_state(self, state: dict[str, Any]) -> None:
+    async def _write_state(self, state: KeyStoreState) -> None:
         payload = json.dumps(state, indent=_INDENT, ensure_ascii=False, sort_keys=False)
         await asyncio.to_thread(self._atomic_write, payload)
 
@@ -127,7 +138,7 @@ class KeysStore:
     # --- mappers -----------------------------------------------------------
 
     @staticmethod
-    def _key_to_row(key: KieKey) -> dict[str, Any]:
+    def _key_to_row(key: KieKey) -> KeyRow:
         return {
             "id": key.id,
             "label": key.label,
@@ -137,15 +148,18 @@ class KeysStore:
                 key.last_validated_at.isoformat() if key.last_validated_at else None
             ),
             "last_validated_status": key.last_validated_status,
+            "last_known_credits": key.last_known_credits,
         }
 
     @staticmethod
-    def _row_to_key(row: dict[str, Any]) -> KieKey:
+    def _row_to_key(row: KeyRow) -> KieKey:
         last_at_raw = row.get("last_validated_at")
         last_status_raw = row.get("last_validated_status")
         last_status: KeyValidationStatus | None = (
             last_status_raw if last_status_raw in {"ok", "unauthorized", "error"} else None
         )
+        credits_raw = row.get("last_known_credits")
+        last_known_credits = float(credits_raw) if isinstance(credits_raw, int | float) else None
         return KieKey(
             id=row["id"],
             label=row["label"],
@@ -153,4 +167,5 @@ class KeysStore:
             created_at=datetime.fromisoformat(row["created_at"]),
             last_validated_at=datetime.fromisoformat(last_at_raw) if last_at_raw else None,
             last_validated_status=last_status,
+            last_known_credits=last_known_credits,
         )

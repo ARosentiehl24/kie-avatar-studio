@@ -9,13 +9,13 @@ Dos variantes con políticas distintas:
 - `append_video_visual_guard` (animación): "REMOVER" cualquier texto/UI
   que aparezca durante la animación. Aplica a Kling Avatar Pro (a-roll)
   y Kling 3.0 video (b-roll). Crítico porque Kling es un modelo entrenado
-  por Kuaishou y tiende a inyectar UI Douyin/TikTok, captions auto-generados,
-  caracteres CJK y watermarks — independientemente del contenido de la
+  por Kuaishou y tiende a inyectar UI Douyin/TikTok, subtítulos automáticos,
+  caracteres CJK y marcas de agua — independientemente del contenido de la
   imagen de referencia.
 
 Ambos guards listan explícitamente: caracteres chinos/japoneses/coreanos,
-UI de apps sociales (TikTok/Douyin/Instagram/WhatsApp), notification
-badges, brand logos y watermarks. Antes el guard único decía "preservar
+UI de apps sociales (TikTok/Douyin/Instagram/WhatsApp), insignias de
+notificación, logotipos de marca y marcas de agua. Antes el guard único decía "preservar
 texto naturalmente presente" — eso le pedía a Avatar Pro mantener
 intactas las alucinaciones de Nano Banana en lugar de eliminarlas.
 """
@@ -27,24 +27,26 @@ from typing import Final
 from ..domain.policies import MAX_PROMPT_CHARS
 
 _FORBIDDEN_ELEMENTS: Final[str] = (
-    "captions, subtitles, text overlays, UI elements, titles, labels, "
-    "signage, watermarks, floating letters, Chinese/Japanese/Korean "
-    "characters, social media app UI (TikTok, Douyin, Instagram, "
-    "WhatsApp), notification badges, brand logos, or invented readable "
-    "words"
+    "subtítulos automáticos, subtítulos, sobreimpresos de texto, elementos "
+    "de interfaz, "
+    "títulos, etiquetas, letreros, marcas de agua, letras flotantes, "
+    "caracteres chinos/japoneses/coreanos, interfaz de apps de redes "
+    "sociales (TikTok, Douyin, Instagram, WhatsApp), insignias de "
+    "notificación, logotipos de marca o palabras legibles inventadas"
 )
 
 IMAGE_VISUAL_GUARD: Final[str] = (
-    f"Visual text policy: do NOT include any {_FORBIDDEN_ELEMENTS} anywhere in the image."
+    f"Política de texto visual: NO incluyas ningún {_FORBIDDEN_ELEMENTS} "
+    "en ninguna parte de la imagen."
 )
 
 VIDEO_VISUAL_GUARD: Final[str] = (
-    "Visual text policy: do NOT introduce or preserve any "
-    f"{_FORBIDDEN_ELEMENTS}. If any such element is present in the "
-    "reference image, remove it during animation. The final video must "
-    "contain no on-screen text or UI other than naturally occurring "
-    "real-world objects (e.g. printed product labels physically present "
-    "in the scene)."
+    "Política de texto visual: NO introduzcas ni conserves ningún "
+    f"{_FORBIDDEN_ELEMENTS}. Si aparece algún elemento así en la imagen "
+    "de referencia, elimínalo durante la animación. El video final no "
+    "debe contener texto en pantalla ni interfaz, salvo objetos del mundo "
+    "real que aparezcan de forma natural (p. ej., etiquetas impresas del "
+    "producto físicamente presentes en la escena)."
 )
 
 # Alias retrocompatible: la API legacy mapeaba a una variante única.

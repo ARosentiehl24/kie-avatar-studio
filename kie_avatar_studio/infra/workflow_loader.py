@@ -5,8 +5,8 @@ El loader es **puro filesystem**: no toca red, no toca DB, no encola.
 
 Cada archivo `.json` del directorio se interpreta como UN workflow
 candidato a ejecutar. La validación estructural (shape Pydantic) se
-hace acá; la validación semántica (preset existe, archivo local
-existe, etc.) la hace el `WorkflowController` antes de encolar.
+hace acá; la validación semántica (archivo local existe, etc.) la hace
+el `WorkflowController` antes de encolar.
 
 Errores se devuelven en `WorkflowEntry.errors` (no se levantan): un
 directorio con 10 JSONs no debe fallar por uno malformado.
@@ -24,19 +24,32 @@ from pydantic import ValidationError
 from ..domain.errors import WorkflowStepValidationError, WorkflowValidationError
 from ..domain.models import (
     ModelCreation,
-    StepType,
     WorkflowEntry,
     WorkflowJob,
     WorkflowPreSettings,
     WorkflowStatus,
     WorkflowStep,
 )
-from ..domain.policies import parse_optional_int_field, slugify_workflow_name, validate_workflow
+from ..domain.policies import slugify_workflow_name, validate_workflow
+from ._workflow_step_parser import parse_workflow_steps
 
 _WORKFLOWS_GLOB: Final[str] = "*.json"
 # Archivos JSON que NO son workflows ejecutables (docs, schemas, etc.).
 # Se omiten del escaneo para evitar mostrar errores spam en la UI.
 _RESERVED_JSON_NAMES: Final[frozenset[str]] = frozenset({"SCHEMA.json"})
+_WARNING_VEO_DEFAULTS: Final[str] = "pre_settings.veo no está configurado; se usarán los defaults"
+_WARNING_AUDIO_LANGUAGE_DEPRECATED: Final[str] = (
+    "pre_settings.audio_language está deprecated; se mantiene por backward compat"
+)
+_WARNING_I2V_DURATION_DEPRECATED: Final[str] = (
+    "pre_settings.i2v_duration_seconds está deprecated; se mantiene por backward compat"
+)
+_ERROR_VOICE_PRESET_UNSUPPORTED: Final[str] = (
+    "pre_settings inválido: voice_preset/voice_preset_id ya no está soportado; usá pre_settings.voice_changer"
+)
+_ERROR_VOICE_CHANGER_VOICE_ID_EMPTY: Final[str] = (
+    "pre_settings inválido: voice_changer.voice_id no puede estar vacío"
+)
 
 
 async def scan_workflows_dir(directory: Path) -> list[WorkflowEntry]:
@@ -82,108 +95,144 @@ def _build_entry(path: Path) -> WorkflowEntry:
     return _validate_payload(name, path, payload)
 
 
-def _validate_payload(name: str, path: Path, payload: dict[str, Any]) -> WorkflowEntry:
+def _validate_payload(  # Any: JSON crudo sin esquema estático antes de Pydantic.
+    name: str, path: Path, payload: dict[str, Any]
+) -> WorkflowEntry:
     """Aplica validación Pydantic + de dominio sobre el payload."""
-    try:
-        pre = WorkflowPreSettings.model_validate(payload.get("pre_settings", {}))
-    except ValidationError as exc:
-        return WorkflowEntry(
-            name=name,
-            path=path,
-            workflow_payload=payload,
-            errors=[f"pre_settings inválido: {_first_validation_msg(exc)}"],
-        )
-
-    steps_payload = payload.get("run", [])
-    if not isinstance(steps_payload, list):
-        return WorkflowEntry(
-            name=name,
-            path=path,
-            workflow_payload=payload,
-            errors=["'run' debe ser una lista de steps"],
-        )
-
-    steps, step_errors = _parse_steps(steps_payload)
-    if step_errors:
-        return WorkflowEntry(
-            name=name,
-            path=path,
-            workflow_payload=payload,
-            errors=step_errors,
-        )
-
-    workflow_name = str(payload.get("workflow") or name)
-    workflow = WorkflowJob(
-        id="wf_preview",  # placeholder; el controller asigna el id real al enqueue.
-        name=workflow_name,
-        slug=slugify_workflow_name(workflow_name),
-        source_json_path=str(path),
-        output_dir="",  # placeholder; el controller lo arma con el id real.
-        pre_settings=pre,
-        steps=steps,
-        status=WorkflowStatus.QUEUED,
+    workflow, pre_warnings, errors = _parse_workflow_payload(
+        name=name,
+        path=path,
+        payload=payload,
+        workflow_id="wf_preview",
+        output_dir="",
     )
+    if workflow is None:
+        return _build_invalid_entry(name, path, payload, errors)
 
     try:
         warnings = validate_workflow(workflow)
     except (WorkflowValidationError, WorkflowStepValidationError) as exc:
-        return WorkflowEntry(
-            name=name,
-            path=path,
-            workflow_payload=payload,
-            errors=[str(exc)],
-        )
+        return _build_invalid_entry(name, path, payload, [str(exc)])
 
     return WorkflowEntry(
         name=name,
         path=path,
         workflow_payload=payload,
-        warnings=warnings,
+        warnings=[*pre_warnings, *warnings],
     )
 
 
-def _parse_steps(steps_payload: list[Any]) -> tuple[list[WorkflowStep], list[str]]:
-    steps: list[WorkflowStep] = []
-    errors: list[str] = []
-    for idx, raw_step in enumerate(steps_payload, start=1):
-        if not isinstance(raw_step, dict):
-            errors.append(f"step #{idx}: debe ser un objeto JSON")
-            continue
-        scene_name = str(raw_step.get("scene_name") or f"Escena {idx}")
+def _parse_pre_settings(
+    raw_pre_settings: Any,  # Any: JSON crudo; puede ser dict, null u otro literal JSON.
+) -> tuple[WorkflowPreSettings | None, list[str], list[str]]:
+    """Parsea `pre_settings`, agregando warnings y errores del schema v2."""
+    if not isinstance(raw_pre_settings, dict):
         try:
-            step = WorkflowStep(
-                step=int(raw_step.get("step", idx)),
-                scene_name=scene_name,
-                scene_slug=slugify_workflow_name(scene_name),
-                type=StepType(raw_step.get("type", "a-roll")),
-                # Aceptamos ambos nombres (nuevo + legacy) por compat con
-                # JSONs viejos. Pydantic AliasChoices del modelo cubre el
-                # camino formal, pero como acá construimos kwargs explícitos
-                # tenemos que hacer el fallback manual.
-                change_scene=bool(
-                    raw_step.get("change_scene", raw_step.get("change_background", True))
-                ),
-                scene_description=str(
-                    raw_step.get("scene_description", raw_step.get("background_description", ""))
-                ),
-                prompt=str(raw_step.get("prompt", "")),
-                text=str(raw_step.get("text", "")),
-                duration_seconds=parse_optional_int_field(raw_step.get("duration_seconds")),
-                voiceover=bool(raw_step.get("voiceover", True)),
-                include_product=bool(raw_step.get("include_product", False)),
-                include_model=bool(raw_step.get("include_model", True)),
-                product_prompt=str(raw_step.get("product_prompt", "")),
-                image_aspect_ratio=(
-                    str(raw_step["image_aspect_ratio"])
-                    if raw_step.get("image_aspect_ratio") is not None
-                    else None
-                ),
-            )
-        except (ValueError, ValidationError) as exc:
-            errors.append(f"step #{idx}: {exc}")
-            continue
-        steps.append(step)
-    return steps, errors
+            pre = WorkflowPreSettings.model_validate(raw_pre_settings or {})
+        except ValidationError as exc:
+            return None, [], [f"pre_settings inválido: {_first_validation_msg(exc)}"]
+        return pre, [], []
+
+    warnings = _collect_pre_settings_warnings(raw_pre_settings)
+    if "voice_preset_id" in raw_pre_settings or "voice_preset" in raw_pre_settings:
+        return None, warnings, [_ERROR_VOICE_PRESET_UNSUPPORTED]
+    voice_changer = raw_pre_settings.get("voice_changer")
+    if voice_changer is not None and _voice_changer_voice_id_is_empty(voice_changer):
+        return None, warnings, [_ERROR_VOICE_CHANGER_VOICE_ID_EMPTY]
+
+    try:
+        pre = WorkflowPreSettings.model_validate(raw_pre_settings)
+    except ValidationError as exc:
+        return None, warnings, [f"pre_settings inválido: {_first_validation_msg(exc)}"]
+    return pre, warnings, []
+
+
+def _collect_pre_settings_warnings(raw_pre_settings: dict[str, Any]) -> list[str]:
+    """Devuelve warnings no bloqueantes derivados del payload crudo."""
+    warnings: list[str] = []
+    if "veo" not in raw_pre_settings:
+        warnings.append(_WARNING_VEO_DEFAULTS)
+    if "audio_language" in raw_pre_settings:
+        warnings.append(_WARNING_AUDIO_LANGUAGE_DEPRECATED)
+    if "i2v_duration_seconds" in raw_pre_settings:
+        warnings.append(_WARNING_I2V_DURATION_DEPRECATED)
+    return warnings
+
+
+def _voice_changer_voice_id_is_empty(raw_voice_changer: Any) -> bool:
+    """Indica si `voice_changer` vino presente pero sin `voice_id` usable."""
+    if not isinstance(raw_voice_changer, dict):
+        return False
+    voice_id = raw_voice_changer.get("voice_id")
+    return not isinstance(voice_id, str) or not voice_id.strip()
+
+
+def _parse_workflow_payload(  # Any: JSON crudo sin esquema estático antes de Pydantic.
+    *,
+    name: str,
+    path: Path,
+    payload: dict[str, Any],
+    workflow_id: str,
+    output_dir: str,
+) -> tuple[WorkflowJob | None, list[str], list[str]]:
+    """Materializa un `WorkflowJob` provisional desde el payload crudo."""
+    pre, pre_warnings, pre_errors = _parse_pre_settings(payload.get("pre_settings", {}))
+    if pre is None or pre_errors:
+        return None, pre_warnings, pre_errors
+
+    steps_payload = payload.get("run", [])
+    if not isinstance(steps_payload, list):
+        return None, pre_warnings, ["'run' debe ser una lista de steps"]
+
+    steps, step_errors = parse_workflow_steps(steps_payload)
+    if step_errors:
+        return None, pre_warnings, step_errors
+
+    workflow_name = str(payload.get("workflow") or name)
+    return (
+        _build_workflow_job(
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            source_json_path=str(path),
+            output_dir=output_dir,
+            pre_settings=pre,
+            steps=steps,
+        ),
+        pre_warnings,
+        [],
+    )
+
+
+def _build_invalid_entry(
+    name: str,
+    path: Path,
+    payload: dict[str, Any],  # Any: JSON crudo sin esquema estático antes de Pydantic.
+    errors: list[str],
+) -> WorkflowEntry:
+    """Construye una `WorkflowEntry` inválida conservando el payload original."""
+    return WorkflowEntry(name=name, path=path, workflow_payload=payload, errors=errors)
+
+
+def _build_workflow_job(
+    *,
+    workflow_id: str,
+    workflow_name: str,
+    source_json_path: str,
+    output_dir: str,
+    pre_settings: WorkflowPreSettings,
+    steps: list[WorkflowStep],
+) -> WorkflowJob:
+    """Crea el `WorkflowJob` a partir de campos ya parseados."""
+    return WorkflowJob(
+        id=workflow_id,
+        name=workflow_name,
+        slug=slugify_workflow_name(workflow_name),
+        source_json_path=source_json_path,
+        output_dir=output_dir,
+        pre_settings=pre_settings,
+        steps=steps,
+        status=WorkflowStatus.QUEUED,
+    )
 
 
 def _first_validation_msg(exc: ValidationError) -> str:
@@ -212,24 +261,23 @@ def build_workflow_from_entry(
         raise WorkflowValidationError(
             f"entry '{entry.name}' no es válido: {'; '.join(entry.errors)}"
         )
-    payload = entry.workflow_payload
-    pre = WorkflowPreSettings.model_validate(payload.get("pre_settings", {}))
-    steps_payload = payload.get("run", [])
-    steps, _ = _parse_steps(steps_payload)
-    workflow_name = str(payload.get("workflow") or entry.name)
-    return WorkflowJob(
-        id=workflow_id,
-        name=workflow_name,
-        slug=slugify_workflow_name(workflow_name),
-        source_json_path=str(entry.path),
+    workflow, _, errors = _parse_workflow_payload(
+        name=entry.name,
+        path=entry.path,
+        payload=entry.workflow_payload,
+        workflow_id=workflow_id,
         output_dir=str(output_dir),
-        pre_settings=pre,
-        steps=steps,
-        status=WorkflowStatus.QUEUED,
     )
+    if workflow is None or errors:
+        raise WorkflowValidationError("; ".join(errors) if errors else "workflow inválido")
+    return workflow
 
 
-def resolve_model_creation_from_payload(payload: dict[str, Any]) -> ModelCreation:
+def resolve_model_creation_from_payload(  # Any: JSON crudo sin esquema estático antes de Pydantic.
+    payload: dict[str, Any],
+) -> ModelCreation:
     """Devuelve el `ModelCreation` parseado desde el `pre_settings.model_creation`."""
-    pre = WorkflowPreSettings.model_validate(payload.get("pre_settings", {}))
+    pre, _, errors = _parse_pre_settings(payload.get("pre_settings", {}))
+    if pre is None or errors:
+        raise WorkflowValidationError("; ".join(errors) if errors else "pre_settings inválido")
     return pre.model_creation

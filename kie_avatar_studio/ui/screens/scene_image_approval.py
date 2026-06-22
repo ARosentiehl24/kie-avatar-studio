@@ -73,7 +73,7 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
             )
             yield Static(
                 "[dim]El workflow está pausado. Revisá la imagen generada y "
-                "decidí qué hacer. Aprobar = continuar al render Kling 3.0. "
+                "decidí qué hacer. Aprobar = continuar al render VEO 3.1. "
                 "Regenerar = gastar otra Nano Banana. Cancelar step = saltar "
                 "este step y seguir con los demás.[/]",
                 id="scene-approval-subtitle",

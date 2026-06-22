@@ -40,13 +40,16 @@ from ..domain.models import (
 )
 from ..domain.policies import is_path_inside, validate_workflow
 from ..domain.ports import (
-    KieGateway,
+    ElevenLabsSpeechToSpeechClient,
+    FFmpegGateway,
     WorkflowManifestWriter,
     WorkflowRepository,
 )
 from .workflow_base_resolver import WorkflowBaseResolver
+from .workflow_concat import concatenate_workflow_videos
 from .workflow_execution_context import WorkflowExecutionContext
 from .workflow_step_runner import WorkflowStepRunner
+from .workflow_voice_changer import apply_voice_changer
 
 WorkflowNotify = Callable[[WorkflowJob], Awaitable[None] | None]
 """Callback opcional que se llama tras cada transición (UI listener)."""
@@ -62,23 +65,33 @@ class WorkflowRunnerDeps:
     base_resolver: WorkflowBaseResolver
 
 
+class _MissingFFmpegGateway:
+    async def concat_videos(self, _video_paths: list[Path], _output_path: Path) -> Path:
+        raise WorkflowValidationError("FFmpegGateway no fue inyectado")
+
+    async def extract_audio(self, _video_path: Path, _output_path: Path) -> Path:
+        raise WorkflowValidationError("FFmpegGateway no fue inyectado")
+
+
 class WorkflowRunner:
     """Orquesta un `WorkflowJob` end-to-end y emite eventos al callback."""
 
     def __init__(
         self,
         settings: Settings,
-        client: KieGateway,
         deps: WorkflowRunnerDeps,
         *,
+        elevenlabs_client: ElevenLabsSpeechToSpeechClient | None = None,
+        ffmpeg: FFmpegGateway | None = None,
         notify: WorkflowNotify | None = None,
     ) -> None:
         self._settings = settings
-        self._client = client
         self._repository = deps.repository
         self._manifest_writer = deps.manifest_writer
         self._step_runner = deps.step_runner
         self._base_resolver = deps.base_resolver
+        self._elevenlabs_client = elevenlabs_client
+        self._ffmpeg = ffmpeg or _MissingFFmpegGateway()
         self._notify = notify
         # Lock por workflow_id para serializar transiciones (steps paralelos
         # transicionando contra el mismo workflow object).
@@ -92,6 +105,10 @@ class WorkflowRunner:
         """
         self._notify = notify
 
+    def set_elevenlabs_client(self, client: ElevenLabsSpeechToSpeechClient | None) -> None:
+        """Permite recargar el cliente de ElevenLabs sin recrear el runner."""
+        self._elevenlabs_client = client
+
     async def run(self, job: WorkflowJob) -> WorkflowJob:
         try:
             validate_workflow(job)
@@ -101,6 +118,7 @@ class WorkflowRunner:
             voice_id, voice_settings = await self._base_resolver.resolve_voice(job)
             await self._mark_preparing_base(job)
             base_ref = await self._base_resolver.resolve_base_image(job)
+            base_ref = await self._resolve_promoted_base_ref(job, default_base_ref=base_ref)
             await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
             await self._base_resolver.download_base_locally(base_ref, output_dir)
             await self._mark_running(job)
@@ -114,6 +132,7 @@ class WorkflowRunner:
                 scene_approval_mode=job.pre_settings.scene_approval_mode,
                 product_image_ref=self._resolve_product_ref(job),
                 image_aspect_ratio=job.pre_settings.image_aspect_ratio,
+                veo_settings=job.pre_settings.veo,
             )
             paused = await self._execute_steps(job, context)
             if paused:
@@ -123,6 +142,7 @@ class WorkflowRunner:
                 # cuando el usuario revise.
                 await self._mark_awaiting_approval(job)
             else:
+                await self._run_post_processing_if_safe(job, output_dir)
                 await self._finalize_workflow(job)
         except asyncio.CancelledError:
             await self._mark_cancelled(job)
@@ -154,6 +174,42 @@ class WorkflowRunner:
             return None
         return pre.product_image.resolved_image_ref
 
+    async def _resolve_promoted_base_ref(
+        self, job: WorkflowJob, *, default_base_ref: ImageAssetRef
+    ) -> ImageAssetRef:
+        """Resuelve la base efectiva aplicando `set_as_base` ya completados.
+
+        Si hay steps terminales COMPLETED con `set_as_base=true`, usamos la
+        `scene_image` del último step (por número) como nueva base. Esto mantiene
+        continuidad en re-encolados (ej. pausa manual por aprobación) donde el
+        `context.base_image_ref` en memoria ya no existe.
+        """
+        promoted_steps = [
+            step
+            for step in job.steps
+            if step.set_as_base
+            and step.status == WorkflowStepStatus.COMPLETED
+            and step.scene_image_path
+        ]
+        if not promoted_steps:
+            return default_base_ref
+
+        latest = max(promoted_steps, key=lambda step: step.step)
+        scene_path = Path(latest.scene_image_path or "")
+        exists = await asyncio.to_thread(scene_path.is_file)
+        if not exists:
+            raise WorkflowValidationError(
+                f"step {latest.step}: set_as_base=true pero la scene_image "
+                f"no existe en disco: {scene_path}"
+            )
+        logger.info(
+            "WorkflowJob {}: usando scene_image del step {} como nueva base ({})",
+            job.id,
+            latest.step,
+            scene_path,
+        )
+        return await self._base_resolver.upload_local_standalone(scene_path)
+
     # --- step orchestration -----------------------------------------------
 
     async def _execute_steps(self, job: WorkflowJob, context: WorkflowExecutionContext) -> bool:
@@ -167,6 +223,9 @@ class WorkflowRunner:
           en paralelo y se gasten créditos/tiempo innecesariamente antes de que
           el usuario apruebe, resolviendo el bug de quedar atascado en 'running'
           mientras se espera por steps paralelos lejanos (ej. step 12).
+        - Si algún step tiene `set_as_base=true`, también ejecutamos en SERIE
+          para que la promoción de base tenga un orden determinista
+          (step N actualiza la base de step N+1).
         - Si estamos en `SceneApprovalMode.AUTO`, los ejecutamos todos en
           PARALELO (concurrente) para máximo rendimiento.
         """
@@ -174,8 +233,12 @@ class WorkflowRunner:
         if not pending_steps:
             return False
 
-        if context.scene_approval_mode == SceneApprovalMode.MANUAL:
-            # Ejecución en serie (secuencial) para MANUAL
+        run_in_series = context.scene_approval_mode == SceneApprovalMode.MANUAL or any(
+            step.set_as_base for step in pending_steps
+        )
+        if run_in_series:
+            # Ejecución en serie (secuencial) para MANUAL o cuando un step
+            # promueve su scene_image como nueva base.
             paused = False
             for s in pending_steps:
                 try:
@@ -281,6 +344,55 @@ class WorkflowRunner:
         await self._dispatch_notify(job)
 
     # --- helpers ----------------------------------------------------------
+
+    async def _run_post_processing_if_safe(self, job: WorkflowJob, output_dir: Path) -> None:
+        """Ejecuta postproceso sin tapar un resultado parcialmente fallido.
+
+        Si todos los steps completaron, el final concatenado es parte del éxito
+        del workflow y cualquier error debe fallar el job. Si ya hay steps
+        fallidos/cancelados, conservamos `PARTIALLY_FAILED`: el postproceso es
+        best-effort para los clips completados y no debe convertir el diagnóstico
+        de steps en un `FAILED` genérico.
+        """
+        try:
+            await self._run_post_processing(job, output_dir)
+        except Exception:
+            if all(step.status == WorkflowStepStatus.COMPLETED for step in job.steps):
+                raise
+            logger.exception(
+                "WorkflowJob {}: postproceso falló en workflow parcial; se conserva "
+                "estado basado en steps",
+                job.id,
+            )
+            job.error = "postproceso falló; revisar logs"
+
+    async def _run_post_processing(self, job: WorkflowJob, output_dir: Path) -> None:
+        """Ejecuta concat + extracción de audio + voice changer al finalizar steps."""
+        final_video_path = await concatenate_workflow_videos(
+            job.steps,
+            output_dir,
+            ffmpeg=self._ffmpeg,
+        )
+        if final_video_path is None:
+            return
+
+        voice_changer = job.pre_settings.voice_changer
+        final_audio_path = output_dir / "final_audio.mp3"
+        has_final_audio = await asyncio.to_thread(final_audio_path.is_file)
+        if voice_changer is None or not has_final_audio:
+            return
+        if self._elevenlabs_client is None:
+            raise WorkflowValidationError(
+                "voice_changer configurado pero ElevenLabsClient no fue inyectado"
+            )
+        voice_changed_path = output_dir / "voice_changed_audio.mp3"
+        await apply_voice_changer(
+            final_audio_path,
+            voice_changed_path,
+            voice_changer,
+            self._elevenlabs_client,
+        )
+        await self._write_manifest(job)
 
     async def _write_manifest(self, job: WorkflowJob) -> None:
         """Regenera el manifest atómicamente. Fail-safe (nunca levanta).

@@ -7,6 +7,7 @@ Cubre:
   `..._VIDEO_JOBS`, `..._UPLOAD_JOBS`, `..._DOWNLOAD_JOBS`).
 - Polling (`POLL_INTERVAL_SECONDS`, `TASK_TIMEOUT_SECONDS`).
 - Defaults (`DEFAULT_VOICE`, `DEFAULT_PROMPT`).
+- Integraciones externas (`ELEVENLABS_API_KEY`).
 
 Lee el valor "vivo" desde `Settings` (que ya cargó el `.env`) y escribe a través
 del `EnvWriter` para preservar formato y comments. Tras guardar, el caller
@@ -46,6 +47,7 @@ class EditableSettings:
     task_timeout_seconds: int
     default_voice: str
     default_prompt: str
+    elevenlabs_api_key: str
 
 
 class SettingsController:
@@ -70,6 +72,7 @@ class SettingsController:
             task_timeout_seconds=self._settings.task_timeout_seconds,
             default_voice=self._settings.default_voice,
             default_prompt=self._settings.default_prompt,
+            elevenlabs_api_key=self._settings.elevenlabs_api_key,
         )
 
     def update_endpoints(self, api_base: str, upload_base: str) -> None:
@@ -138,6 +141,10 @@ class SettingsController:
             raise JobValidationError("DEFAULT_PROMPT no puede estar vacío")
         self._env.set("DEFAULT_VOICE", voice.strip())
         self._env.set("DEFAULT_PROMPT", prompt.strip())
+
+    def update_integrations(self, *, elevenlabs_api_key: str) -> None:
+        """Actualiza credenciales de integraciones externas en `.env`."""
+        self._env.set("ELEVENLABS_API_KEY", elevenlabs_api_key.strip())
 
 
 def _require_https_url(value: str, *, field: str) -> None:
