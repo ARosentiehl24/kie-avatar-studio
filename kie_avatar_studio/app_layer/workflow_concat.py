@@ -30,7 +30,7 @@ async def concatenate_workflow_videos(
     """Concatena los videos attached del workflow y extrae su audio final."""
     videos: list[Path] = []
     attached_steps = 0
-    for step in steps:
+    for step in sorted(steps, key=lambda s: s.step):
         if not step.attached:
             continue
         attached_steps += 1

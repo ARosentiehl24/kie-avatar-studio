@@ -47,6 +47,7 @@ from ..domain.policies import (
     KIE_UPLOAD_RETENTION_HOURS,
     is_path_inside,
     validate_image_path,
+    validate_workflow_step,
 )
 from ..domain.ports import (
     GeneratedImageStore,
@@ -459,7 +460,16 @@ class WorkflowController:
         )
         return workflow
 
-    async def regenerate_scene(self, workflow_id: str, step_number: int) -> WorkflowJob:
+    async def regenerate_scene(
+        self,
+        workflow_id: str,
+        step_number: int,
+        *,
+        scene_description: str | None = None,
+        prompt: str | None = None,
+        product_prompt: str | None = None,
+        text: str | None = None,
+    ) -> WorkflowJob:
         """Descarta la scene_image actual y re-encola el workflow para regenerar.
 
         Resetea `bg_image_job_id`, `scene_image_path`,
@@ -468,12 +478,20 @@ class WorkflowController:
         nueva con Nano Banana (gasta otro crédito) y volverá a pausar
         en AWAITING_APPROVAL.
 
-        El archivo `scene.png` local se borra si existe (mejor evitar
-        confusión con preview viejo); el `kie_url` del image_job viejo
-        queda huérfano pero el TTL de Kie lo limpia solo.
+        Si se pasan prompts editados, se persisten en el step antes de
+        regenerar. También descarta video/finales para que, tras aprobar la
+        nueva scene_image, el runner renderice VEO y concatene de nuevo en
+        orden.
         """
         workflow = await self._load_step_for_approval(workflow_id, step_number)
         step = self._require_awaiting_step(workflow, step_number)
+        self._apply_regenerate_prompt_updates(
+            step,
+            scene_description=scene_description,
+            prompt=prompt,
+            product_prompt=product_prompt,
+            text=text,
+        )
         # Cleanup del archivo viejo (best-effort; no bloqueante).
         if step.scene_image_path:
             scene_path = Path(step.scene_image_path)
@@ -486,9 +504,14 @@ class WorkflowController:
                     step_number,
                     scene_path,
                 )
+        await self._delete_step_video_if_safe(workflow, step)
+        await self._delete_final_outputs_if_safe(workflow)
         step.bg_image_job_id = None
         step.scene_image_path = None
         step.scene_image_approved_at = None
+        step.video_task_id = None
+        step.video_path = None
+        step.progress.clear()
         step.status = WorkflowStepStatus.QUEUED
         step.completed_at = None
         step.error = None
@@ -502,6 +525,29 @@ class WorkflowController:
             step_number,
         )
         return workflow
+
+    @staticmethod
+    def _apply_regenerate_prompt_updates(
+        step: WorkflowStep,
+        *,
+        scene_description: str | None,
+        prompt: str | None,
+        product_prompt: str | None,
+        text: str | None,
+    ) -> None:
+        """Aplica los textos editados en el modal de regeneración."""
+        if scene_description is not None:
+            step.scene_description = scene_description.strip()
+        if prompt is not None:
+            cleaned_prompt = prompt.strip()
+            if not cleaned_prompt:
+                raise WorkflowValidationError("prompt no puede quedar vacío al regenerar escena")
+            step.prompt = cleaned_prompt
+        if product_prompt is not None:
+            step.product_prompt = product_prompt.strip()
+        if text is not None:
+            step.text = text.strip()
+        validate_workflow_step(step)
 
     async def cancel_step(self, workflow_id: str, step_number: int) -> WorkflowJob:
         """Cancela un step puntual (CANCELLED) sin abortar el workflow entero.

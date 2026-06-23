@@ -105,6 +105,37 @@ async def test_concatenate_workflow_videos_delegates_concat_for_multiple_inputs(
     )
 
 
+async def test_concatenate_workflow_videos_sorts_attached_steps_by_step_number(
+    tmp_path: Path,
+) -> None:
+    first = _step_video_path(tmp_path, step=1, slug="intro")
+    second = _step_video_path(tmp_path, step=2, slug="detalle")
+    for path in (first, second):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(path.name.encode())
+
+    async def _fake_concat(paths: tuple[Path, ...] | list[Path], output: Path) -> Path:
+        assert paths == [first, second]
+        output.write_bytes(b"concat")
+        return output
+
+    async def _fake_extract(_video: Path, out: Path) -> Path:
+        out.write_bytes(b"audio")
+        return out
+
+    ffmpeg = _FakeFFmpeg()
+    ffmpeg.concat_videos.side_effect = _fake_concat
+    ffmpeg.extract_audio.side_effect = _fake_extract
+    await concatenate_workflow_videos(
+        [
+            _step(step=2, slug="detalle"),
+            _step(step=1, slug="intro"),
+        ],
+        tmp_path,
+        ffmpeg=ffmpeg,
+    )
+
+
 async def test_concatenate_workflow_videos_filters_out_unattached_steps(
     tmp_path: Path,
 ) -> None:

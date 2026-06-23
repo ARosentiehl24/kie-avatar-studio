@@ -8,6 +8,23 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.1.0] — 2026-06-22
+
+### Added (M)
+
+- **Regenerar escena con prompts editables**: el modal de aprobación de
+  `scene_image` ahora permite editar `scene_description`, `prompt`,
+  `product_prompt` y `text` antes de presionar **Regenerar**. Los nuevos valores
+  se validan, se persisten en el step/manifest y la regeneración usa esos
+  prompts para crear la nueva escena.
+
+### Changed (M)
+
+- **Regeneración reconstruye video y finales**: al regenerar una escena se
+  descartan el video del step y los artefactos finales previos para que, tras
+  aprobar la nueva `scene_image`, VEO renderice el clip actualizado y el concat
+  final se reconstruya en el orden de los steps.
+
 ## [2.0.3] — 2026-06-22
 
 ### Changed (S)
