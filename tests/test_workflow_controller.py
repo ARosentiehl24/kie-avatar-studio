@@ -726,18 +726,53 @@ async def test_regenerate_scene_resets_and_requeues(
     workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path],
 ) -> None:
     from kie_avatar_studio.domain.models import WorkflowStatus, WorkflowStepStatus
+    from kie_avatar_studio.domain.workflow_artifacts import (
+        workflow_final_audio_filename,
+        workflow_final_video_filename,
+    )
 
     controller, _fake_runner, _ = workflow_controller_setup
     entries = await controller.list_entries(refresh=True)
     workflow = await _enqueue_awaiting_workflow(controller, entries)
-    result = await controller.regenerate_scene(workflow.id, 1)
+    step_before = workflow.step_by_number(1)
+    assert step_before is not None
+    output_dir = Path(workflow.output_dir)
+    step_dir = output_dir / f"step_{step_before.step:02d}_{step_before.scene_slug}"
+    step_dir.mkdir(parents=True, exist_ok=True)
+    old_video = step_dir / f"step_{step_before.step:02d}_{step_before.scene_slug}_video.mp4"
+    old_video.write_bytes(b"old video")
+    final_video = output_dir / workflow_final_video_filename(workflow.slug)
+    final_audio = output_dir / workflow_final_audio_filename(workflow.slug)
+    final_video.write_bytes(b"old final")
+    final_audio.write_bytes(b"old audio")
+    step_before.video_path = str(old_video)
+    step_before.video_task_id = "veo_old"
+    await controller._repository.upsert_step(workflow.id, step_before)  # type: ignore[attr-defined]
+
+    result = await controller.regenerate_scene(
+        workflow.id,
+        1,
+        scene_description="Nueva cocina luminosa",
+        prompt="Nuevo prompt visual",
+        product_prompt="Nuevo producto en mesa",
+        text="Nueva voz exacta",
+    )
     step = result.step_by_number(1)
     assert step is not None
     assert step.bg_image_job_id is None
     assert step.scene_image_path is None
     assert step.scene_image_approved_at is None
+    assert step.video_task_id is None
+    assert step.video_path is None
+    assert step.scene_description == "Nueva cocina luminosa"
+    assert step.prompt == "Nuevo prompt visual"
+    assert step.product_prompt == "Nuevo producto en mesa"
+    assert step.text == "Nueva voz exacta"
     assert step.status == WorkflowStepStatus.QUEUED
     assert result.status == WorkflowStatus.QUEUED
+    assert not old_video.exists()
+    assert not final_video.exists()
+    assert not final_audio.exists()
 
 
 async def test_cancel_step_marks_cancelled_and_continues_workflow(

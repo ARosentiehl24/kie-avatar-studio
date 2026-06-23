@@ -1872,6 +1872,16 @@ SceneImageApprovalScreen {
     margin-bottom: 1;
 }
 
+#scene-approval-body TextArea {
+    height: 5;
+    margin-bottom: 1;
+    border: round $primary 40%;
+}
+
+#scene-approval-prompt {
+    height: 8;
+}
+
 #scene-approval-status {
     height: auto;
     color: $text;

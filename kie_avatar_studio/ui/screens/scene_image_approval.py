@@ -32,7 +32,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Label, LoadingIndicator, Static
+from textual.widgets import Button, Footer, Header, Label, LoadingIndicator, Static, TextArea
 
 from ...app_layer.workflow_controller import WorkflowController
 from ...domain.errors import WorkflowValidationError
@@ -81,6 +81,23 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
             with VerticalScroll(id="scene-approval-body"):
                 yield Static(self._render_step_info(), id="scene-approval-info")
                 yield Static(self._render_path_info(), id="scene-approval-path")
+                yield Label("[b]Scene description[/b] (editable para Regenerar)")
+                yield TextArea(
+                    self._step.scene_description,
+                    id="scene-approval-scene-description",
+                    language=None,
+                )
+                yield Label("[b]Prompt visual[/b] (editable para Regenerar)")
+                yield TextArea(self._step.prompt, id="scene-approval-prompt", language=None)
+                if self._step.include_product:
+                    yield Label("[b]Product prompt[/b] (editable para Regenerar)")
+                    yield TextArea(
+                        self._step.product_prompt,
+                        id="scene-approval-product-prompt",
+                        language=None,
+                    )
+                yield Label("[b]Texto / voz[/b] (editable para Regenerar)")
+                yield TextArea(self._step.text, id="scene-approval-text", language=None)
                 yield Static("", id="scene-approval-status")
             yield LoadingIndicator(id="scene-approval-loader")
             with Horizontal(id="scene-approval-actions"):
@@ -146,7 +163,16 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
                 await self._controller.approve_scene(self._workflow.id, self._step.step)
                 msg = f"{OK} scene_image aprobada, workflow re-encolado"
             elif action == "regenerate":
-                await self._controller.regenerate_scene(self._workflow.id, self._step.step)
+                await self._controller.regenerate_scene(
+                    self._workflow.id,
+                    self._step.step,
+                    scene_description=self.query_one(
+                        "#scene-approval-scene-description", TextArea
+                    ).text,
+                    prompt=self.query_one("#scene-approval-prompt", TextArea).text,
+                    product_prompt=self._product_prompt_text(),
+                    text=self.query_one("#scene-approval-text", TextArea).text,
+                )
                 msg = f"{OK} regenerando scene_image (gasta otra Nano Banana)"
             elif action == "skip":
                 await self._controller.cancel_step(self._workflow.id, self._step.step)
@@ -188,6 +214,11 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
             self.query_one(f"#{bid}", Button).disabled = busy
         self.query_one("#scene-approval-loader", LoadingIndicator).display = busy
         self.query_one("#scene-approval-status", Static).update(message)
+
+    def _product_prompt_text(self) -> str | None:
+        if not self._step.include_product:
+            return None
+        return self.query_one("#scene-approval-product-prompt", TextArea).text
 
 
 __all__ = ["SceneImageApprovalScreen"]
