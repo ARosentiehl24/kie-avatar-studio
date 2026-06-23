@@ -61,6 +61,7 @@ class SettingsScreen(Screen[None]):
 
     async def on_mount(self) -> None:
         await self._refresh_keys_table()
+        await self._refresh_integrations_form()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -196,8 +197,8 @@ class SettingsScreen(Screen[None]):
 
     async def _handle_save_integrations(self) -> None:
         elevenlabs_api_key = self.query_one("#elevenlabs-api-key", Input).value
-        self._settings.update_integrations(elevenlabs_api_key=elevenlabs_api_key)
-        self._set_status(f"{OK} integraciones guardadas en .env")
+        await self._keys.set_elevenlabs_api_key(elevenlabs_api_key)
+        self._set_status(f"{OK} integraciones guardadas en data/keys.json")
         await self._notify_integrations_changed()
 
     async def _handle_cleanup_runtime_db(self) -> None:
@@ -235,6 +236,11 @@ class SettingsScreen(Screen[None]):
                 format_credits_cell(key),
                 key=key.id,
             )
+
+    async def _refresh_integrations_form(self) -> None:
+        stored = await self._keys.get_elevenlabs_api_key()
+        value = stored if stored is not None else self._settings.snapshot().elevenlabs_api_key
+        self.query_one("#elevenlabs-api-key", Input).value = value
 
     def _selected_key_id(self) -> str | None:
         table = self.query_one("#keys-table", DataTable)

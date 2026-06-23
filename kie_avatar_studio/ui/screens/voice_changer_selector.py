@@ -6,7 +6,7 @@ from typing import ClassVar, Final
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.widgets import Button, Select, Static
+from textual.widgets import Button, Input, Select, Static
 
 from ...domain.errors import UrlValidationError, VoiceSettingsValidationError
 from ...domain.models import (
@@ -66,6 +66,7 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
         )
         self._voices_loaded = False
         self._models_loaded = False
+        self._raw_voices: list[ExternalJsonObject] = []
         self._voice_preview_urls: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
@@ -99,6 +100,11 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
             return
         if button_id == "voice-changer-selector-preview-stop":
             self._stop_preview_async()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "voice-changer-selector-search" or not self._voices_loaded:
+            return
+        self._apply_voice_options(self._raw_voices)
 
     def action_cancel(self) -> None:
         self._stop_preview_async()
@@ -162,18 +168,43 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
 
     def _apply_voice_options(self, raw_voices: list[ExternalJsonObject]) -> int:
         select = self.query_one("#voice-changer-selector-select", Select)
-        current_voice_id = self._initial_selection.voice_id if self._initial_selection else None
+        self._raw_voices = raw_voices
+        search_query = self.query_one("#voice-changer-selector-search", Input).value
+        current_voice_id = self._current_voice_id()
         result = build_voice_options(
             raw_voices,
             current_voice_id=current_voice_id,
             disabled_value=_NO_VOICE_CHANGER_SENTINEL,
+            search_query=search_query,
         )
         self._voice_preview_urls = result.preview_urls
+        option_values = {value for _, value in result.options}
+        selected_value = (
+            current_voice_id
+            if current_voice_id is not None and current_voice_id in option_values
+            else _NO_VOICE_CHANGER_SENTINEL
+        )
         select.set_options(result.options)
-        select.value = current_voice_id or _NO_VOICE_CHANGER_SENTINEL
+        select.value = selected_value
         self._voices_loaded = True
+        self._refresh_search_status(result.visible_count, search_query)
         self._refresh_confirm_state()
         return result.visible_count
+
+    def _current_voice_id(self) -> str | None:
+        if self._voices_loaded:
+            value = self.query_one("#voice-changer-selector-select", Select).value
+            if isinstance(value, str) and value not in {
+                _LOADING_SENTINEL,
+                _NO_VOICE_CHANGER_SENTINEL,
+            }:
+                return value
+        return self._initial_selection.voice_id if self._initial_selection else None
+
+    def _refresh_search_status(self, visible_count: int, search_query: str) -> None:
+        status = self.query_one("#voice-changer-selector-search-status", Static)
+        suffix = " coinciden" if search_query.strip() else " disponibles"
+        status.update(f"[dim]{visible_count} voces{suffix}, ordenadas alfabéticamente.[/dim]")
 
     def _apply_model_options(self, raw_models: list[ExternalJsonObject]) -> int:
         select = self.query_one("#voice-changer-selector-model", Select)

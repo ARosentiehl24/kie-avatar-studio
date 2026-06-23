@@ -127,15 +127,3 @@ def test_update_concurrency_accepts_boundary_values() -> None:
         "MAX_PARALLEL_UPLOAD_JOBS": "16",
         "MAX_PARALLEL_DOWNLOAD_JOBS": "1",
     }
-
-
-def test_update_integrations_persists_elevenlabs_api_key() -> None:
-    controller, env = _build_controller()
-    controller.update_integrations(elevenlabs_api_key="  sk_live_test  ")
-    assert env.values == {"ELEVENLABS_API_KEY": "sk_live_test"}
-
-
-def test_update_integrations_allows_empty_elevenlabs_api_key() -> None:
-    controller, env = _build_controller()
-    controller.update_integrations(elevenlabs_api_key="  ")
-    assert env.values == {"ELEVENLABS_API_KEY": ""}

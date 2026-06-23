@@ -67,6 +67,14 @@ class KeysController:
     async def get_active(self) -> KieKey | None:
         return await self._store.get_active()
 
+    async def get_elevenlabs_api_key(self) -> str | None:
+        """Lee la credencial directa de ElevenLabs desde el JSON local."""
+        return await self._store.get_elevenlabs_api_key()
+
+    async def set_elevenlabs_api_key(self, secret: str) -> None:
+        """Guarda la credencial directa de ElevenLabs en el JSON local."""
+        await self._store.set_elevenlabs_api_key(secret)
+
     async def test_key(self, key_id: str) -> KieKey:
         """Llama a Kie con esta key y persiste el resultado en metadata.
 

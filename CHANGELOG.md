@@ -8,6 +8,17 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.0.1] — 2026-06-22
+
+### Changed (S)
+
+- **ElevenLabs en `keys.json`**: la pantalla `Configuración → Integraciones`
+  ahora guarda `ELEVENLABS_API_KEY` en `data/keys.json`
+  (`integrations.elevenlabs_api_key`) en vez de escribirla en `.env`. El valor
+  de `.env` queda solo como fallback legacy y se migra al JSON al arrancar.
+- **Buscador de voces ElevenLabs**: el selector de voice changer ahora ordena
+  las voces alfabéticamente y permite filtrarlas por nombre o `voice_id`.
+
 ## [2.0.0] — 2026-06-15
 
 ### Added (M) — 2.0.0

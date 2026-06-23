@@ -355,6 +355,7 @@ class KieAvatarStudioApp(App[None]):
         install_asyncio_exception_handler()
         logger.info("Kie Avatar Studio arrancando (log_file={})", self.log_file)
         await self._init_stores()
+        await self._apply_elevenlabs_key_from_store()
         await self._apply_active_key_if_any()
         self._warn_if_no_api_key()
         await self._warn_if_ffmpeg_unavailable()
@@ -888,6 +889,18 @@ class KieAvatarStudioApp(App[None]):
         self.settings = self.settings.model_copy(update={"kie_api_key": active.key})
         await self._rebuild_kie_client()
 
+    async def _apply_elevenlabs_key_from_store(self) -> None:
+        """Aplica/migra la key de ElevenLabs desde `data/keys.json`."""
+        stored = await self.keys_store.get_elevenlabs_api_key()
+        if stored is None:
+            if self.settings.elevenlabs_api_key:
+                await self.keys_store.set_elevenlabs_api_key(self.settings.elevenlabs_api_key)
+            return
+        if stored == self.settings.elevenlabs_api_key:
+            return
+        self.settings = self.settings.model_copy(update={"elevenlabs_api_key": stored})
+        await self._reload_elevenlabs_client()
+
     async def _reload_kie_client(self) -> None:
         """Aplica la nueva key activa al `KieClient` en uso."""
         active = await self.keys_store.get_active()
@@ -905,10 +918,14 @@ class KieAvatarStudioApp(App[None]):
     async def _reload_kie_client_after_env_change(self) -> None:
         """Releerá el `.env` y reconstruirá `KieClient` con endpoints nuevos."""
         new_settings = load_settings()
-        # Preservar la key activa elegida en runtime (no la del .env).
-        new_settings = new_settings.model_copy(update={"kie_api_key": self.settings.kie_api_key})
+        # Preservar secrets activos elegidos en runtime (no los del .env).
+        new_settings = new_settings.model_copy(
+            update={
+                "kie_api_key": self.settings.kie_api_key,
+                "elevenlabs_api_key": self.settings.elevenlabs_api_key,
+            }
+        )
         self.settings = new_settings
-        await self._reload_elevenlabs_client()
         await self._rebuild_kie_client()
         self.notify(
             "Endpoints recargados. Los próximos jobs usan la nueva configuración.",
@@ -925,13 +942,12 @@ class KieAvatarStudioApp(App[None]):
             await old.aclose()
 
     async def _reload_integrations_after_env_change(self) -> None:
-        """Relee `.env` y reconstruye clientes de integraciones externas."""
-        new_settings = load_settings()
-        new_settings = new_settings.model_copy(update={"kie_api_key": self.settings.kie_api_key})
-        self.settings = new_settings
+        """Relee `data/keys.json` y reconstruye clientes de integraciones externas."""
+        stored = await self.keys_store.get_elevenlabs_api_key()
+        self.settings = self.settings.model_copy(update={"elevenlabs_api_key": stored or ""})
         await self._reload_elevenlabs_client()
         self.notify(
-            "Integraciones recargadas desde .env.",
+            "Integraciones recargadas desde data/keys.json.",
             title="Configuración",
             timeout=_NOTIFY_RELOAD_TIMEOUT,
         )

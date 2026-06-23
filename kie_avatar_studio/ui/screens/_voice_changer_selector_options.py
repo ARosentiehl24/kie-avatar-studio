@@ -13,12 +13,18 @@ class VoiceOptionsResult:
 
 
 def build_voice_options(
-    raw_voices: list[ExternalJsonObject], *, current_voice_id: str | None, disabled_value: str
+    raw_voices: list[ExternalJsonObject],
+    *,
+    current_voice_id: str | None,
+    disabled_value: str,
+    search_query: str = "",
 ) -> VoiceOptionsResult:
     options: list[tuple[str, str]] = [("Sin voice changer", disabled_value)]
     preview_urls: dict[str, str] = {}
     seen_voice_ids: set[str] = set()
     visible_count = 0
+    normalized_query = search_query.strip().casefold()
+    collected: list[tuple[str, str, str]] = []
     for raw_voice in raw_voices:
         voice_id = raw_voice.get("voice_id")
         name = raw_voice.get("name")
@@ -32,9 +38,19 @@ def build_voice_options(
         if isinstance(preview_url, str) and preview_url.strip():
             preview_urls[voice_id] = preview_url.strip()
         label = name.strip() if isinstance(name, str) and name.strip() else voice_id
-        options.append((f"{label}  ·  {voice_id}", voice_id))
+        rendered = f"{label}  ·  {voice_id}"
+        haystack = f"{label} {voice_id}".casefold()
+        if normalized_query and normalized_query not in haystack:
+            continue
+        collected.append((label.casefold(), rendered, voice_id))
+    for _, rendered, voice_id in sorted(collected, key=lambda item: (item[0], item[2])):
+        options.append((rendered, voice_id))
         visible_count += 1
-    if current_voice_id and all(value != current_voice_id for _, value in options):
+    if (
+        current_voice_id
+        and not normalized_query
+        and all(value != current_voice_id for _, value in options)
+    ):
         options.insert(1, (f"Actual (no listada)  ·  {current_voice_id}", current_voice_id))
     return VoiceOptionsResult(options, preview_urls, visible_count)
 

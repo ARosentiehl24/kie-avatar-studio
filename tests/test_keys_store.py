@@ -135,6 +135,18 @@ async def test_active_persists_across_instances(tmp_path: Path) -> None:
     assert active.id == "dev"
 
 
+async def test_elevenlabs_api_key_roundtrips_in_integrations(store: KeysStore) -> None:
+    assert await store.get_elevenlabs_api_key() is None
+    await store.set_elevenlabs_api_key("  sk-elevenlabs  ")
+    assert await store.get_elevenlabs_api_key() == "sk-elevenlabs"
+
+
+async def test_elevenlabs_api_key_can_be_cleared(store: KeysStore) -> None:
+    await store.set_elevenlabs_api_key("sk-elevenlabs")
+    await store.set_elevenlabs_api_key("  ")
+    assert await store.get_elevenlabs_api_key() == ""
+
+
 @_REQUIRES_POSIX
 async def test_chmod_0600_preserved_after_upsert(tmp_path: Path) -> None:
     path = tmp_path / KEYS_FILE_NAME

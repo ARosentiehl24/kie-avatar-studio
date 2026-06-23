@@ -66,6 +66,11 @@ def _selector_body(
 
 def _voice_block(audio_preview_available: bool, loading_value: str) -> ComposeResult:
     yield Static("[b]Voz:[/b]")
+    yield Input(
+        placeholder="Buscar por nombre o voice_id…",
+        id="voice-changer-selector-search",
+    )
+    yield Static("", id="voice-changer-selector-search-status")
     yield Select[str](
         [("Cargando voces…", loading_value)],
         value=loading_value,
