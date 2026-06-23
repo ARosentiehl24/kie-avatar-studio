@@ -27,7 +27,7 @@ Al generar JSON, la IA debe decidir:
 2. Qué escena ocurre en cada step.
 3. Qué texto se habla o narra.
 4. Si la escena cambia de fondo, incluye producto o solo apoya visualmente.
-5. Si la escena entra al `final.mp4`.
+5. Si la escena entra al `<workflow_slug>_final.mp4`.
 6. Si el audio final se queda como VEO lo genera o si se convierte con ElevenLabs.
 
 Usa **prompts y textos 100% en español**.
@@ -127,9 +127,11 @@ workflow vertical usa `"9:16"`. Cada step puede sobrescribirlo con
 
 ### `voice_changer`
 
-Postproceso opcional con ElevenLabs Speech-to-Speech sobre `final_audio.mp3`.
+Postproceso opcional con ElevenLabs Speech-to-Speech sobre
+`<workflow_slug>_final_audio.mp3`.
 El workflow **funciona completo sin ElevenLabs**: si `voice_changer` es `null`
-o se omite, la app termina después de crear `final.mp4` y `final_audio.mp3`.
+o se omite, la app termina después de crear `<workflow_slug>_final.mp4` y
+`<workflow_slug>_final_audio.mp3`.
 Eso permite que el usuario procese el audio manualmente en ElevenLabs u otra
 herramienta externa.
 
@@ -179,7 +181,7 @@ Cada item de `run` representa una escena.
 | `type` | Sí | `"a-roll"` o `"b-roll"`. |
 | `prompt` | Sí | Prompt visual detallado para VEO. |
 | `text` | A-roll sí | Guion hablado exacto o voz en off. |
-| `attached` | No | `true` si entra al `final.mp4`; `false` si es clip suelto. |
+| `attached` | No | `true` si entra al `<workflow_slug>_final.mp4`; `false` si es clip suelto. |
 | `change_scene` | B-roll sí | `true` genera nueva scene image; en b-roll debe ser siempre `true`. |
 | `scene_description` | B-roll sí | Lugar/fondo/luz/ambiente. Obligatorio si `change_scene=true`. |
 | `include_product` | No | `true` si el producto aparece en este step. |
@@ -316,17 +318,17 @@ Para un video UGC de 5 escenas:
 
 Sin ElevenLabs (`voice_changer: null` u omitido):
 
-- `final.mp4`
-- `final_audio.mp3`
+- `<workflow_slug>_final.mp4`
+- `<workflow_slug>_final_audio.mp3`
 
 Con ElevenLabs (`voice_changer` configurado):
 
-- `final.mp4`
-- `final_audio.mp3`
-- `voice_changed_audio.mp3`
+- `<workflow_slug>_final.mp4`
+- `<workflow_slug>_final_audio.mp3`
+- `<workflow_slug>_voice_changed_audio.mp3`
 
-`voice_changed_audio.mp3` es un derivado opcional. No lo esperes si el usuario
-quiere hacer el voice changer manualmente fuera de la app.
+`<workflow_slug>_voice_changed_audio.mp3` es un derivado opcional. No lo
+esperes si el usuario quiere hacer el voice changer manualmente fuera de la app.
 
 ## No incluir en JSON generado
 

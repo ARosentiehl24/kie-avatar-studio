@@ -9,8 +9,15 @@ from loguru import logger
 
 from ..domain.models import WorkflowStep
 from ..domain.ports import FFmpegGateway
+from ..domain.workflow_artifacts import (
+    LEGACY_STEP_VIDEO_FILENAME,
+    step_dir_name,
+    step_video_filename,
+    workflow_final_audio_filename,
+    workflow_final_video_filename,
+)
 
-_VIDEO_FILENAME = "video.mp4"
+_VIDEO_FILENAME = LEGACY_STEP_VIDEO_FILENAME
 
 
 async def concatenate_workflow_videos(
@@ -18,6 +25,7 @@ async def concatenate_workflow_videos(
     output_dir: Path,
     *,
     ffmpeg: FFmpegGateway,
+    workflow_slug: str = "workflow",
 ) -> Path | None:
     """Concatena los videos attached del workflow y extrae su audio final."""
     videos: list[Path] = []
@@ -38,8 +46,8 @@ async def concatenate_workflow_videos(
         )
         return None
 
-    final_video_path = output_dir / "final.mp4"
-    final_audio_path = output_dir / "final_audio.mp3"
+    final_video_path = output_dir / workflow_final_video_filename(workflow_slug)
+    final_audio_path = output_dir / workflow_final_audio_filename(workflow_slug)
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
 
     if len(videos) == 1:
@@ -57,17 +65,23 @@ async def _resolve_step_video_path(*, output_dir: Path, step: WorkflowStep) -> P
     """Resuelve el path del video del step con compatibilidad retroactiva.
 
     Layout actual:
-    `output_dir / step_<NN>_<scene_slug> / video.mp4`
+    `output_dir / step_<NN>_<scene_slug> / step_<NN>_<scene_slug>_video.mp4`
 
     Layout legacy:
+    `output_dir / step_<NN>_<scene_slug> / video.mp4`
     `output_dir / <scene_slug> / video.mp4`
     """
-    canonical = output_dir / f"step_{step.step:02d}_{step.scene_slug}" / _VIDEO_FILENAME
+    if step.video_path:
+        explicit = Path(step.video_path)
+        if await asyncio.to_thread(explicit.is_file):
+            return explicit
+    step_dir = output_dir / step_dir_name(step)
+    canonical = step_dir / step_video_filename(step)
     if await asyncio.to_thread(canonical.is_file):
         return canonical
-    legacy = output_dir / step.scene_slug / _VIDEO_FILENAME
-    if await asyncio.to_thread(legacy.is_file):
-        return legacy
+    for legacy in (step_dir / _VIDEO_FILENAME, output_dir / step.scene_slug / _VIDEO_FILENAME):
+        if await asyncio.to_thread(legacy.is_file):
+            return legacy
     return None
 
 

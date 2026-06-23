@@ -46,7 +46,12 @@ class _BaseResolver:
             expires_at=datetime.now(UTC) + timedelta(days=1),
         )
 
-    async def download_base_locally(self, _ref: ImageAssetRef, _output_dir: Path) -> None:
+    async def download_base_locally(
+        self,
+        _ref: ImageAssetRef,
+        _output_dir: Path,
+        _workflow_slug: str | None = None,
+    ) -> None:
         raise AssertionError("no debe descargar base si output_dir es inválido")
 
 

@@ -274,9 +274,9 @@ async def e2e_setup(tmp_settings: Settings):
         generated_images=generated_db,
     )
 
-    async def _fake_concat(_steps, output_dir: Path, *, ffmpeg: object) -> Path:
-        final_video = output_dir / "final.mp4"
-        final_audio = output_dir / "final_audio.mp3"
+    async def _fake_concat(_steps, output_dir: Path, *, ffmpeg: object, workflow_slug: str) -> Path:
+        final_video = output_dir / f"{workflow_slug}_final.mp4"
+        final_audio = output_dir / f"{workflow_slug}_final_audio.mp3"
         final_video.write_bytes(b"final-video")
         final_audio.write_bytes(b"final-audio")
         return final_video
@@ -323,29 +323,29 @@ async def test_e2e_workflow_with_3_step_types_completes(e2e_setup) -> None:
 
     # Outputs por step según su tipo:
     output_dir = Path(finished.output_dir)
-    assert (output_dir / "base.png").is_file(), "base.png debe existir"
+    assert (output_dir / f"{finished.slug}_base.png").is_file(), "imagen base debe existir"
     assert (output_dir / "workflow.json").is_file(), "manifest debe existir"
-    assert (output_dir / "final.mp4").is_file()
-    assert (output_dir / "final_audio.mp3").is_file()
+    assert (output_dir / f"{finished.slug}_final.mp4").is_file()
+    assert (output_dir / f"{finished.slug}_final_audio.mp3").is_file()
 
-    # Step 1 (a-roll): scene.png + video.mp4.
+    # Step 1 (a-roll): scene + video con nombres descriptivos.
     step1_dir = output_dir / "step_01_hook_a_roll"
-    assert (step1_dir / "scene.png").is_file()
-    assert (step1_dir / "video.mp4").is_file()
+    assert (step1_dir / "step_01_hook_a_roll_scene.png").is_file()
+    assert (step1_dir / "step_01_hook_a_roll_video.mp4").is_file()
     assert not (step1_dir / "audio.mp3").exists()
     assert not (step1_dir / "final.mp4").exists()
 
-    # Step 2 (b-roll con text): scene.png + video.mp4.
+    # Step 2 (b-roll con text): scene + video con nombres descriptivos.
     step2_dir = output_dir / "step_02_b_roll_con_audio"
-    assert (step2_dir / "scene.png").is_file()
-    assert (step2_dir / "video.mp4").is_file()
+    assert (step2_dir / "step_02_b_roll_con_audio_scene.png").is_file()
+    assert (step2_dir / "step_02_b_roll_con_audio_video.mp4").is_file()
     assert not (step2_dir / "audio.mp3").exists()
     assert not (step2_dir / "final.mp4").exists()
 
-    # Step 3 (b-roll silent): solo scene.png + video.mp4.
+    # Step 3 (b-roll silent): solo scene + video descriptivos.
     step3_dir = output_dir / "step_03_b_roll_silencioso"
-    assert (step3_dir / "scene.png").is_file()
-    assert (step3_dir / "video.mp4").is_file()
+    assert (step3_dir / "step_03_b_roll_silencioso_scene.png").is_file()
+    assert (step3_dir / "step_03_b_roll_silencioso_video.mp4").is_file()
     assert not (step3_dir / "audio.mp3").exists()
 
     # Manifest tiene shape correcto.
@@ -354,8 +354,8 @@ async def test_e2e_workflow_with_3_step_types_completes(e2e_setup) -> None:
     assert manifest_data["id"] == workflow.id
     assert len(manifest_data["steps"]) == 3
     assert manifest_data["model_base"] is not None
-    assert manifest_data["outputs"]["video"] == str(output_dir / "final.mp4")
-    assert manifest_data["outputs"]["audio"] == str(output_dir / "final_audio.mp3")
+    assert manifest_data["outputs"]["video"] == str(output_dir / f"{finished.slug}_final.mp4")
+    assert manifest_data["outputs"]["audio"] == str(output_dir / f"{finished.slug}_final_audio.mp3")
     # Cada step tiene outputs poblados.
     assert "scene_image" in manifest_data["steps"][0]["outputs"]
     assert "video" in manifest_data["steps"][0]["outputs"]

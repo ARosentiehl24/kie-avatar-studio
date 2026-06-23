@@ -45,6 +45,10 @@ from ..domain.ports import (
     WorkflowManifestWriter,
     WorkflowRepository,
 )
+from ..domain.workflow_artifacts import (
+    workflow_final_audio_filename,
+    workflow_voice_changed_audio_filename,
+)
 from .workflow_base_resolver import WorkflowBaseResolver
 from .workflow_concat import concatenate_workflow_videos
 from .workflow_execution_context import WorkflowExecutionContext
@@ -120,7 +124,7 @@ class WorkflowRunner:
             base_ref = await self._base_resolver.resolve_base_image(job)
             base_ref = await self._resolve_promoted_base_ref(job, default_base_ref=base_ref)
             await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
-            await self._base_resolver.download_base_locally(base_ref, output_dir)
+            await self._base_resolver.download_base_locally(base_ref, output_dir, job.slug)
             await self._mark_running(job)
             context = WorkflowExecutionContext(
                 audio_language=job.pre_settings.audio_language,
@@ -372,12 +376,13 @@ class WorkflowRunner:
             job.steps,
             output_dir,
             ffmpeg=self._ffmpeg,
+            workflow_slug=job.slug,
         )
         if final_video_path is None:
             return
 
         voice_changer = job.pre_settings.voice_changer
-        final_audio_path = output_dir / "final_audio.mp3"
+        final_audio_path = output_dir / workflow_final_audio_filename(job.slug)
         has_final_audio = await asyncio.to_thread(final_audio_path.is_file)
         if voice_changer is None or not has_final_audio:
             return
@@ -385,7 +390,7 @@ class WorkflowRunner:
             raise WorkflowValidationError(
                 "voice_changer configurado pero ElevenLabsClient no fue inyectado"
             )
-        voice_changed_path = output_dir / "voice_changed_audio.mp3"
+        voice_changed_path = output_dir / workflow_voice_changed_audio_filename(job.slug)
         await apply_voice_changer(
             final_audio_path,
             voice_changed_path,

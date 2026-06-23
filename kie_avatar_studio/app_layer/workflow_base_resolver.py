@@ -9,7 +9,7 @@ steps. El resolver:
    - `local` → sube el archivo local con `KieGateway.upload_file` (con
      revalidación pre-upload del path).
    - `catalog` → busca en `ImageStore`/`GeneratedImageStore`.
-2. Descarga `base.png` eager al output_dir antes de empezar steps.
+2. Descarga `<workflow_slug>_base.png` eager al output_dir antes de empezar steps.
 
 NO mutea status del workflow ni emite eventos: solo devuelve los
 artefactos resueltos. El `WorkflowRunner` se encarga de las transiciones.
@@ -51,6 +51,7 @@ from ..domain.ports import (
     ImageStore,
     KieGateway,
 )
+from ..domain.workflow_artifacts import workflow_base_image_filename
 from .ids import new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
 
@@ -129,9 +130,17 @@ class WorkflowBaseResolver:
             return await self._resolve_from_local(creation)
         return await self._resolve_from_catalog(creation)
 
-    async def download_base_locally(self, ref: ImageAssetRef, output_dir: Path) -> None:
-        """Descarga la imagen base a `output_dir/base.png` para uso del usuario."""
-        target = output_dir / BASE_IMAGE_FILENAME
+    async def download_base_locally(
+        self,
+        ref: ImageAssetRef,
+        output_dir: Path,
+        workflow_slug: str | None = None,
+    ) -> None:
+        """Descarga la imagen base con nombre descriptivo para uso del usuario."""
+        filename = (
+            workflow_base_image_filename(workflow_slug) if workflow_slug else BASE_IMAGE_FILENAME
+        )
+        target = output_dir / filename
         async with self._download_limiter:
             await self._client.download_file(ref.kie_url, target)
 

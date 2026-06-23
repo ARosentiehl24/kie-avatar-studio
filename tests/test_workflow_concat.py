@@ -25,7 +25,7 @@ def _step(*, step: int, slug: str, attached: bool = True) -> WorkflowStep:
 
 
 def _step_video_path(root: Path, *, step: int, slug: str) -> Path:
-    return root / f"step_{step:02d}_{slug}" / "video.mp4"
+    return root / f"step_{step:02d}_{slug}" / f"step_{step:02d}_{slug}_video.mp4"
 
 
 async def test_concatenate_workflow_videos_returns_none_when_no_attached_videos(
@@ -58,11 +58,11 @@ async def test_concatenate_workflow_videos_copies_single_video_and_extracts_audi
         ffmpeg=ffmpeg,
     )
 
-    assert result == tmp_path / "final.mp4"
-    assert (tmp_path / "final.mp4").read_bytes() == b"video"
-    assert (tmp_path / "final_audio.mp3").read_bytes() == b"audio"
+    assert result == tmp_path / "workflow_final.mp4"
+    assert (tmp_path / "workflow_final.mp4").read_bytes() == b"video"
+    assert (tmp_path / "workflow_final_audio.mp3").read_bytes() == b"audio"
     ffmpeg.extract_audio.assert_awaited_once_with(
-        tmp_path / "final.mp4", tmp_path / "final_audio.mp3"
+        tmp_path / "workflow_final.mp4", tmp_path / "workflow_final_audio.mp3"
     )
 
 
@@ -98,10 +98,10 @@ async def test_concatenate_workflow_videos_delegates_concat_for_multiple_inputs(
         ffmpeg=ffmpeg,
     )
 
-    assert result == tmp_path / "final.mp4"
+    assert result == tmp_path / "workflow_final.mp4"
     ffmpeg.concat_videos.assert_awaited_once()
     ffmpeg.extract_audio.assert_awaited_once_with(
-        tmp_path / "final.mp4", tmp_path / "final_audio.mp3"
+        tmp_path / "workflow_final.mp4", tmp_path / "workflow_final_audio.mp3"
     )
 
 
@@ -130,11 +130,11 @@ async def test_concatenate_workflow_videos_filters_out_unattached_steps(
         ffmpeg=ffmpeg,
     )
 
-    assert result == tmp_path / "final.mp4"
-    assert (tmp_path / "final.mp4").read_bytes() == b"attached-video"
+    assert result == tmp_path / "workflow_final.mp4"
+    assert (tmp_path / "workflow_final.mp4").read_bytes() == b"attached-video"
     ffmpeg.concat_videos.assert_not_awaited()
     ffmpeg.extract_audio.assert_awaited_once_with(
-        tmp_path / "final.mp4", tmp_path / "final_audio.mp3"
+        tmp_path / "workflow_final.mp4", tmp_path / "workflow_final_audio.mp3"
     )
 
 
@@ -157,5 +157,5 @@ async def test_concatenate_workflow_videos_accepts_legacy_scene_slug_layout(
         ffmpeg=ffmpeg,
     )
 
-    assert result == tmp_path / "final.mp4"
-    assert (tmp_path / "final.mp4").read_bytes() == b"legacy-video"
+    assert result == tmp_path / "workflow_final.mp4"
+    assert (tmp_path / "workflow_final.mp4").read_bytes() == b"legacy-video"

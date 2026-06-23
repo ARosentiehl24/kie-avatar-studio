@@ -160,7 +160,7 @@
       "required": [
         "voice_id"
       ],
-      "description": "Postproceso opcional sobre final_audio.mp3 usando ElevenLabs Speech-to-Speech. Sirve para unificar la voz final después de concatenar los clips VEO. Si es null o se omite, el workflow termina correctamente con final.mp4 y final_audio.mp3, sin llamar a ElevenLabs; el usuario puede procesar ese audio por fuera.",
+      "description": "Postproceso opcional sobre <workflow_slug>_final_audio.mp3 usando ElevenLabs Speech-to-Speech. Sirve para unificar la voz final después de concatenar los clips VEO. Si es null o se omite, el workflow termina correctamente con <workflow_slug>_final.mp4 y <workflow_slug>_final_audio.mp3, sin llamar a ElevenLabs; el usuario puede procesar ese audio por fuera.",
       "properties": {
         "voice_id": {
           "type": "string",
@@ -364,7 +364,7 @@
             }
           ],
           "default": null,
-          "description": "Configuración opcional de voice changer final. Si se omite/null, no se ejecuta ElevenLabs y el flujo termina en final.mp4 + final_audio.mp3."
+          "description": "Configuración opcional de voice changer final. Si se omite/null, no se ejecuta ElevenLabs y el flujo termina en <workflow_slug>_final.mp4 + <workflow_slug>_final_audio.mp3."
         }
       }
     },
@@ -400,7 +400,7 @@
         "attached": {
           "type": "boolean",
           "default": true,
-          "description": "Si true, el clip participa en final.mp4; si false, se genera como clip individual pero queda fuera del video unificado."
+          "description": "Si true, el clip participa en <workflow_slug>_final.mp4; si false, se genera como clip individual pero queda fuera del video unificado."
         },
         "change_scene": {
           "type": "boolean",

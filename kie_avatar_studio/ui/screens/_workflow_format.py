@@ -16,6 +16,15 @@ from ...domain.models import (
     WorkflowStep,
     WorkflowStepStatus,
 )
+from ...domain.workflow_artifacts import (
+    step_video_filename,
+    workflow_final_audio_candidates,
+    workflow_final_audio_filename,
+    workflow_final_video_candidates,
+    workflow_final_video_filename,
+    workflow_voice_changed_audio_candidates,
+    workflow_voice_changed_audio_filename,
+)
 from .._icons import ERROR, OK
 from .._text_format import truncate
 
@@ -26,10 +35,10 @@ _STEP_STAGE_LABELS: Final[dict[WorkflowProgressKey, str]] = {
     WorkflowProgressKey.DOWNLOAD_VIDEO: "video_local",
 }
 
-_FINAL_OUTPUTS: Final[tuple[tuple[str, str], ...]] = (
-    ("Video final", "final.mp4"),
-    ("Audio final", "final_audio.mp3"),
-    ("Audio con cambio de voz", "voice_changed_audio.mp3"),
+_FINAL_OUTPUTS: Final[tuple[str, ...]] = (
+    "video",
+    "audio",
+    "voice_changed_audio",
 )
 
 
@@ -111,8 +120,8 @@ def _color_for_progress_status(value: str) -> str:
 def format_outputs(step: WorkflowStep) -> str:
     parts: list[str] = []
     if step.scene_image_path:
-        parts.append("scene.png")
-    video_label = f"{step.scene_slug}/video.mp4"
+        parts.append(Path(step.scene_image_path).name)
+    video_label = Path(step.video_path).name if step.video_path else step_video_filename(step)
     if step.video_path:
         parts.append(video_label)
     elif step.status != WorkflowStepStatus.QUEUED:
@@ -141,13 +150,16 @@ def format_workflow_pipeline(workflow: WorkflowJob) -> str:
 
 def format_workflow_outputs(workflow: WorkflowJob) -> str:
     """Lista los outputs finales esperados del workflow v2.0.0."""
-    output_dir = Path(workflow.output_dir)
     lines = ["[b]Outputs v2.0.0[/b]"]
-    for label, filename in _FINAL_OUTPUTS:
-        if filename == "voice_changed_audio.mp3" and workflow.pre_settings.voice_changer is None:
+    for key in _FINAL_OUTPUTS:
+        label, filename, candidates = _final_output_info(workflow, key)
+        if key == "voice_changed_audio" and workflow.pre_settings.voice_changer is None:
             continue
-        path = output_dir / filename
-        status = "[green]✓ listo[/green]" if path.is_file() else "[yellow]pendiente[/yellow]"
+        status = (
+            "[green]✓ listo[/green]"
+            if any(path.is_file() for path in candidates)
+            else "[yellow]pendiente[/yellow]"
+        )
         lines.append(f"  · {status} [b]{label}:[/b] [dim]{filename}[/dim]")
     return "\n".join(lines)
 
@@ -209,7 +221,7 @@ def _concat_stage_status(workflow: WorkflowJob) -> str:
     attached_steps = [step for step in workflow.steps if step.attached]
     if not attached_steps:
         return "skipped"
-    if _workflow_output_exists(workflow, "final.mp4"):
+    if _workflow_output_exists(workflow, "video"):
         return "done"
     if workflow.status in {WorkflowStatus.FAILED, WorkflowStatus.PARTIALLY_FAILED}:
         return "failed"
@@ -222,23 +234,44 @@ def _audio_stage_status(workflow: WorkflowJob) -> str:
     attached_steps = [step for step in workflow.steps if step.attached]
     if not attached_steps:
         return "skipped"
-    if _workflow_output_exists(workflow, "final_audio.mp3"):
+    if _workflow_output_exists(workflow, "audio"):
         return "done"
     if workflow.status in {WorkflowStatus.FAILED, WorkflowStatus.PARTIALLY_FAILED}:
         return "failed"
-    if _workflow_output_exists(workflow, "final.mp4"):
+    if _workflow_output_exists(workflow, "video"):
         return "running"
     return "pending"
 
 
 def _voice_changer_stage_status(workflow: WorkflowJob) -> str:
-    if _workflow_output_exists(workflow, "voice_changed_audio.mp3"):
+    if _workflow_output_exists(workflow, "voice_changed_audio"):
         return "done"
     return "pending"
 
 
-def _workflow_output_exists(workflow: WorkflowJob, filename: str) -> bool:
-    return (Path(workflow.output_dir) / filename).is_file()
+def _workflow_output_exists(workflow: WorkflowJob, key: str) -> bool:
+    _label, _filename, candidates = _final_output_info(workflow, key)
+    return any(path.is_file() for path in candidates)
+
+
+def _final_output_info(workflow: WorkflowJob, key: str) -> tuple[str, str, tuple[Path, ...]]:
+    if key == "video":
+        return (
+            "Video final",
+            workflow_final_video_filename(workflow.slug),
+            workflow_final_video_candidates(workflow),
+        )
+    if key == "audio":
+        return (
+            "Audio final",
+            workflow_final_audio_filename(workflow.slug),
+            workflow_final_audio_candidates(workflow),
+        )
+    return (
+        "Audio con cambio de voz",
+        workflow_voice_changed_audio_filename(workflow.slug),
+        workflow_voice_changed_audio_candidates(workflow),
+    )
 
 
 __all__ = [

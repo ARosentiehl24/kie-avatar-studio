@@ -4,7 +4,7 @@ Todos los steps renderizan video con VEO 3.1. La generación de imagen
 previa (Nano Banana / GPT Image) se mantiene igual que antes; lo único
 que cambia es el backend de video:
 
-- `_run_veo`: scene_image (opcional) + VEO 3.1 → `video.mp4`
+- `_run_veo`: scene_image (opcional) + VEO 3.1 → video con nombre de escena
 
 El step runner NO escribe directamente a la DB ni al manifest. Recibe
 un callback `on_transition(step)` que el `WorkflowRunner` provee y que
@@ -37,6 +37,12 @@ from ..domain.models import (
 )
 from ..domain.policies import KIE_GENERATED_RETENTION_DAYS, is_path_inside, validate_veo_step
 from ..domain.ports import GeneratedImageStore, ImageJobRepository, KieGateway
+from ..domain.workflow_artifacts import (
+    LEGACY_STEP_SCENE_IMAGE_FILENAME,
+    LEGACY_STEP_VIDEO_FILENAME,
+    step_scene_image_filename,
+    step_video_filename,
+)
 from .ids import new_image_job_id
 from .runner_factories import WorkflowRunnerFactory
 from .veo_poller import poll_veo_task_for_url
@@ -52,8 +58,8 @@ from .workflow_execution_context import (
 )
 from .workflow_kie_helpers import download_kie_asset
 
-SCENE_IMAGE_FILENAME: Final[str] = "scene.png"
-VIDEO_FILENAME: Final[str] = "video.mp4"
+SCENE_IMAGE_FILENAME: Final[str] = LEGACY_STEP_SCENE_IMAGE_FILENAME
+VIDEO_FILENAME: Final[str] = LEGACY_STEP_VIDEO_FILENAME
 VEO_GENERATION_TYPE: Final[str] = "FIRST_AND_LAST_FRAMES_2_VIDEO"
 
 # Compatibilidad hacia atrás para tests/imports externos.
@@ -210,7 +216,7 @@ class WorkflowStepRunner:
         self, step: WorkflowStep, context: WorkflowExecutionContext
     ) -> Path:
         step_dir = context.step_dir(step)
-        output_path = step_dir / VIDEO_FILENAME
+        output_path = step_dir / step_video_filename(step)
         if not is_path_inside(output_path, self._settings.outputs_dir):
             raise WorkflowStepError(f"step {step.step}: output video fuera de outputs_dir")
         await asyncio.to_thread(step_dir.mkdir, parents=True, exist_ok=True)
@@ -262,7 +268,7 @@ class WorkflowStepRunner:
     ) -> ImageAssetRef:
         """Genera (o reusa) la imagen scene del step y la descarga local."""
         step_dir = context.step_dir(step)
-        scene_path = step_dir / SCENE_IMAGE_FILENAME
+        scene_path = step_dir / step_scene_image_filename(step)
         if not is_path_inside(scene_path, self._settings.outputs_dir):
             raise WorkflowStepError(f"step {step.step}: scene_image fuera de outputs_dir")
         await asyncio.to_thread(step_dir.mkdir, parents=True, exist_ok=True)

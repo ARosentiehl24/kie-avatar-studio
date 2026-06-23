@@ -26,6 +26,7 @@ from ..domain.models import (
     WorkflowStep,
 )
 from ..domain.policies import expected_progress_keys_for_step, resolve_effective_i2v_duration
+from ..domain.workflow_artifacts import step_dir_name
 
 DEFAULT_TURBO_MODEL: Final[str] = "elevenlabs/text-to-speech-turbo-2-5"
 
@@ -119,8 +120,7 @@ class WorkflowExecutionContext:
 
     def step_dir(self, step: WorkflowStep) -> Path:
         """`output_dir / step_NN_<slug>/` para un step dado."""
-        folder = f"step_{step.step:02d}_{step.scene_slug}"
-        return self.output_dir / folder
+        return self.output_dir / step_dir_name(step)
 
     def resolved_voice_settings(self) -> VoiceSettings | None:
         """Devuelve voice_settings con `language_code` ajustado.
