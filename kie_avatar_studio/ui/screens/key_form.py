@@ -15,6 +15,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
+from ...app_layer.clipboard import read_from_clipboard
 from ...app_layer.ids import sanitize_filename
 from ...domain.errors import KeyValidationError
 from ...domain.policies import validate_key_label, validate_kie_key
@@ -62,6 +63,11 @@ class KeyFormScreen(ModalScreen[KeyFormResult | None]):
                 id="key",
                 password=_PASSWORD_MASK,
             )
+            yield Button(
+                "Pegar desde portapapeles",
+                id="paste-key",
+                classes="btn-info clipboard-paste-button",
+            )
             yield Static("", id="key-form-error")
             with Horizontal(classes="actions-row"):
                 yield Button("Cancelar", id="cancel", variant="default")
@@ -70,11 +76,13 @@ class KeyFormScreen(ModalScreen[KeyFormResult | None]):
     def on_mount(self) -> None:
         self.query_one("#label", Input).focus()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
             self.action_cancel()
         elif event.button.id == "save":
             self._submit()
+        elif event.button.id == "paste-key":
+            await self._paste_key_from_clipboard()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -90,3 +98,13 @@ class KeyFormScreen(ModalScreen[KeyFormResult | None]):
             return
         key_id = sanitize_filename(label.strip()).lower()
         self.dismiss(KeyFormResult(id=key_id, label=label.strip(), key=key))
+
+    async def _paste_key_from_clipboard(self) -> None:
+        result = await read_from_clipboard()
+        if not result.success:
+            self.query_one("#key-form-error", Static).update(
+                f"No pude leer el portapapeles: {result.error or result.backend}"
+            )
+            return
+        self.query_one("#key", Input).value = result.text.strip()
+        self.query_one("#key-form-error", Static).update("Pegado desde portapapeles")

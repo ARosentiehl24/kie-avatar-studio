@@ -29,6 +29,48 @@
       "description": "Lista ordenada de escenas. Una IA debe generar una progresión narrativa coherente: hook, demostración/beneficio, prueba visual, explicación y cierre. Los números de step deben ser consecutivos empezando en 1."
     }
   },
+  "allOf": [
+    {
+      "description": "Si cualquier step usa include_product=true, pre_settings.promote_product debe existir y ser true.",
+      "if": {
+        "properties": {
+          "run": {
+            "contains": {
+              "type": "object",
+              "properties": {
+                "include_product": {
+                  "const": true
+                }
+              },
+              "required": [
+                "include_product"
+              ]
+            }
+          }
+        },
+        "required": [
+          "run"
+        ]
+      },
+      "then": {
+        "properties": {
+          "pre_settings": {
+            "required": [
+              "promote_product"
+            ],
+            "properties": {
+              "promote_product": {
+                "const": true
+              }
+            }
+          }
+        },
+        "required": [
+          "pre_settings"
+        ]
+      }
+    }
+  ],
   "$defs": {
     "AspectRatio": {
       "type": "string",
@@ -329,7 +371,7 @@
     "Step": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Una escena del video. Describe qué se ve en prompt, qué se dice en text, si cambia la escena, si entra al montaje final y si incluye producto/modelo.",
+      "description": "Una escena del video. Describe qué se ve en prompt, qué se dice en text, si cambia la escena, si entra al montaje final y si incluye producto/modelo. Para generación por IA: todo b-roll debe declarar change_scene=true y scene_description no vacío.",
       "required": [
         "step",
         "scene_name",
@@ -353,7 +395,7 @@
             "a-roll",
             "b-roll"
           ],
-          "description": "'a-roll' para persona/modelo hablando a cámara; 'b-roll' para apoyo visual, producto, manos, infografías o voz en off."
+          "description": "'a-roll' para persona/modelo hablando a cámara; 'b-roll' para apoyo visual, producto, manos, infografías o voz en off. Regla IA: b-roll siempre debe usar change_scene=true con scene_description explícito."
         },
         "attached": {
           "type": "boolean",
@@ -363,12 +405,12 @@
         "change_scene": {
           "type": "boolean",
           "default": true,
-          "description": "Si true, genera una scene_image nueva a partir de scene_description + prompt. Si false, reusa la base actual. Para continuidad de misma locación usa false; para cambio de fondo/infografía/producto usa true."
+          "description": "Si true, genera una scene_image nueva a partir de scene_description + prompt. Si false, reusa la base actual. Para a-roll con continuidad de misma locación puedes usar false; para cualquier b-roll generado por IA usa siempre true."
         },
         "scene_description": {
           "type": "string",
           "default": "",
-          "description": "Descripción del entorno cuando change_scene=true: lugar, fondo, luz, props y atmósfera. Debe complementar el prompt; no repitas el diálogo."
+          "description": "Descripción del entorno cuando change_scene=true: lugar, fondo, luz, props y atmósfera. Obligatorio y no vacío para todo b-roll y para cualquier step con change_scene=true."
         },
         "change_background": {
           "type": "boolean",
@@ -419,7 +461,7 @@
         "product_prompt": {
           "type": "string",
           "default": "",
-          "description": "Descripción específica del producto y cómo debe aparecer: envase, etiqueta, posición, interacción, legibilidad, manos, close-up. Solo se usa si include_product=true."
+          "description": "Descripción específica del producto y cómo debe aparecer: envase, etiqueta, posición, interacción, legibilidad, manos, close-up. Obligatorio y no vacío si include_product=true."
         },
         "image_aspect_ratio": {
           "oneOf": [
@@ -467,6 +509,29 @@
         {
           "if": {
             "properties": {
+              "change_scene": {
+                "const": true
+              }
+            },
+            "required": [
+              "change_scene"
+            ]
+          },
+          "then": {
+            "required": [
+              "scene_description"
+            ],
+            "properties": {
+              "scene_description": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
               "type": {
                 "const": "b-roll"
               }
@@ -476,7 +541,18 @@
             ]
           },
           "then": {
+            "required": [
+              "change_scene",
+              "scene_description"
+            ],
             "properties": {
+              "change_scene": {
+                "const": true
+              },
+              "scene_description": {
+                "type": "string",
+                "minLength": 1
+              },
               "prompt": {
                 "type": "string",
                 "minLength": 1,
@@ -485,6 +561,56 @@
               "text": {
                 "type": "string",
                 "maxLength": 5000
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "include_product": {
+                "const": true
+              }
+            },
+            "required": [
+              "include_product"
+            ]
+          },
+          "then": {
+            "required": [
+              "product_prompt"
+            ],
+            "properties": {
+              "product_prompt": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "set_as_base": {
+                "const": true
+              }
+            },
+            "required": [
+              "set_as_base"
+            ]
+          },
+          "then": {
+            "required": [
+              "change_scene",
+              "scene_description"
+            ],
+            "properties": {
+              "change_scene": {
+                "const": true
+              },
+              "scene_description": {
+                "type": "string",
+                "minLength": 1
               }
             }
           }

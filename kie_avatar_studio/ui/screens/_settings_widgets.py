@@ -132,6 +132,11 @@ def compose_integrations_tab(snapshot: EditableSettings) -> ComposeResult:
             password=True,
             placeholder="sk_...",
         )
+        yield Button(
+            "Pegar desde portapapeles",
+            id="paste-elevenlabs-key",
+            classes="btn-info clipboard-paste-button",
+        )
     with Horizontal(classes="actions-row actions-row-save"):
         yield Button("Guardar integraciones", id="save-integrations", variant="primary")
 

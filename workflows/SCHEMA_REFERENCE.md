@@ -7,6 +7,10 @@ VEO 3.1 siguiendo el estilo del ejemplo
 
 Fuente machine-readable: [`SCHEMA.json`](./SCHEMA.json).
 
+> **Importante para IAs generadoras:** esta guía y `SCHEMA.json` son el contrato
+> de generación. El loader puede tolerar algunos JSON legacy, pero una IA debe
+> generar siempre el formato estricto documentado aquí.
+
 ## Objetivo del JSON
 
 Un workflow describe un video como una lista ordenada de escenas:
@@ -176,12 +180,12 @@ Cada item de `run` representa una escena.
 | `prompt` | Sí | Prompt visual detallado para VEO. |
 | `text` | A-roll sí | Guion hablado exacto o voz en off. |
 | `attached` | No | `true` si entra al `final.mp4`; `false` si es clip suelto. |
-| `change_scene` | No | `true` genera nueva scene image; `false` reutiliza base actual. |
-| `scene_description` | Si cambia escena | Lugar/fondo/luz/ambiente de la nueva scene image. |
+| `change_scene` | B-roll sí | `true` genera nueva scene image; en b-roll debe ser siempre `true`. |
+| `scene_description` | B-roll sí | Lugar/fondo/luz/ambiente. Obligatorio si `change_scene=true`. |
 | `include_product` | No | `true` si el producto aparece en este step. |
 | `include_model` | No | `true` si aparece la modelo/persona base. |
 | `set_as_base` | No | `true` si esta scene image será base para steps siguientes. |
-| `product_prompt` | Si producto | Cómo debe verse/interactuar el producto. |
+| `product_prompt` | Si producto | Obligatorio y no vacío si `include_product=true`. |
 | `image_aspect_ratio` | No | Override de imagen para este step. |
 
 ### `type: "a-roll"`
@@ -193,6 +197,8 @@ Reglas:
 - `text` es obligatorio y debe ser breve.
 - `prompt` debe describir plano, gesto, emoción, cámara, luz y continuidad.
 - Si la misma modelo continúa, menciona continuidad visual.
+- Si `change_scene=true`, `scene_description` es obligatorio y debe describir
+  el entorno/fondo nuevo.
 
 Ejemplo:
 
@@ -215,10 +221,19 @@ Usar para producto, manos, infografías, ambiente, close-ups o apoyo visual.
 Reglas:
 
 - `text` puede estar vacío o contener voz en off.
+- Para JSON generado por IA, `b-roll` **siempre** debe usar
+  `change_scene: true`.
+- `scene_description` es obligatorio, no vacío y debe describir el set visual:
+  lugar, fondo, luz, superficie, props, gráfica/infografía o contexto del
+  producto.
 - Si `include_model=false`, no debe aparecer la modelo completa.
 - Una escena “solo producto” puede incluir manos humanas interactuando si el
   foco sigue siendo el producto.
-- Si `change_scene=true`, escribe `scene_description`.
+- Si `include_product=true`, también debes poner
+  `pre_settings.promote_product: true` y `product_prompt` no vacío.
+- No generes b-roll con `change_scene=false` ni con `scene_description=""`;
+  eso reusa la base de la modelo y produce resultados inválidos para escenas
+  auxiliares/producto/infografía.
 
 Ejemplo solo producto:
 
@@ -228,7 +243,8 @@ Ejemplo solo producto:
   "scene_name": "Solo producto con narración",
   "type": "b-roll",
   "attached": true,
-  "change_scene": false,
+  "change_scene": true,
+  "scene_description": "Mesa de cocina clara con luz natural cálida, fondo limpio y superficie ordenada para close-up de producto.",
   "prompt": "Toma protagonista del suplemento digestivo en polvo, cámara macro...",
   "text": "Aquí te enseño el suplemento digestivo en detalle...",
   "include_product": true,
@@ -279,14 +295,21 @@ Para un video UGC de 5 escenas:
 1. `run` no puede estar vacío.
 2. `step` debe ser consecutivo: 1, 2, 3...
 3. `a-roll` requiere `text` no vacío.
-4. `prompt` máximo:
+4. Todo `b-roll` generado por IA requiere `change_scene=true`.
+5. Todo `b-roll` requiere `scene_description` no vacío.
+6. Todo step con `change_scene=true` requiere `scene_description` no vacío.
+7. Todo step con `include_product=true` requiere:
+   - `pre_settings.promote_product=true`;
+   - `product_prompt` no vacío.
+8. Todo step con `set_as_base=true` requiere:
+   - `change_scene=true`;
+   - `scene_description` no vacío.
+9. `prompt` máximo:
    - a-roll: 5000 caracteres;
    - b-roll: 2500 caracteres.
-5. Si `b-roll` y `change_scene=true`, `scene_description` debe tener contenido.
-6. Si `include_product=true`, `pre_settings.promote_product` debe ser `true`.
-7. Si usas `set_as_base=true`, el workflow se ejecuta en serie para preservar
+10. Si usas `set_as_base=true`, el workflow se ejecuta en serie para preservar
    continuidad.
-8. `voice_changer` es opcional: `null` u omitido significa “no llamar a
+11. `voice_changer` es opcional: `null` u omitido significa “no llamar a
    ElevenLabs”.
 
 ## Outputs esperados
@@ -371,8 +394,8 @@ No generes campos runtime/internos:
       "scene_name": "Solo producto con narración",
       "type": "b-roll",
       "attached": true,
-      "change_scene": false,
-      "scene_description": "",
+      "change_scene": true,
+      "scene_description": "Mesa de cocina limpia con luz natural lateral, fondo neutro desenfocado y espacio para destacar el producto.",
       "prompt": "Toma macro del producto con textura visible, fondo limpio, manos opcionales interactuando sin perder foco.",
       "text": "Aquí te enseño el producto en detalle para que veas exactamente lo que estoy usando.",
       "include_product": true,

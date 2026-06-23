@@ -8,6 +8,24 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.0.2] — 2026-06-22
+
+### Added (S)
+
+- **Botones de pegar API keys**: el modal de Kie API Keys y la pestaña
+  `Configuración → Integraciones` ahora tienen botón "Pegar desde
+  portapapeles" para usuarios de Windows/terminales donde `Ctrl+V` no funciona.
+
+### Changed (S)
+
+- **Schema workflow más explícito para IAs**: `workflows/SCHEMA.json` y
+  `workflows/SCHEMA_REFERENCE.md` ahora declaran constraints condicionales para
+  b-roll, producto y continuidad (`change_scene`, `scene_description`,
+  `product_prompt`, `promote_product`, `set_as_base`) para evitar ejemplos JSON
+  inválidos.
+- **Espaciado del botón de pegar**: el botón "Pegar desde portapapeles" queda
+  separado del input por 1 celda para evitar que se vea pegado visualmente.
+
 ## [2.0.1] — 2026-06-22
 
 ### Changed (S)
