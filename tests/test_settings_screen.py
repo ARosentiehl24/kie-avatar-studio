@@ -11,6 +11,7 @@ import json
 from textual.widgets import DataTable
 
 from kie_avatar_studio.app import KieAvatarStudioApp
+from kie_avatar_studio.app_layer.clipboard import ClipboardTextResult
 from kie_avatar_studio.config import Settings
 from kie_avatar_studio.infra.keys_store import KEYS_FILE_NAME
 
@@ -133,6 +134,8 @@ async def test_all_buttons_render_with_full_label(tmp_path) -> None:
             ("tab-execution", "save-execution", "Guardar ejecución"),
             ("tab-concurrency", "save-concurrency", "Guardar concurrencia"),
             ("tab-defaults", "save-defaults", "Guardar defaults"),
+            ("tab-integrations", "paste-elevenlabs-key", "Pegar desde portapapeles"),
+            ("tab-integrations", "save-integrations", "Guardar integraciones"),
             ("tab-maintenance", "cleanup-runtime-db", "Limpiar DB runtime"),
         ):
             tc.active = tab_id
@@ -194,3 +197,48 @@ async def test_save_elevenlabs_key_persists_to_keys_json(tmp_path) -> None:
         await pilot.pause()
         payload = json.loads((app.settings.data_dir / KEYS_FILE_NAME).read_text(encoding="utf-8"))
         assert payload["integrations"]["elevenlabs_api_key"] == "sk-from-ui"
+
+
+async def test_paste_button_fills_elevenlabs_key_from_clipboard(tmp_path, monkeypatch) -> None:
+    from textual.widgets import Input, TabbedContent
+
+    async def fake_read_clipboard() -> ClipboardTextResult:
+        return ClipboardTextResult(success=True, backend="powershell", text=" sk-elevenlabs ")
+
+    monkeypatch.setattr(
+        "kie_avatar_studio.ui.screens.settings.read_from_clipboard",
+        fake_read_clipboard,
+    )
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(90, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        tabs = app.screen.query_one(TabbedContent)
+        tabs.active = "tab-integrations"
+        await pilot.pause()
+        await pilot.click("#paste-elevenlabs-key")
+        await pilot.pause()
+        assert app.screen.query_one("#elevenlabs-api-key", Input).value == "sk-elevenlabs"
+
+
+async def test_paste_button_fills_kie_key_modal_from_clipboard(tmp_path, monkeypatch) -> None:
+    from textual.widgets import Input
+
+    async def fake_read_clipboard() -> ClipboardTextResult:
+        return ClipboardTextResult(success=True, backend="powershell", text=" sk-kie-key ")
+
+    monkeypatch.setattr(
+        "kie_avatar_studio.ui.screens.key_form.read_from_clipboard",
+        fake_read_clipboard,
+    )
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(90, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        await pilot.click("#key-add")
+        await pilot.pause()
+        await pilot.click("#paste-key")
+        await pilot.pause()
+        assert app.screen.query_one("#key", Input).value == "sk-kie-key"

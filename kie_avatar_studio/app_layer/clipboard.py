@@ -33,7 +33,20 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Literal
 
-ClipboardBackend = Literal["wl-copy", "xclip", "xsel", "pbcopy", "clip.exe", "osc52", "none"]
+ClipboardBackend = Literal[
+    "wl-copy",
+    "wl-paste",
+    "xclip",
+    "xsel",
+    "pbcopy",
+    "pbpaste",
+    "clip.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "osc52",
+    "none",
+]
 
 # Orden de preferencia. Probamos cada uno; el primero disponible y que
 # no falle se usa. Si ninguno funciona, caemos al fallback OSC 52.
@@ -43,6 +56,15 @@ _SYSTEM_BACKENDS: Final[tuple[tuple[ClipboardBackend, tuple[str, ...]], ...]] = 
     ("xsel", ("xsel", "--clipboard", "--input")),
     ("pbcopy", ("pbcopy",)),
     ("clip.exe", ("clip.exe",)),
+)
+_READ_BACKENDS: Final[tuple[tuple[ClipboardBackend, tuple[str, ...]], ...]] = (
+    ("wl-paste", ("wl-paste", "--no-newline")),
+    ("xclip", ("xclip", "-selection", "clipboard", "-o")),
+    ("xsel", ("xsel", "--clipboard", "--output")),
+    ("pbpaste", ("pbpaste",)),
+    ("powershell", ("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw")),
+    ("powershell.exe", ("powershell.exe", "-NoProfile", "-Command", "Get-Clipboard -Raw")),
+    ("pwsh", ("pwsh", "-NoProfile", "-Command", "Get-Clipboard -Raw")),
 )
 
 
@@ -61,6 +83,16 @@ class ClipboardResult:
 
     success: bool
     backend: ClipboardBackend
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClipboardTextResult:
+    """Resultado de leer texto desde el clipboard del sistema."""
+
+    success: bool
+    backend: ClipboardBackend
+    text: str = ""
     error: str | None = None
 
 
@@ -107,6 +139,28 @@ async def copy_to_clipboard(
     )
 
 
+async def read_from_clipboard() -> ClipboardTextResult:
+    """Lee texto desde el clipboard del sistema usando backends nativos."""
+    last_error: str | None = None
+    for backend_name, command in _READ_BACKENDS:
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            result = await _run_capture(backend_name, command)
+        except (TimeoutError, OSError) as exc:
+            last_error = f"{backend_name}: {exc}"
+            continue
+        if result.success:
+            return result
+        last_error = result.error
+    return ClipboardTextResult(
+        success=False,
+        backend="none",
+        error=last_error
+        or "no hay backend de lectura de clipboard disponible (probá Ctrl+V directo)",
+    )
+
+
 async def _run_pipe(
     backend: ClipboardBackend, command: tuple[str, ...], text: str
 ) -> ClipboardResult:
@@ -133,3 +187,25 @@ async def _run_pipe(
         msg = stderr.decode("utf-8", errors="replace").strip() or "exit != 0"
         return ClipboardResult(success=False, backend=backend, error=msg)
     return ClipboardResult(success=True, backend=backend)
+
+
+async def _run_capture(backend: ClipboardBackend, command: tuple[str, ...]) -> ClipboardTextResult:
+    """Ejecuta `command` y captura stdout como texto del clipboard."""
+    proc = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    if proc.returncode != 0:
+        msg = stderr.decode("utf-8", errors="replace").strip() or "exit != 0"
+        return ClipboardTextResult(success=False, backend=backend, error=msg)
+    text = stdout.decode("utf-8", errors="replace")
+    if not text:
+        return ClipboardTextResult(success=False, backend=backend, error="clipboard vacío")
+    return ClipboardTextResult(success=True, backend=backend, text=text)

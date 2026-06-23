@@ -303,6 +303,10 @@ Button:disabled {
     min-width: 0;
 }
 
+.clipboard-paste-button {
+    margin-top: 1;
+}
+
 #status-bar {
     color: $accent;
     padding-top: 2;

@@ -27,7 +27,7 @@ presionar **R** para refrescar.
       "scene_name": "Hook 1",
       "type": "a-roll", // "a-roll" | "b-roll"
       "change_scene": false,
-      "scene_description": "Soft kitchen, natural light",
+      "scene_description": "",
       "set_as_base": false,
       "prompt": "Plano medio mujer hablando a cámara",
       "text": "Por fin entendí qué tenía y necesito contártelo.",
@@ -38,30 +38,28 @@ presionar **R** para refrescar.
 
 ## Tipos de step (`type`)
 
-### `a-roll` — la modelo habla a cámara (lip-sync)
+### `a-roll` — la modelo habla a cámara (VEO 3.1)
 
-| Componente generado                                                                 | Path en el output dir      |
-| ----------------------------------------------------------------------------------- | -------------------------- |
-| Imagen scene (Nano Banana 2 refit si `change_scene=true`, sino reutiliza base) | `step_NN_<slug>/scene.png` |
-| Audio TTS                                                                           | `step_NN_<slug>/audio.mp3` |
-| Video Avatar Pro (con audio sincronizado)                                           | `step_NN_<slug>/final.mp4` |
+| Componente generado                                                      | Path en el output dir      |
+| ------------------------------------------------------------------------ | -------------------------- |
+| Imagen scene (Nano Banana 2 si `change_scene=true`, sino reutiliza base) | `step_NN_<slug>/scene.png` |
+| Video VEO 3.1 con audio nativo                                           | `step_NN_<slug>/video.mp4` |
 
-**Requiere `text` no vacío** (el script que la modelo dice).
+**Requiere `text` no vacío** (lo que la modelo debe decir en VEO).
 
-### `b-roll` con `text` no vacío — video silencioso + audio separado
+### `b-roll` — apoyo visual/producto/infografía (VEO 3.1)
 
-| Componente generado                                            | Path en el output dir      |
-| -------------------------------------------------------------- | -------------------------- |
-| Imagen scene (Nano Banana 2 refit si `change_scene=true`) | `step_NN_<slug>/scene.png` |
-| Audio TTS (para post-producción)                               | `step_NN_<slug>/audio.mp3` |
-| Video Kling 3.0 b-roll (silencioso)                            | `step_NN_<slug>/video.mp4` |
+| Componente generado                                                      | Path en el output dir      |
+| ------------------------------------------------------------------------ | -------------------------- |
+| Imagen scene obligatoria para JSON generado por IA (`change_scene=true`) | `step_NN_<slug>/scene.png` |
+| Video VEO 3.1 con audio nativo o voz en off                              | `step_NN_<slug>/video.mp4` |
 
-### `b-roll` con `text == ""` — solo video silencioso
+Reglas para JSON generado por IA:
 
-| Componente generado                 | Path en el output dir      |
-| ----------------------------------- | -------------------------- |
-| Imagen scene                        | `step_NN_<slug>/scene.png` |
-| Video Kling 3.0 b-roll (silencioso) | `step_NN_<slug>/video.mp4` |
+- Todo `b-roll` debe usar `change_scene=true`.
+- Todo `b-roll` debe traer `scene_description` no vacío.
+- Si `include_product=true`, también requiere `pre_settings.promote_product=true`
+  y `product_prompt` no vacío.
 
 ## `model_creation.method`
 
@@ -79,10 +77,9 @@ presionar **R** para refrescar.
 - `true`: genera una imagen scene nueva con Nano Banana 2 usando la base como
   referencia + el `scene_description` + el `prompt` del step.
 
-> ⚠️ B-roll con `change_scene=false` usará la cara de la modelo como imagen
-> base del video, lo cual probablemente NO es lo que querés para escenas
-> auxiliares (jeans, ilustración del intestino, etc). El validator emite un
-> warning visible en la UI.
+> ⚠️ No generes b-roll con `change_scene=false`. Eso reusa la base de la
+> modelo y produce escenas auxiliares/producto/infografía incorrectas. El
+> `SCHEMA.json` estricto lo marca inválido para generación por IA.
 
 ## `set_as_base`
 
@@ -105,15 +102,15 @@ outputs/wf_20260606_abc123/
 ├── base.png               ← imagen base de la modelo (descargada eager)
 ├── step_01_hook_1/
 │   ├── scene.png
-│   ├── audio.mp3          ← audio TTS separado para post
-│   └── final.mp4          ← a-roll
+│   └── video.mp4          ← VEO 3.1
 ├── step_02_b_roll_pain/
 │   ├── scene.png
-│   ├── audio.mp3          ← b-roll con texto
 │   └── video.mp4
-└── step_03_product_reveal/
-    ├── scene.png
-    └── video.mp4          ← b-roll silencioso
+├── step_03_product_reveal/
+│   ├── scene.png
+│   └── video.mp4
+├── final.mp4              ← concat de clips attached
+└── final_audio.mp3        ← audio extraído de final.mp4
 ```
 
 El `workflow.json` se **regenera atómicamente** en cada transición del workflow.
@@ -131,10 +128,11 @@ cierre limpio.
 Un workflow de N steps consume:
 
 - 1 imagen GPT Image 2 para la base (si `method=prompt`).
-- Por cada step con `change_background=true`: 1 imagen Nano Banana 2 adicional.
-- Por cada step `a-roll`: 1 TTS turbo + 1 Avatar Pro.
-- Por cada step `b-roll con text`: 1 TTS turbo + 1 b-roll Kling 3.0.
-- Por cada step `b-roll sin text`: 1 b-roll Kling 3.0.
+- Por cada step con `change_scene=true`: 1 imagen Nano Banana 2 adicional.
+- Por cada step: 1 video VEO 3.1.
+- Postproceso local con FFmpeg: concat + extracción de audio.
+- Opcional: 1 llamada ElevenLabs speech-to-speech si `voice_changer` está
+  configurado.
 
 El modal de confirmación muestra el desglose de operaciones + tu saldo actual de
 Kie antes de ejecutar.

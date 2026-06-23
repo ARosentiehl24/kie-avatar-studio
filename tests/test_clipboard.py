@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from kie_avatar_studio.app_layer.clipboard import (
     ClipboardResult,
+    ClipboardTextResult,
     copy_to_clipboard,
+    read_from_clipboard,
 )
 
 # --- input vacío -----------------------------------------------------------
@@ -149,3 +151,52 @@ async def test_windows_uses_clip_exe(monkeypatch) -> None:
     result = await copy_to_clipboard("https://kie/x.mp4")
     assert result.success is True
     assert result.backend == "clip.exe"
+
+
+async def test_read_clipboard_uses_first_available_backend(monkeypatch) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return f"/usr/bin/{cmd}" if cmd == "wl-paste" else None
+
+    async def fake_capture(backend, command):
+        assert backend == "wl-paste"
+        assert command == ("wl-paste", "--no-newline")
+        return ClipboardTextResult(success=True, backend=backend, text="sk-from-clipboard")
+
+    monkeypatch.setattr("kie_avatar_studio.app_layer.clipboard.shutil.which", fake_which)
+    monkeypatch.setattr("kie_avatar_studio.app_layer.clipboard._run_capture", fake_capture)
+
+    result = await read_from_clipboard()
+    assert result.success is True
+    assert result.backend == "wl-paste"
+    assert result.text == "sk-from-clipboard"
+
+
+async def test_read_clipboard_supports_windows_powershell(monkeypatch) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if cmd == "powershell"
+            else None
+        )
+
+    async def fake_capture(backend, command):
+        assert backend == "powershell"
+        assert command == ("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw")
+        return ClipboardTextResult(success=True, backend=backend, text="sk-windows")
+
+    monkeypatch.setattr("kie_avatar_studio.app_layer.clipboard.shutil.which", fake_which)
+    monkeypatch.setattr("kie_avatar_studio.app_layer.clipboard._run_capture", fake_capture)
+
+    result = await read_from_clipboard()
+    assert result.success is True
+    assert result.backend == "powershell"
+    assert result.text == "sk-windows"
+
+
+async def test_read_clipboard_returns_failure_without_backend(monkeypatch) -> None:
+    monkeypatch.setattr("kie_avatar_studio.app_layer.clipboard.shutil.which", lambda _cmd: None)
+
+    result = await read_from_clipboard()
+    assert result.success is False
+    assert result.backend == "none"
+    assert result.error is not None

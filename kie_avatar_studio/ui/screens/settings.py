@@ -13,6 +13,7 @@ from textual.widgets import (
     Static,
 )
 
+from ...app_layer.clipboard import read_from_clipboard
 from ...app_layer.keys_controller import KeysController
 from ...app_layer.settings_controller import SettingsController
 from ...domain.errors import JobValidationError, KeyValidationError, KieError
@@ -201,6 +202,17 @@ class SettingsScreen(Screen[None]):
         self._set_status(f"{OK} integraciones guardadas en data/keys.json")
         await self._notify_integrations_changed()
 
+    async def _handle_paste_elevenlabs_key(self) -> None:
+        result = await read_from_clipboard()
+        if not result.success:
+            self._set_status(
+                f"{ERROR} no pude leer el portapapeles: {result.error or result.backend}",
+                error=True,
+            )
+            return
+        self.query_one("#elevenlabs-api-key", Input).value = result.text.strip()
+        self._set_status(f"{OK} key pegada desde portapapeles")
+
     async def _handle_cleanup_runtime_db(self) -> None:
         if self._on_runtime_cleanup is None:
             self._set_status(f"{ERROR} limpieza no disponible en esta sesión", error=True)
@@ -282,6 +294,7 @@ _BUTTON_HANDLERS: dict[str, Callable[[SettingsScreen], Awaitable[None]]] = {
     "save-execution": SettingsScreen._handle_save_execution,
     "save-concurrency": SettingsScreen._handle_save_concurrency,
     "save-defaults": SettingsScreen._handle_save_defaults,
+    "paste-elevenlabs-key": SettingsScreen._handle_paste_elevenlabs_key,
     "save-integrations": SettingsScreen._handle_save_integrations,
     "cleanup-runtime-db": SettingsScreen._handle_cleanup_runtime_db,
 }
