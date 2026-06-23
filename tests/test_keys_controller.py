@@ -69,9 +69,7 @@ async def test_set_active_missing_raises(store: KeysStore, tmp_settings) -> None
         await ctl.set_active("ghost")
 
 
-async def test_elevenlabs_api_key_roundtrips_via_controller(
-    store: KeysStore, tmp_settings
-) -> None:
+async def test_elevenlabs_api_key_roundtrips_via_controller(store: KeysStore, tmp_settings) -> None:
     ctl = KeysController(
         store,
         lambda _s: _build_mocked_client(tmp_settings, lambda r: httpx.Response(200)),

@@ -141,6 +141,7 @@ class SettingsController:
         self._env.set("DEFAULT_VOICE", voice.strip())
         self._env.set("DEFAULT_PROMPT", prompt.strip())
 
+
 def _require_https_url(value: str, *, field: str) -> None:
     stripped = value.strip()
     if not (stripped.startswith("https://") or stripped.startswith("http://")):
