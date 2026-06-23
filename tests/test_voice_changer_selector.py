@@ -128,6 +128,71 @@ async def test_voice_selector_returns_full_voice_changer_config(tmp_path: Path) 
     )
 
 
+async def test_voice_selector_sorts_voices_alphabetically(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+    client = _FakeElevenLabsClient(
+        voices=[
+            {"voice_id": "voice_z", "name": "Zoe"},
+            {"voice_id": "voice_a", "name": "Ana"},
+            {"voice_id": "voice_c", "name": "Carla"},
+        ],
+        models=[{"model_id": "eleven_multilingual_sts_v2", "can_do_voice_conversion": True}],
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(
+            VoiceChangerSelectorScreen(
+                elevenlabs_client=client,
+                initial_selection=None,
+            )
+        )
+        await pilot.pause()
+        await pilot.pause()
+        voice_select = app.screen.query_one("#voice-changer-selector-select", Select)
+        option_labels = [str(label) for label, _value in voice_select._options]
+
+    assert option_labels[:4] == [
+        "Sin voice changer",
+        "Ana  ·  voice_a",
+        "Carla  ·  voice_c",
+        "Zoe  ·  voice_z",
+    ]
+
+
+async def test_voice_selector_filters_voices_by_text(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+    client = _FakeElevenLabsClient(
+        voices=[
+            {"voice_id": "voice_ana", "name": "Ana"},
+            {"voice_id": "voice_carla", "name": "Carla"},
+            {"voice_id": "narrador_1", "name": "Mario"},
+        ],
+        models=[{"model_id": "eleven_multilingual_sts_v2", "can_do_voice_conversion": True}],
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(
+            VoiceChangerSelectorScreen(
+                elevenlabs_client=client,
+                initial_selection=None,
+            )
+        )
+        await pilot.pause()
+        await pilot.pause()
+        search = app.screen.query_one("#voice-changer-selector-search", Input)
+        search.value = "nar"
+        await pilot.pause()
+        voice_select = app.screen.query_one("#voice-changer-selector-select", Select)
+        option_labels = [str(label) for label, _value in voice_select._options]
+        status = app.screen.query_one("#voice-changer-selector-search-status")
+        rendered_status = str(status.content)
+
+    assert option_labels == ["Sin voice changer", "Mario  ·  narrador_1"]
+    assert "1 voces coinciden" in rendered_status
+
+
 async def test_voice_selector_preserves_initial_custom_values(tmp_path: Path) -> None:
     app = _build_app(tmp_path)
     client = _FakeElevenLabsClient(voices=[], models=[])

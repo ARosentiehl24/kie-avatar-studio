@@ -169,10 +169,28 @@ async def test_concurrency_tab_exposes_all_subsystem_limits(tmp_path) -> None:
             )
 
 
-async def test_mount_does_not_sync_elevenlabs_key_into_keys_store(tmp_path) -> None:
+async def test_mount_migrates_elevenlabs_key_into_keys_store(tmp_path) -> None:
     app = _build_app(tmp_path)
     app.settings = app.settings.model_copy(update={"elevenlabs_api_key": "sk-sync-123"})
     async with app.run_test() as pilot:
         await pilot.pause()
         payload = json.loads((app.settings.data_dir / KEYS_FILE_NAME).read_text(encoding="utf-8"))
-        assert "integrations" not in payload
+        assert payload["integrations"]["elevenlabs_api_key"] == "sk-sync-123"
+
+
+async def test_save_elevenlabs_key_persists_to_keys_json(tmp_path) -> None:
+    from textual.widgets import Input, TabbedContent
+
+    app = _build_app(tmp_path)
+    async with app.run_test(size=(90, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        tabs = app.screen.query_one(TabbedContent)
+        tabs.active = "tab-integrations"
+        await pilot.pause()
+        app.screen.query_one("#elevenlabs-api-key", Input).value = " sk-from-ui "
+        await pilot.click("#save-integrations")
+        await pilot.pause()
+        payload = json.loads((app.settings.data_dir / KEYS_FILE_NAME).read_text(encoding="utf-8"))
+        assert payload["integrations"]["elevenlabs_api_key"] == "sk-from-ui"

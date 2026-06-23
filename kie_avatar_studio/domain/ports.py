@@ -271,6 +271,10 @@ class KeyStore(Protocol):
 
     async def set_active(self, key_id: str | None) -> None: ...
 
+    async def get_elevenlabs_api_key(self) -> str | None: ...
+
+    async def set_elevenlabs_api_key(self, secret: str) -> None: ...
+
 
 @runtime_checkable
 class EnvWriter(Protocol):

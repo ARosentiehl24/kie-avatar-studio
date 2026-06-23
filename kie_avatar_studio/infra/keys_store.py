@@ -23,6 +23,8 @@ from ..domain.models import KeyValidationStatus, KieKey
 KEYS_FILE_NAME: Final[str] = "keys.json"
 _FILE_MODE: Final[int] = 0o600
 _INDENT: Final[int] = 2
+_INTEGRATIONS_FIELD: Final[str] = "integrations"
+_ELEVENLABS_API_KEY_FIELD: Final[str] = "elevenlabs_api_key"
 KeyStoreState = dict[str, Any]  # Any: JSON local legacy puede traer campos desconocidos.
 KeyRow = dict[str, Any]  # Any: fila JSON legacy de una key.
 
@@ -102,6 +104,26 @@ class KeysStore:
                 if not exists:
                     raise KeyNotFoundError(f"no existe ninguna key con id={key_id!r}")
             state["active_key_id"] = key_id
+            await self._write_state(state)
+
+    async def get_elevenlabs_api_key(self) -> str | None:
+        """Devuelve la key directa de ElevenLabs si existe en `integrations`."""
+        state = await self._read_state()
+        integrations = state.get(_INTEGRATIONS_FIELD)
+        if not isinstance(integrations, dict):
+            return None
+        value = integrations.get(_ELEVENLABS_API_KEY_FIELD)
+        return value if isinstance(value, str) else None
+
+    async def set_elevenlabs_api_key(self, secret: str) -> None:
+        """Persiste la key directa de ElevenLabs en `data/keys.json`."""
+        async with self._lock:
+            state = await self._read_state()
+            integrations = state.get(_INTEGRATIONS_FIELD)
+            if not isinstance(integrations, dict):
+                integrations = {}
+            integrations[_ELEVENLABS_API_KEY_FIELD] = secret.strip()
+            state[_INTEGRATIONS_FIELD] = integrations
             await self._write_state(state)
 
     # --- IO helpers --------------------------------------------------------
