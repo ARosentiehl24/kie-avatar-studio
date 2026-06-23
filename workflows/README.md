@@ -42,8 +42,8 @@ presionar **R** para refrescar.
 
 | Componente generado                                                      | Path en el output dir      |
 | ------------------------------------------------------------------------ | -------------------------- |
-| Imagen scene (Nano Banana 2 si `change_scene=true`, sino reutiliza base) | `step_NN_<slug>/scene.png` |
-| Video VEO 3.1 con audio nativo                                           | `step_NN_<slug>/video.mp4` |
+| Imagen scene (Nano Banana 2 si `change_scene=true`, sino reutiliza base) | `step_NN_<slug>/step_NN_<slug>_scene.png` |
+| Video VEO 3.1 con audio nativo                                           | `step_NN_<slug>/step_NN_<slug>_video.mp4` |
 
 **Requiere `text` no vacío** (lo que la modelo debe decir en VEO).
 
@@ -51,8 +51,8 @@ presionar **R** para refrescar.
 
 | Componente generado                                                      | Path en el output dir      |
 | ------------------------------------------------------------------------ | -------------------------- |
-| Imagen scene obligatoria para JSON generado por IA (`change_scene=true`) | `step_NN_<slug>/scene.png` |
-| Video VEO 3.1 con audio nativo o voz en off                              | `step_NN_<slug>/video.mp4` |
+| Imagen scene obligatoria para JSON generado por IA (`change_scene=true`) | `step_NN_<slug>/step_NN_<slug>_scene.png` |
+| Video VEO 3.1 con audio nativo o voz en off                              | `step_NN_<slug>/step_NN_<slug>_video.mp4` |
 
 Reglas para JSON generado por IA:
 
@@ -99,18 +99,18 @@ Cada ejecución crea un directorio único bajo
 ```text
 outputs/wf_20260606_abc123/
 ├── workflow.json          ← manifest atómico (snapshot derivado de la DB)
-├── base.png               ← imagen base de la modelo (descargada eager)
+├── e2e_test_3_steps_base.png          ← imagen base de la modelo
 ├── step_01_hook_1/
-│   ├── scene.png
-│   └── video.mp4          ← VEO 3.1
+│   ├── step_01_hook_1_scene.png
+│   └── step_01_hook_1_video.mp4       ← VEO 3.1
 ├── step_02_b_roll_pain/
-│   ├── scene.png
-│   └── video.mp4
+│   ├── step_02_b_roll_pain_scene.png
+│   └── step_02_b_roll_pain_video.mp4
 ├── step_03_product_reveal/
-│   ├── scene.png
-│   └── video.mp4
-├── final.mp4              ← concat de clips attached
-└── final_audio.mp3        ← audio extraído de final.mp4
+│   ├── step_03_product_reveal_scene.png
+│   └── step_03_product_reveal_video.mp4
+├── e2e_test_3_steps_final.mp4         ← concat de clips attached
+└── e2e_test_3_steps_final_audio.mp3   ← audio extraído del final
 ```
 
 El `workflow.json` se **regenera atómicamente** en cada transición del workflow.

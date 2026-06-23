@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from pathlib import Path
 from typing import Any
 
 from ..domain.models import WorkflowJob, WorkflowStep, WorkflowStepStatus
+from ..domain.workflow_artifacts import (
+    workflow_base_image_candidates,
+    workflow_final_audio_candidates,
+    workflow_final_video_candidates,
+    workflow_voice_changed_audio_candidates,
+)
 
 ManifestJson = dict[str, Any]  # Any: payload JSON heterogéneo publicado en workflow.json.
 
@@ -66,9 +71,11 @@ async def _model_base_block(workflow: WorkflowJob) -> ManifestJson | None:
 
 
 async def _base_local_path(workflow: WorkflowJob) -> str | None:
-    base = Path(workflow.output_dir) / "base.png"
-    exists = await asyncio.to_thread(base.exists)
-    return str(base) if exists else None
+    for base in workflow_base_image_candidates(workflow):
+        exists = await asyncio.to_thread(base.exists)
+        if exists:
+            return str(base)
+    return None
 
 
 def _step_block(step: WorkflowStep) -> ManifestJson:
@@ -110,16 +117,17 @@ def _step_outputs(step: WorkflowStep) -> dict[str, str]:
 
 
 async def _workflow_outputs_block(workflow: WorkflowJob) -> dict[str, str]:
-    output_dir = Path(workflow.output_dir)
     candidates = {
-        "video": output_dir / "final.mp4",
-        "audio": output_dir / "final_audio.mp3",
-        "voice_changed_audio": output_dir / "voice_changed_audio.mp3",
+        "video": workflow_final_video_candidates(workflow),
+        "audio": workflow_final_audio_candidates(workflow),
+        "voice_changed_audio": workflow_voice_changed_audio_candidates(workflow),
     }
     existing: dict[str, str] = {}
-    for key, path in candidates.items():
-        if await asyncio.to_thread(path.is_file):
-            existing[key] = str(path)
+    for key, paths in candidates.items():
+        for path in paths:
+            if await asyncio.to_thread(path.is_file):
+                existing[key] = str(path)
+                break
     return existing
 
 

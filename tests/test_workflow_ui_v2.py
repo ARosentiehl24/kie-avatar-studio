@@ -56,7 +56,9 @@ def _step(
         include_product=step == 2,
         status=status,
     )
-    workflow_step.video_path = f"/repo/outputs/{slug}/video.mp4"
+    workflow_step.video_path = (
+        f"/repo/outputs/step_{step:02d}_{slug}/step_{step:02d}_{slug}_video.mp4"
+    )
     return workflow_step
 
 
@@ -82,7 +84,7 @@ def test_workflow_formatters_show_v2_outputs_and_attached(tmp_path: Path) -> Non
         status=WorkflowStatus.COMPLETED,
     )
 
-    assert "hook/video.mp4" in format_outputs(step)
+    assert "step_01_hook_video.mp4" in format_outputs(step)
     assert "audio.mp3" not in format_outputs(step)
     assert "✓" in format_attached_status(step)
     assert "✗" in format_attached_status(workflow.steps[1])
@@ -93,9 +95,9 @@ def test_workflow_formatters_show_v2_outputs_and_attached(tmp_path: Path) -> Non
     assert "listo" in pipeline
 
     outputs = format_workflow_outputs(workflow)
-    assert "final.mp4" in outputs
-    assert "final_audio.mp3" in outputs
-    assert "voice_changed_audio.mp3" in outputs
+    assert "workflow-ui_final.mp4" in outputs
+    assert "workflow-ui_final_audio.mp3" in outputs
+    assert "workflow-ui_voice_changed_audio.mp3" in outputs
 
 
 def test_workflow_summary_uses_veo_labels_and_hides_legacy_tts_terms() -> None:

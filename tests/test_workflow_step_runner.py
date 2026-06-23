@@ -22,7 +22,6 @@ from kie_avatar_studio.app_layer.workflow_step_runner import (
     A_ROLL_VIDEO_FILENAME,
     AUDIO_FILENAME,
     B_ROLL_VIDEO_FILENAME,
-    SCENE_IMAGE_FILENAME,
     WorkflowStepRunner,
 )
 from kie_avatar_studio.config import Settings
@@ -317,8 +316,8 @@ async def test_b_roll_with_text_downloads_video_and_audio_separately(
     assert result.audio_job_id is None
     assert result.scene_image_path is not None
     step_dir = Path(result.video_path).parent
-    assert (step_dir / SCENE_IMAGE_FILENAME).is_file()
-    assert (step_dir / B_ROLL_VIDEO_FILENAME).is_file()
+    assert (step_dir / "step_02_pain_b_roll_scene.png").is_file()
+    assert (step_dir / "step_02_pain_b_roll_video.mp4").is_file()
     assert not (step_dir / AUDIO_FILENAME).exists()
     assert result.progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.SKIPPED
     assert result.progress[WorkflowProgressKey.DOWNLOAD_VIDEO] == WorkflowProgressStatus.COMPLETED

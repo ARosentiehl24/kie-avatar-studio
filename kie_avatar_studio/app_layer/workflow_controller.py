@@ -54,6 +54,16 @@ from ..domain.ports import (
     WorkflowManifestWriter,
     WorkflowRepository,
 )
+from ..domain.workflow_artifacts import (
+    LEGACY_FINAL_AUDIO_FILENAME,
+    LEGACY_FINAL_VIDEO_FILENAME,
+    LEGACY_VOICE_CHANGED_AUDIO_FILENAME,
+    workflow_final_audio_candidates,
+    workflow_final_audio_filename,
+    workflow_final_video_candidates,
+    workflow_final_video_filename,
+    workflow_voice_changed_audio_filename,
+)
 from .ids import sanitize_filename
 from .queue_manager import QueueManager
 from .workflow_base_resolver import WorkflowBaseResolver
@@ -80,10 +90,10 @@ _RECREATABLE_WORKFLOW_STATUSES: Final[frozenset[WorkflowStatus]] = frozenset(
         WorkflowStatus.CANCELLED,
     }
 )
-_FINAL_OUTPUT_FILENAMES: Final[tuple[str, ...]] = (
-    "final.mp4",
-    "final_audio.mp3",
-    "voice_changed_audio.mp3",
+_LEGACY_FINAL_OUTPUT_FILENAMES: Final[tuple[str, ...]] = (
+    LEGACY_FINAL_VIDEO_FILENAME,
+    LEGACY_FINAL_AUDIO_FILENAME,
+    LEGACY_VOICE_CHANGED_AUDIO_FILENAME,
 )
 
 
@@ -572,7 +582,13 @@ class WorkflowController:
                 output_dir,
             )
             return
-        for filename in _FINAL_OUTPUT_FILENAMES:
+        filenames = (
+            workflow_final_video_filename(workflow.slug),
+            workflow_final_audio_filename(workflow.slug),
+            workflow_voice_changed_audio_filename(workflow.slug),
+            *_LEGACY_FINAL_OUTPUT_FILENAMES,
+        )
+        for filename in filenames:
             await asyncio.to_thread(_unlink_silent, output_dir / filename)
 
     async def _needs_postprocess_repair(self, workflow: WorkflowJob) -> bool:
@@ -584,10 +600,8 @@ class WorkflowController:
         output_dir = Path(workflow.output_dir)
         if not is_path_inside(output_dir, self._settings.outputs_dir):
             return False
-        final_video = output_dir / "final.mp4"
-        final_audio = output_dir / "final_audio.mp3"
-        has_final_video = await asyncio.to_thread(final_video.is_file)
-        has_final_audio = await asyncio.to_thread(final_audio.is_file)
+        has_final_video = await _any_file_exists(workflow_final_video_candidates(workflow))
+        has_final_audio = await _any_file_exists(workflow_final_audio_candidates(workflow))
         if has_final_video and has_final_audio:
             return False
 
@@ -650,6 +664,13 @@ def _unlink_silent(path: Path) -> None:
     """Borra `path` si existe, swallow OSError. Para ejecutar en `asyncio.to_thread`."""
     with contextlib.suppress(OSError):
         path.unlink(missing_ok=True)
+
+
+async def _any_file_exists(paths: tuple[Path, ...]) -> bool:
+    for path in paths:
+        if await asyncio.to_thread(path.is_file):
+            return True
+    return False
 
 
 __all__ = ["WorkflowController", "WorkflowStatus", "get_or_raise_workflow"]

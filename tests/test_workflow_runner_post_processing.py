@@ -55,8 +55,11 @@ class _BaseResolver:
             expires_at=datetime.now(UTC) + timedelta(days=1),
         )
 
-    async def download_base_locally(self, _ref: ImageAssetRef, output_dir: Path) -> None:
-        (output_dir / "base.png").write_bytes(b"base")
+    async def download_base_locally(
+        self, _ref: ImageAssetRef, output_dir: Path, workflow_slug: str | None = None
+    ) -> None:
+        filename = f"{workflow_slug}_base.png" if workflow_slug else "base.png"
+        (output_dir / filename).write_bytes(b"base")
 
 
 class _StepRunner:
@@ -111,11 +114,13 @@ async def test_workflow_runner_runs_concat_and_voice_changer(tmp_settings, tmp_p
     voice = AsyncMock()
     ffmpeg_probe = _FFmpegProbe()
 
-    async def _fake_concat(_steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object) -> Path:
+    async def _fake_concat(
+        _steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object, workflow_slug: str
+    ) -> Path:
         assert ffmpeg is ffmpeg_probe
-        final_video = output_dir / "final.mp4"
+        final_video = output_dir / f"{workflow_slug}_final.mp4"
         final_video.write_bytes(b"video")
-        (output_dir / "final_audio.mp3").write_bytes(b"audio")
+        (output_dir / f"{workflow_slug}_final_audio.mp3").write_bytes(b"audio")
         return final_video
 
     concat.side_effect = _fake_concat
@@ -150,7 +155,7 @@ async def test_workflow_runner_runs_concat_and_voice_changer(tmp_settings, tmp_p
     assert result.status == WorkflowStatus.COMPLETED
     concat.assert_awaited_once()
     voice.assert_awaited_once()
-    assert (tmp_path / "outputs" / "wf_post" / "final_audio.mp3").is_file()
+    assert (tmp_path / "outputs" / "wf_post" / "post_final_audio.mp3").is_file()
 
 
 async def test_workflow_runner_skips_voice_changer_when_not_configured(
@@ -162,10 +167,12 @@ async def test_workflow_runner_skips_voice_changer_when_not_configured(
     concat = AsyncMock()
     voice = AsyncMock()
 
-    async def _fake_concat(_steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object) -> Path:
-        final_video = output_dir / "final.mp4"
+    async def _fake_concat(
+        _steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object, workflow_slug: str
+    ) -> Path:
+        final_video = output_dir / f"{workflow_slug}_final.mp4"
         final_video.write_bytes(b"video")
-        (output_dir / "final_audio.mp3").write_bytes(b"audio")
+        (output_dir / f"{workflow_slug}_final_audio.mp3").write_bytes(b"audio")
         return final_video
 
     concat.side_effect = _fake_concat
@@ -266,10 +273,12 @@ async def test_workflow_runner_runs_in_series_when_step_sets_new_base(
     manifest = _ManifestWriter()
     concat = AsyncMock()
 
-    async def _fake_concat(_steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object) -> Path:
-        final_video = output_dir / "final.mp4"
+    async def _fake_concat(
+        _steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object, workflow_slug: str
+    ) -> Path:
+        final_video = output_dir / f"{workflow_slug}_final.mp4"
         final_video.write_bytes(b"video")
-        (output_dir / "final_audio.mp3").write_bytes(b"audio")
+        (output_dir / f"{workflow_slug}_final_audio.mp3").write_bytes(b"audio")
         return final_video
 
     concat.side_effect = _fake_concat
@@ -352,17 +361,25 @@ async def test_workflow_runner_reuses_promoted_base_on_reentry(
                 expires_at=datetime.now(UTC) + timedelta(days=1),
             )
 
-        async def download_base_locally(self, ref: ImageAssetRef, output_dir: Path) -> None:
-            (output_dir / "base.png").write_text(ref.id, encoding="utf-8")
+        async def download_base_locally(
+            self,
+            ref: ImageAssetRef,
+            output_dir: Path,
+            workflow_slug: str | None = None,
+        ) -> None:
+            filename = f"{workflow_slug}_base.png" if workflow_slug else "base.png"
+            (output_dir / filename).write_text(ref.id, encoding="utf-8")
 
     repo = _Repo()
     manifest = _ManifestWriter()
     concat = AsyncMock()
 
-    async def _fake_concat(_steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object) -> Path:
-        final_video = output_dir / "final.mp4"
+    async def _fake_concat(
+        _steps: list[WorkflowStep], output_dir: Path, *, ffmpeg: object, workflow_slug: str
+    ) -> Path:
+        final_video = output_dir / f"{workflow_slug}_final.mp4"
         final_video.write_bytes(b"video")
-        (output_dir / "final_audio.mp3").write_bytes(b"audio")
+        (output_dir / f"{workflow_slug}_final_audio.mp3").write_bytes(b"audio")
         return final_video
 
     concat.side_effect = _fake_concat
@@ -412,4 +429,6 @@ async def test_workflow_runner_reuses_promoted_base_on_reentry(
 
     assert result.status == WorkflowStatus.COMPLETED
     assert base_resolver.uploaded_paths == [promoted_scene]
-    assert (Path(workflow.output_dir) / "base.png").read_text(encoding="utf-8") == "promoted_base"
+    assert (Path(workflow.output_dir) / "post_base.png").read_text(
+        encoding="utf-8"
+    ) == "promoted_base"

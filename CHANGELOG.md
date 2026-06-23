@@ -8,6 +8,17 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.0.3] — 2026-06-22
+
+### Changed (S)
+
+- **Nombres únicos para artefactos workflow**: los archivos locales de workflows
+  ahora incluyen slug de workflow/escena (`<workflow_slug>_base.png`,
+  `step_01_<scene_slug>_video.mp4`, `<workflow_slug>_final.mp4`, etc.) para
+  evitar colisiones/confusión al importar clips en editores. Se mantienen
+  fallbacks de lectura para artefactos legacy (`base.png`, `video.mp4`,
+  `final.mp4`, etc.).
+
 ## [2.0.2] — 2026-06-22
 
 ### Added (S)
