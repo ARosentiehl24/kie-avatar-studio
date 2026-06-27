@@ -13,6 +13,8 @@ from typing import ClassVar, Final
 from loguru import logger
 from textual.app import App
 from textual.binding import Binding
+from textual.css.query import NoMatches
+from textual.worker import WorkerFailed
 
 from . import __version__
 from .app_layer.audio_job_lifecycle import AudioJobLifecycle
@@ -642,6 +644,9 @@ class KieAvatarStudioApp(App[None]):
         Sin esto, las excepciones no manejadas dentro de handlers de la TUI
         terminan en stderr (oculto bajo el alt-screen) y se pierden.
         """
+        if _is_stale_voice_selector_worker(error):
+            logger.warning("Worker tardío del selector de voces ignorado: {}", error)
+            return
         logger.opt(exception=error).error("Excepción no manejada en la TUI")
         try:
             self.notify(
@@ -1132,3 +1137,11 @@ class KieAvatarStudioApp(App[None]):
             return_exceptions=True,
         )
         await old.aclose()
+
+
+def _is_stale_voice_selector_worker(error: Exception) -> bool:
+    """Detecta el bug de worker tardío del modal de voces ya desmontado."""
+    if not isinstance(error, WorkerFailed) or not isinstance(error.error, NoMatches):
+        return False
+    text = str(error.error)
+    return "VoiceChangerSelectorScreen" in text and "#voice-changer-selector" in text

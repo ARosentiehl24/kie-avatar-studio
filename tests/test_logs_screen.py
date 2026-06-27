@@ -70,3 +70,19 @@ async def test_unhandled_exception_lands_in_log_file(tmp_path) -> None:
     content = app.log_file.read_text()
     assert "bug-simulado-en-handler-9999" in content
     assert "RuntimeError" in content
+
+
+async def test_stale_voice_selector_worker_does_not_close_app(tmp_path) -> None:
+    from textual.css.query import NoMatches
+    from textual.worker import WorkerFailed
+
+    app = _build_app(tmp_path)
+    stale_error = WorkerFailed(
+        NoMatches("No nodes match '#voice-changer-selector-select' on VoiceChangerSelectorScreen()")
+    )
+
+    app._handle_exception(stale_error)
+    _flush_loguru()
+    content = app.log_file.read_text()
+    assert "Worker tardío del selector de voces ignorado" in content
+    assert "Excepción no manejada en la TUI" not in content

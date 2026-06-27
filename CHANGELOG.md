@@ -8,6 +8,14 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.1.1] — 2026-06-27
+
+### Fixed (S)
+
+- **Cierre inesperado en Windows al terminar workers tardíos**: el selector de
+  voces de ElevenLabs ahora ignora respuestas async si el modal ya fue cerrado,
+  y el handler global evita que ese `WorkerFailed(NoMatches)` tumbe toda la app.
+
 ## [2.1.0] — 2026-06-22
 
 ### Added (M)
