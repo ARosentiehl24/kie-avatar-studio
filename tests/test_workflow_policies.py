@@ -46,6 +46,8 @@ def _make_step(
     prompt: str = "Una mujer hablando a cámara, plano medio.",
     scene_description: str = "",
     duration_seconds: int | None = None,
+    include_model: bool = True,
+    include_product: bool = False,
 ) -> WorkflowStep:
     return WorkflowStep(
         step=step,
@@ -57,6 +59,8 @@ def _make_step(
         prompt=prompt,
         text=text,
         duration_seconds=duration_seconds,
+        include_model=include_model,
+        include_product=include_product,
     )
 
 
@@ -196,17 +200,32 @@ class TestValidateWorkflowStep:
                 )
             )
 
-    def test_b_roll_with_text_validates_text_as_tts(self) -> None:
-        # text con whitespace solo se rechaza como TTS
-        with pytest.raises(WorkflowStepValidationError, match="text inválido"):
-            validate_workflow_step(
-                _make_step(
-                    type_=StepType.B_ROLL,
-                    text="  ",
-                    change_scene=True,
-                    scene_description="x",
-                )
+    def test_b_roll_with_text_warns_that_text_is_ignored(self) -> None:
+        warnings = validate_workflow_step(
+            _make_step(
+                type_=StepType.B_ROLL,
+                text="Voz en off que debe ignorarse.",
+                change_scene=True,
+                scene_description="x",
             )
+        )
+        assert any("b-roll ignora el campo 'text'" in warning for warning in warnings)
+
+    def test_c_roll_rules_warn_when_shape_is_not_clean_unreal(self) -> None:
+        warnings = validate_workflow_step(
+            _make_step(
+                type_=StepType.C_ROLL,
+                text="Voz que no debe ir.",
+                change_scene=False,
+                include_model=True,
+                include_product=True,
+            )
+        )
+        assert any("c-roll debería usar change_scene=true" in warning for warning in warnings)
+        assert any("c-roll requiere scene_description" in warning for warning in warnings)
+        assert any("c-roll ignora el campo 'text'" in warning for warning in warnings)
+        assert any("include_model=false" in warning for warning in warnings)
+        assert any("no debería ser toma de producto" in warning for warning in warnings)
 
     def test_progress_with_invalid_key_for_type_raises(self) -> None:
         # A-roll NO usa DOWNLOAD_VIDEO/DOWNLOAD_AUDIO (esas son de b-roll con text).
@@ -231,13 +250,18 @@ class TestExpectedProgressKeys:
             }
         )
 
-    def test_b_roll_with_text_expects_5_keys(self) -> None:
+    def test_b_roll_with_text_still_uses_simple_download(self) -> None:
         keys = expected_progress_keys_for_step(
             _make_step(type_=StepType.B_ROLL, text="Hola.", change_scene=True)
         )
-        assert WorkflowProgressKey.DOWNLOAD_VIDEO in keys
-        assert WorkflowProgressKey.DOWNLOAD_AUDIO in keys
-        assert WorkflowProgressKey.DOWNLOAD not in keys
+        assert keys == frozenset(
+            {
+                WorkflowProgressKey.SCENE_IMAGE,
+                WorkflowProgressKey.VIDEO,
+                WorkflowProgressKey.DOWNLOAD,
+            }
+        )
+        assert WorkflowProgressKey.AUDIO not in keys
 
     def test_b_roll_without_text_uses_simple_download(self) -> None:
         keys = expected_progress_keys_for_step(
@@ -251,6 +275,18 @@ class TestExpectedProgressKeys:
             }
         )
         assert WorkflowProgressKey.AUDIO not in keys
+
+    def test_c_roll_uses_simple_download(self) -> None:
+        keys = expected_progress_keys_for_step(
+            _make_step(type_=StepType.C_ROLL, text="", change_scene=True)
+        )
+        assert keys == frozenset(
+            {
+                WorkflowProgressKey.SCENE_IMAGE,
+                WorkflowProgressKey.VIDEO,
+                WorkflowProgressKey.DOWNLOAD,
+            }
+        )
 
 
 # --- validate_workflow ----------------------------------------------------

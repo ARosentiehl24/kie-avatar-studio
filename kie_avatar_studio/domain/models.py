@@ -709,17 +709,20 @@ class WorkflowPreSettings(BaseModel):
 class StepType(StrEnum):
     """Tipo de escena del workflow.
 
-    `A_ROLL`: la modelo habla a cámara (lip-sync). Avatar Pro genera un
-    `final.mp4` con audio embebido, y la app descarga también `audio.mp3`
-    para edición/post-producción.
+    `A_ROLL`: la modelo habla directo a cámara. Es el único tipo que contiene
+    diálogo y constituye la narrativa principal.
 
-    `B_ROLL`: video auxiliar (objeto, ilustración, plano). Kling 3.0
-    genera un video silencioso. Si `text` no es vacío, además se
-    genera un audio TTS aparte para post-producción.
+    `B_ROLL`: apoyo visual con la modelo interactuando con producto o producto
+    como protagonista. Sin voz en off: solo SFX/música.
+
+    `C_ROLL`: secuencia explicativa ultrarrealista estilo Unreal Engine para
+    procesos/beneficios/conceptos. Sin voz en off y sin overlays/textos/gráficos
+    superpuestos; esos elementos se agregan en post.
     """
 
     A_ROLL = "a-roll"
     B_ROLL = "b-roll"
+    C_ROLL = "c-roll"
 
 
 class WorkflowStepStatus(StrEnum):

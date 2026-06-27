@@ -28,7 +28,8 @@ Al generar JSON, la IA debe decidir:
 3. Qué texto se habla o narra.
 4. Si la escena cambia de fondo, incluye producto o solo apoya visualmente.
 5. Si la escena entra al `<workflow_slug>_final.mp4`.
-6. Si el audio final se queda como VEO lo genera o si se convierte con ElevenLabs.
+6. Si el audio final se queda como VEO lo genera o si se convierte con
+   ElevenLabs.
 
 Usa **prompts y textos 100% en español**.
 
@@ -45,8 +46,8 @@ Usa **prompts y textos 100% en español**.
 | Campo | Obligatorio | Qué debe contener |
 | --- | --- | --- |
 | `workflow` | Sí | Título editorial claro. Ej: `"UGC digestivo - 5 escenas"`. |
-| `pre_settings` | Sí | Configuración global: base, VEO, producto, voz. |
-| `run` | Sí | Array ordenado de steps. Debe empezar en `step: 1` y ser consecutivo. |
+| `pre_settings` | Sí | Configuración global: base, VEO, producto y voz. |
+| `run` | Sí | Array ordenado de steps. Debe comenzar en `step: 1`. |
 
 No inventes claves fuera del schema.
 
@@ -115,6 +116,10 @@ Configuración global de render VEO.
 - `"manual"`: pausa b-rolls que generan `scene_image` para aprobar/regenerar
   antes de gastar VEO. Útil cuando el producto o escena puede salir mal.
 
+Si el JSON omite este campo, la app usa `DEFAULT_SCENE_APPROVAL_MODE` de
+Configuración. Puedes dejarlo en `auto` para que A/B/C-roll corran de punta a
+punta sin intervención, o en `manual` para revisar B/C-roll antes de VEO.
+
 ### `promote_product`
 
 Debe ser `true` si algún step usa `include_product: true`.
@@ -177,17 +182,17 @@ Cada item de `run` representa una escena.
 | Campo | Requerido | Qué escribir |
 | --- | --- | --- |
 | `step` | Sí | Número consecutivo desde 1. |
-| `scene_name` | Sí | Nombre corto: `"Hook testimonial"`, `"Solo producto"`, `"CTA"`. |
-| `type` | Sí | `"a-roll"` o `"b-roll"`. |
+| `scene_name` | Sí | Nombre corto: Hook testimonial, Solo producto, CTA. |
+| `type` | Sí | `"a-roll"`, `"b-roll"` o `"c-roll"`. |
 | `prompt` | Sí | Prompt visual detallado para VEO. |
-| `text` | A-roll sí | Guion hablado exacto o voz en off. |
-| `attached` | No | `true` si entra al `<workflow_slug>_final.mp4`; `false` si es clip suelto. |
-| `change_scene` | B-roll sí | `true` genera nueva scene image; en b-roll debe ser siempre `true`. |
-| `scene_description` | B-roll sí | Lugar/fondo/luz/ambiente. Obligatorio si `change_scene=true`. |
+| `text` | A-roll sí | Guion hablado exacto. En B/C-roll debe ser `""`. |
+| `attached` | No | `true` si entra al video final; `false` si es suelto. |
+| `change_scene` | B/C-roll sí | Crea scene image; b/c-roll debe ser `true`. |
+| `scene_description` | B/C-roll sí | Lugar/fondo/luz/ambiente. Requerido si |
 | `include_product` | No | `true` si el producto aparece en este step. |
 | `include_model` | No | `true` si aparece la modelo/persona base. |
-| `set_as_base` | No | `true` si esta scene image será base para steps siguientes. |
-| `product_prompt` | Si producto | Obligatorio y no vacío si `include_product=true`. |
+| `set_as_base` | No | `true` si será base para pasos siguientes. |
+| `product_prompt` | Si producto | Requerido y no vacío si |
 | `image_aspect_ratio` | No | Override de imagen para este step. |
 
 ### `type: "a-roll"`
@@ -218,16 +223,18 @@ Ejemplo:
 
 ### `type: "b-roll"`
 
-Usar para producto, manos, infografías, ambiente, close-ups o apoyo visual.
+Usar para tomas de apoyo donde la modelo interactúa con producto o el producto
+es protagonista.
 
 Reglas:
 
-- `text` puede estar vacío o contener voz en off.
+- `text` debe ser `""`; B-roll no lleva voz en off.
+- El prompt debe pedir explícitamente SFX/música si quieres audio ambiental:
+  `"Sin voz en off; solo SFX y música sutil..."`.
 - Para JSON generado por IA, `b-roll` **siempre** debe usar
   `change_scene: true`.
 - `scene_description` es obligatorio, no vacío y debe describir el set visual:
-  lugar, fondo, luz, superficie, props, gráfica/infografía o contexto del
-  producto.
+  lugar, fondo, luz, superficie, props o contexto del producto.
 - Si `include_model=false`, no debe aparecer la modelo completa.
 - Una escena “solo producto” puede incluir manos humanas interactuando si el
   foco sigue siendo el producto.
@@ -239,19 +246,61 @@ Reglas:
 
 Ejemplo solo producto:
 
+<!-- markdownlint-disable MD013 -->
 ```json
 {
   "step": 3,
-  "scene_name": "Solo producto con narración",
+  "scene_name": "Solo producto con SFX",
   "type": "b-roll",
   "attached": true,
   "change_scene": true,
-  "scene_description": "Mesa de cocina clara con luz natural cálida, fondo limpio y superficie ordenada para close-up de producto.",
+  "scene_description": "Mesa de cocina clara con luz natural cálida, fondo limpio
+  y superficie ordenada para close-up de producto.",
   "prompt": "Toma protagonista del suplemento digestivo en polvo, cámara macro...",
-  "text": "Aquí te enseño el suplemento digestivo en detalle...",
+  "text": "",
   "include_product": true,
   "include_model": false,
   "product_prompt": "Frasco ámbar bajo con tapa café mate, etiqueta crema visible..."
+}
+```
+<!-- markdownlint-enable MD013 -->
+
+### `type: "c-roll"`
+
+Usar para secuencias explicativas ultrarrealistas estilo Unreal Engine:
+procesos internos, beneficios, conceptos visuales o animaciones técnicas.
+
+Reglas:
+
+- `text` debe ser `""`; C-roll no lleva voz en off.
+- `change_scene` debe ser `true`.
+- `scene_description` es obligatorio y debe describir la escena/ambiente
+  explicativo.
+- `include_model` debe ser `false`.
+- `include_product` debe ser `false`.
+- El prompt debe indicar que la escena está limpia: **sin textos, pop-ups,
+  flechas, etiquetas, interfaces, iconos ni overlays**. Esos recursos se
+  agregan después en postproducción.
+- El audio debe limitarse a SFX/música.
+
+Ejemplo:
+
+```json
+{
+  "step": 4,
+  "scene_name": "C-Roll barrera intestinal",
+  "type": "c-roll",
+  "attached": true,
+  "change_scene": true,
+  "scene_description": "Escena microscópica ultrarrealista estilo Unreal Engine
+  de una barrera intestinal luminosa, partículas suaves y movimiento orgánico
+  limpio.",
+  "prompt": "Animación cinematográfica ultrarrealista del proceso de
+  fortalecimiento de la barrera intestinal, sin textos ni flechas ni overlays,
+  solo visual limpio con SFX orgánicos y música sutil.",
+  "text": "",
+  "include_model": false,
+  "include_product": false
 }
 ```
 
@@ -263,8 +312,9 @@ Un buen `prompt` de step debe incluir:
 2. Acción visible: qué hace la modelo, manos o producto.
 3. Cámara/movimiento: `cámara fija`, `desplazamiento suave`, `acercamiento`.
 4. Luz/estética: `luz natural cálida`, `realista`, `UGC premium`.
-5. Continuidad: misma modelo, mismo vestuario, mismo producto, mismo fondo si aplica.
-6. Voz para VEO, si quieres probar consistencia previa al voice changer.
+5. Continuidad: misma modelo, mismo vestuario, mismo producto, mismo fondo
+   si aplica.
+6. Voz para VEO solo en A-roll; B/C-roll deben pedir SFX/música sin voz.
 
 Plantilla de instrucción de voz para VEO:
 
@@ -275,11 +325,11 @@ cercano, ritmo natural pausado, misma energía y mismo acento; no cambiar de
 locutor ni de timbre entre escenas.
 ```
 
-Para b-roll sin persona:
+Para B/C-roll:
 
 ```text
-Instrucción de voz para VEO: usar voz en off con la misma voz femenina latina
-adulta de los demás clips...
+Sin diálogo ni voz en off; usar únicamente efectos de sonido (SFX), ambiente y
+música sutil.
 ```
 
 ## Patrón narrativo recomendado
@@ -287,31 +337,34 @@ adulta de los demás clips...
 Para un video UGC de 5 escenas:
 
 1. **Hook a-roll**: modelo habla a cámara y plantea problema/beneficio.
-2. **Cambio de escena a-roll**: misma modelo en otra locación, refuerza continuidad.
-3. **Solo producto b-roll**: close-up del producto, manos opcionales, narración.
+2. **Cambio de escena a-roll**: misma modelo en otra locación, refuerza
+   continuidad.
+3. **Solo producto b-roll**: close-up del producto, manos opcionales,
+   SFX/música.
 4. **Modelo + producto a-roll**: testimonio directo con producto en mano.
-5. **Infografía / explicación b-roll**: apoyo visual sin modelo o cierre educativo.
+5. **Explicación c-roll**: animación ultrarrealista estilo Unreal Engine, limpia
+   y sin overlays, para ilustrar el mecanismo/beneficio.
 
 ## Reglas críticas de validación
 
 1. `run` no puede estar vacío.
-2. `step` debe ser consecutivo: 1, 2, 3...
-3. `a-roll` requiere `text` no vacío.
-4. Todo `b-roll` generado por IA requiere `change_scene=true`.
-5. Todo `b-roll` requiere `scene_description` no vacío.
-6. Todo step con `change_scene=true` requiere `scene_description` no vacío.
-7. Todo step con `include_product=true` requiere:
-   - `pre_settings.promote_product=true`;
-   - `product_prompt` no vacío.
-8. Todo step con `set_as_base=true` requiere:
-   - `change_scene=true`;
-   - `scene_description` no vacío.
-9. `prompt` máximo:
-   - a-roll: 5000 caracteres;
-   - b-roll: 2500 caracteres.
-10. Si usas `set_as_base=true`, el workflow se ejecuta en serie para preservar
+1. `step` debe ser consecutivo: 1, 2, 3...
+1. `a-roll` requiere `text` no vacío.
+1. Todo `b-roll` generado por IA requiere `change_scene=true`.
+1. Todo `b-roll` requiere `scene_description` no vacío.
+1. Todo `c-roll` requiere `change_scene=true`, `scene_description` no vacío,
+   `include_model=false`, `include_product=false` y `text=""`.
+1. B-roll y C-roll no llevan voz en off: `text` debe ser `""`; describe SFX y
+   música en `prompt`.
+1. Todo step con `change_scene=true` requiere `scene_description` no vacío.
+1. Todo step con `include_product=true` requiere `pre_settings.promote_product=true`
+   y `product_prompt` no vacío.
+1. Todo step con `set_as_base=true` requiere `change_scene=true` y
+   `scene_description` no vacío.
+1. `prompt` máximo: a-roll 5000 caracteres; b-roll/c-roll 2500 caracteres.
+1. Si usas `set_as_base=true`, el workflow se ejecuta en serie para preservar
    continuidad.
-11. `voice_changer` es opcional: `null` u omitido significa “no llamar a
+1. `voice_changer` es opcional: `null` u omitido significa “no llamar a
    ElevenLabs”.
 
 ## Outputs esperados
@@ -350,7 +403,8 @@ No generes campos runtime/internos:
   "pre_settings": {
     "model_creation": {
       "method": "prompt",
-      "prompt": "Fotografía hiperrealista vertical 9:16 de mujer latina de 29 años..."
+      "prompt": "Fotografía hiperrealista vertical 9:16 de mujer latina de 29
+      años..."
     },
     "scene_approval_mode": "manual",
     "promote_product": true,
@@ -384,8 +438,10 @@ No generes campos runtime/internos:
       "attached": true,
       "change_scene": false,
       "scene_description": "",
-      "prompt": "Plano medio vertical, cámara a la altura de los ojos, tono testimonial cercano.",
-      "text": "Te cuento rápido mi experiencia: por fin encontré una rutina que sí me ayudó.",
+      "prompt": "Plano medio vertical, cámara a la altura de los ojos, tono
+      testimonial cercano.",
+      "text": "Te cuento rápido mi experiencia: por fin encontré una rutina que
+      sí me ayudó.",
       "include_product": false,
       "include_model": true,
       "set_as_base": false,
@@ -397,13 +453,17 @@ No generes campos runtime/internos:
       "type": "b-roll",
       "attached": true,
       "change_scene": true,
-      "scene_description": "Mesa de cocina limpia con luz natural lateral, fondo neutro desenfocado y espacio para destacar el producto.",
-      "prompt": "Toma macro del producto con textura visible, fondo limpio, manos opcionales interactuando sin perder foco.",
-      "text": "Aquí te enseño el producto en detalle para que veas exactamente lo que estoy usando.",
+      "scene_description": "Mesa de cocina limpia con luz natural lateral, fondo
+      neutro desenfocado y espacio para destacar el producto.",
+      "prompt": "Toma macro del producto con textura visible, fondo limpio, manos
+      opcionales interactuando sin perder foco.",
+      "text": "Aquí te enseño el producto en detalle para que veas exactamente lo
+      que estoy usando.",
       "include_product": true,
       "include_model": false,
       "set_as_base": false,
-      "product_prompt": "Producto centrado, etiqueta legible, empaque nítido, mano humana mostrando uso real.",
+      "product_prompt": "Producto centrado, etiqueta legible, empaque nítido,
+      mano humana mostrando uso real.",
       "image_aspect_ratio": "1:1"
     }
   ]

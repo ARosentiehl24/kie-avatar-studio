@@ -62,6 +62,29 @@ def test_snapshot_includes_elevenlabs_api_key() -> None:
     assert snap.elevenlabs_api_key == "sk_test"
 
 
+def test_snapshot_includes_default_scene_approval_mode() -> None:
+    controller, _ = _build_controller(default_scene_approval_mode="manual")
+    snap = controller.snapshot()
+    assert snap.default_scene_approval_mode == "manual"
+
+
+def test_update_defaults_persists_scene_approval_mode() -> None:
+    controller, env = _build_controller()
+    controller.update_defaults("voice_123", "Prompt", "manual")
+    assert env.values == {
+        "DEFAULT_VOICE": "voice_123",
+        "DEFAULT_PROMPT": "Prompt",
+        "DEFAULT_SCENE_APPROVAL_MODE": "manual",
+    }
+
+
+def test_update_defaults_rejects_invalid_scene_approval_mode() -> None:
+    controller, env = _build_controller()
+    with pytest.raises(JobValidationError, match="DEFAULT_SCENE_APPROVAL_MODE"):
+        controller.update_defaults("voice_123", "Prompt", "sometimes")
+    assert env.values == {}
+
+
 def test_update_concurrency_persists_all_five_keys() -> None:
     controller, env = _build_controller()
     controller.update_concurrency(audio=1, image=2, video=3, upload=4, download=5)

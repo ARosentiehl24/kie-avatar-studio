@@ -1,18 +1,18 @@
-"""Modal `SceneImageApprovalScreen` — aprobación humana de scene_image generada.
+"""Modal `SceneImageApprovalScreen` — revisión manual de escena generada.
 
-Cuando un workflow corre en `SceneApprovalMode.MANUAL` y un step b-roll que
+Cuando un workflow corre en `SceneApprovalMode.MANUAL` y un step B/C-roll que
 genera scene nueva (`change_scene=true` o `include_product=true`, ver
 `needs_scene_generation`) genera la scene_image con Nano Banana 2, el workflow
 se pausa en `WorkflowStatus.AWAITING_APPROVAL` y el step queda en
 `WorkflowStepStatus.AWAITING_APPROVAL`. El usuario abre este modal desde la
-pantalla Automatización (botón "Revisar aprobación") y decide:
+pantalla Automatización (botón "Revisar escena") y decide:
 
-- **Aprobar** → controller.approve_scene → el workflow se re-encola; el step
+- **Usar escena** → controller.approve_scene → el workflow se re-encola; el step
   runner detecta `scene_image_approved_at` y reusa la imagen sin gastar
   otra Nano Banana.
-- **Regenerar** → controller.regenerate_scene → resetea el step y gasta otra
-  Nano Banana; vuelve a pausar.
-- **Cancelar step** → controller.cancel_step → el step queda CANCELLED, el
+- **Editar y regenerar** → controller.regenerate_scene → persiste prompts nuevos,
+  resetea el step y gasta otra imagen; vuelve a pausar.
+- **Omitir escena** → controller.cancel_step → el step queda CANCELLED, el
   workflow continúa con los demás steps.
 - **Cerrar (Esc)** → no hace nada; el workflow sigue esperando.
 
@@ -43,7 +43,7 @@ _PROMPT_PREVIEW_LIMIT: Final[int] = 300
 
 
 class SceneImageApprovalScreen(ModalScreen[bool | None]):
-    """Modal de aprobación de scene_image. Devuelve True si hubo acción, None si cerró sin tocar."""
+    """Modal de revisión manual de escena. Devuelve True si hubo acción."""
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "cancel", "Cerrar (sin acción)"),
@@ -68,51 +68,52 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
         yield Header(show_clock=False)
         with Vertical(id="scene-approval-box"):
             yield Label(
-                f"[b]Aprobar scene_image — step {self._step.step} ({self._step.scene_name})[/b]",
+                f"[b]Revisión manual de escena — step {self._step.step} ({self._step.scene_name})[/b]",
                 id="scene-approval-title",
             )
             yield Static(
-                "[dim]El workflow está pausado. Revisá la imagen generada y "
-                "decidí qué hacer. Aprobar = continuar al render VEO 3.1. "
-                "Regenerar = gastar otra Nano Banana. Cancelar step = saltar "
-                "este step y seguir con los demás.[/]",
+                "[dim]El workflow está pausado porque el modo manual está activo. "
+                "Revisá la imagen de referencia generada para este B/C-roll. "
+                "Usar escena = continuar a VEO 3.1 con esta imagen. "
+                "Editar y regenerar = guardar prompts nuevos y crear otra imagen. "
+                "Omitir escena = saltar este step y seguir con los demás.[/]",
                 id="scene-approval-subtitle",
             )
             with VerticalScroll(id="scene-approval-body"):
                 yield Static(self._render_step_info(), id="scene-approval-info")
                 yield Static(self._render_path_info(), id="scene-approval-path")
-                yield Label("[b]Scene description[/b] (editable para Regenerar)")
+                yield Label("[b]Descripción de escena[/b] (se usa al regenerar)")
                 yield TextArea(
                     self._step.scene_description,
                     id="scene-approval-scene-description",
                     language=None,
                 )
-                yield Label("[b]Prompt visual[/b] (editable para Regenerar)")
+                yield Label("[b]Prompt visual[/b] (se usa al regenerar)")
                 yield TextArea(self._step.prompt, id="scene-approval-prompt", language=None)
                 if self._step.include_product:
-                    yield Label("[b]Product prompt[/b] (editable para Regenerar)")
+                    yield Label("[b]Prompt de producto[/b] (se usa al regenerar)")
                     yield TextArea(
                         self._step.product_prompt,
                         id="scene-approval-product-prompt",
                         language=None,
                     )
-                yield Label("[b]Texto / voz[/b] (editable para Regenerar)")
+                yield Label("[b]Texto / notas[/b] (B/C-roll no genera voz en off)")
                 yield TextArea(self._step.text, id="scene-approval-text", language=None)
                 yield Static("", id="scene-approval-status")
             yield LoadingIndicator(id="scene-approval-loader")
             with Horizontal(id="scene-approval-actions"):
                 yield Button(
-                    "Aprobar y continuar",
+                    "Usar esta escena",
                     id="scene-approval-approve",
                     classes="btn-success",
                 )
                 yield Button(
-                    "Regenerar",
+                    "Editar y regenerar",
                     id="scene-approval-regenerate",
                     classes="btn-warning",
                 )
                 yield Button(
-                    "Cancelar step",
+                    "Omitir escena",
                     id="scene-approval-skip",
                     variant="default",
                 )
@@ -161,7 +162,7 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
         try:
             if action == "approve":
                 await self._controller.approve_scene(self._workflow.id, self._step.step)
-                msg = f"{OK} scene_image aprobada, workflow re-encolado"
+                msg = f"{OK} escena aprobada, workflow re-encolado"
             elif action == "regenerate":
                 await self._controller.regenerate_scene(
                     self._workflow.id,
@@ -173,10 +174,10 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
                     product_prompt=self._product_prompt_text(),
                     text=self.query_one("#scene-approval-text", TextArea).text,
                 )
-                msg = f"{OK} regenerando scene_image (gasta otra Nano Banana)"
+                msg = f"{OK} regenerando imagen de escena con prompts editados"
             elif action == "skip":
                 await self._controller.cancel_step(self._workflow.id, self._step.step)
-                msg = f"{OK} step cancelado, workflow continúa con los demás"
+                msg = f"{OK} escena omitida, workflow continúa con los demás"
             else:
                 msg = f"{ERROR} acción desconocida: {action}"
         except WorkflowValidationError as exc:

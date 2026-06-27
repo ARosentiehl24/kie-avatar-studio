@@ -191,6 +191,34 @@ async def test_enqueue_entry_persists_and_dispatches(
     assert any(j.id == workflow.id for j in fake_runner.runs)
 
 
+async def test_enqueue_uses_settings_default_scene_approval_mode_when_json_omits_it(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path],
+) -> None:
+    from kie_avatar_studio.domain.models import SceneApprovalMode
+
+    controller, _, _ = workflow_controller_setup
+    controller._settings.default_scene_approval_mode = "manual"  # type: ignore[attr-defined]
+    entries = await controller.list_entries(refresh=True)
+    workflow = await controller.enqueue_entry(entries[0])
+    assert workflow.pre_settings.scene_approval_mode == SceneApprovalMode.MANUAL
+
+
+async def test_enqueue_preserves_json_scene_approval_mode_over_settings_default(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path],
+) -> None:
+    from kie_avatar_studio.domain.models import SceneApprovalMode
+
+    controller, _, workflows_dir = workflow_controller_setup
+    controller._settings.default_scene_approval_mode = "manual"  # type: ignore[attr-defined]
+    payload = _valid_payload("Explicit Auto")
+    payload["pre_settings"]["scene_approval_mode"] = "auto"
+    (workflows_dir / "explicit_auto.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await controller.list_entries(refresh=True)
+    entry = next(entry for entry in entries if entry.name == "explicit_auto")
+    workflow = await controller.enqueue_entry(entry)
+    assert workflow.pre_settings.scene_approval_mode == SceneApprovalMode.AUTO
+
+
 async def test_enqueue_entry_rejects_invalid(
     tmp_settings: Settings,
     workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path],

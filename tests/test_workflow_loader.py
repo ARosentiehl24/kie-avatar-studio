@@ -151,6 +151,30 @@ async def test_build_workflow_from_entry_assigns_id_and_output_dir(tmp_path: Pat
     assert workflow.pre_settings.veo.model == "veo3_fast"
 
 
+async def test_loader_parses_c_roll(tmp_path: Path) -> None:
+    payload = _valid_payload()
+    payload["run"].append(
+        {
+            "step": 3,
+            "scene_name": "C Roll Mecanismo",
+            "type": "c-roll",
+            "change_scene": True,
+            "scene_description": "Escena microscópica estilo Unreal Engine",
+            "prompt": "Animación limpia sin textos ni overlays.",
+            "text": "",
+            "include_model": False,
+            "include_product": False,
+        }
+    )
+    (tmp_path / "c_roll.json").write_text(json.dumps(payload), encoding="utf-8")
+    entries = await scan_workflows_dir(tmp_path)
+    assert entries[0].valid
+    workflow = build_workflow_from_entry(
+        entries[0], workflow_id="wf_c", output_dir=tmp_path / "outputs"
+    )
+    assert workflow.steps[2].type.value == "c-roll"
+
+
 async def test_build_workflow_from_entry_raises_on_invalid(tmp_path: Path) -> None:
     from kie_avatar_studio.domain.errors import WorkflowValidationError
     from kie_avatar_studio.domain.models import WorkflowEntry

@@ -71,6 +71,7 @@ from .domain.models import (
     GitHubRelease,
     ImageJob,
     ImageJobStatus,
+    SceneApprovalMode,
     UploadedImage,
     VideoJob,
     WorkflowEntry,
@@ -762,6 +763,9 @@ class KieAvatarStudioApp(App[None]):
                     default_input_dir=self.settings.inputs_dir,
                     open_local_path=open_local_path,
                     default_i2v_duration_seconds=self.settings.default_i2v_duration_seconds,
+                    default_scene_approval_mode=SceneApprovalMode(
+                        self.settings.default_scene_approval_mode
+                    ),
                 )
             )
             return

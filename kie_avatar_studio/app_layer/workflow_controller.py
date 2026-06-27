@@ -205,6 +205,10 @@ class WorkflowController:
             workflow.pre_settings.i2v_duration_seconds = i2v_duration_override
         if scene_approval_mode is not None:
             workflow.pre_settings.scene_approval_mode = scene_approval_mode
+        elif not _payload_has_scene_approval_mode(entry.workflow_payload):
+            workflow.pre_settings.scene_approval_mode = SceneApprovalMode(
+                self._settings.default_scene_approval_mode
+            )
         if set_voice_changer:
             workflow.pre_settings.voice_changer = (
                 voice_changer.model_copy(deep=True) if voice_changer is not None else None
@@ -710,6 +714,13 @@ def _unlink_silent(path: Path) -> None:
     """Borra `path` si existe, swallow OSError. Para ejecutar en `asyncio.to_thread`."""
     with contextlib.suppress(OSError):
         path.unlink(missing_ok=True)
+
+
+def _payload_has_scene_approval_mode(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    pre_settings = payload.get("pre_settings")
+    return isinstance(pre_settings, dict) and "scene_approval_mode" in pre_settings
 
 
 async def _any_file_exists(paths: tuple[Path, ...]) -> bool:

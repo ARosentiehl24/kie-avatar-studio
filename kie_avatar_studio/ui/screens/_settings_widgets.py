@@ -11,6 +11,7 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    Select,
     Static,
     TabbedContent,
     TabPane,
@@ -115,6 +116,16 @@ def compose_defaults_tab(snapshot: EditableSettings) -> ComposeResult:
         yield Input(value=snapshot.default_voice, id="default-voice")
         yield Label("DEFAULT_PROMPT")
         yield Input(value=snapshot.default_prompt, id="default-prompt")
+        yield Label("DEFAULT_SCENE_APPROVAL_MODE")
+        yield Select[str](
+            [
+                ("auto — ejecutar sin pausar", "auto"),
+                ("manual — revisar escenas B/C-roll", "manual"),
+            ],
+            value=snapshot.default_scene_approval_mode,
+            allow_blank=False,
+            id="default-scene-approval-mode",
+        )
     with Horizontal(classes="actions-row actions-row-save"):
         yield Button("Guardar defaults", id="save-defaults", variant="primary")
 
