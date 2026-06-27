@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,28 @@ class _FakeAudioPlayer:
 
     async def stop(self) -> None:
         self.stops += 1
+
+
+class _SlowElevenLabsClient(_FakeElevenLabsClient):
+    def __init__(self) -> None:
+        super().__init__(
+            voices=[{"voice_id": "voice_1", "name": "Ana"}],
+            models=[{"model_id": "eleven_multilingual_sts_v2", "can_do_voice_conversion": True}],
+        )
+        self.release = asyncio.Event()
+
+    async def list_voices(
+        self,
+        *,
+        voice_type: str | None = None,
+        search: str | None = None,
+    ) -> list[dict[str, Any]]:
+        await self.release.wait()
+        return await super().list_voices(voice_type=voice_type, search=search)
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        await self.release.wait()
+        return await super().list_models()
 
 
 def _build_app(tmp_path: Path) -> KieAvatarStudioApp:
@@ -295,3 +318,25 @@ async def test_voice_selector_can_preview_selected_elevenlabs_voice(tmp_path: Pa
 
     assert audio_player.played == ["https://cdn.elevenlabs.io/previews/voice_2.mp3"]
     assert audio_player.stops == 1
+
+
+async def test_voice_selector_ignores_late_load_after_dismiss(tmp_path: Path) -> None:
+    app = _build_app(tmp_path)
+    client = _SlowElevenLabsClient()
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(
+            VoiceChangerSelectorScreen(
+                elevenlabs_client=client,
+                initial_selection=None,
+            )
+        )
+        await pilot.pause()
+        app.screen.action_cancel()
+        await pilot.pause()
+        client.release.set()
+        await pilot.pause()
+        await pilot.pause()
+
+    assert True

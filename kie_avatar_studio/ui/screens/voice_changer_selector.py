@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
+from loguru import logger
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Select, Static
 
@@ -104,7 +106,10 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "voice-changer-selector-search" or not self._voices_loaded:
             return
-        self._apply_voice_options(self._raw_voices)
+        try:
+            self._apply_voice_options(self._raw_voices)
+        except NoMatches:
+            logger.debug("VoiceChangerSelector: filtro ignorado porque el modal ya no está montado")
 
     def action_cancel(self) -> None:
         self._stop_preview_async()
@@ -112,11 +117,17 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
 
     async def _load_options(self) -> None:
         voices, models, voice_error, model_error = await self._fetch_options()
-        visible_voices = self._apply_voice_options(voices)
-        visible_models = self._apply_model_options(models)
-        if self._show_load_error(voice_error, model_error):
-            return
-        self._set_status(f"{OK} {visible_voices} voces y {visible_models} modelos cargados")
+        try:
+            if not self._form_widgets_available():
+                logger.debug("VoiceChangerSelector: carga de voces ignorada; modal desmontado")
+                return
+            visible_voices = self._apply_voice_options(voices)
+            visible_models = self._apply_model_options(models)
+            if self._show_load_error(voice_error, model_error):
+                return
+            self._set_status(f"{OK} {visible_voices} voces y {visible_models} modelos cargados")
+        except NoMatches:
+            logger.debug("VoiceChangerSelector: widgets ya no existen al terminar carga async")
 
     async def _fetch_options(
         self,
@@ -166,6 +177,16 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
             return True
         return False
 
+    def _form_widgets_available(self) -> bool:
+        """True si el modal sigue montado y los widgets del form existen."""
+        try:
+            self.query_one("#voice-changer-selector-select", Select)
+            self.query_one("#voice-changer-selector-model", Select)
+            self.query_one("#voice-changer-selector-status", Static)
+        except NoMatches:
+            return False
+        return True
+
     def _apply_voice_options(self, raw_voices: list[ExternalJsonObject]) -> int:
         select = self.query_one("#voice-changer-selector-select", Select)
         self._raw_voices = raw_voices
@@ -202,7 +223,10 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
         return self._initial_selection.voice_id if self._initial_selection else None
 
     def _refresh_search_status(self, visible_count: int, search_query: str) -> None:
-        status = self.query_one("#voice-changer-selector-search-status", Static)
+        try:
+            status = self.query_one("#voice-changer-selector-search-status", Static)
+        except NoMatches:
+            return
         suffix = " coinciden" if search_query.strip() else " disponibles"
         status.update(f"[dim]{visible_count} voces{suffix}, ordenadas alfabéticamente.[/dim]")
 
@@ -312,11 +336,18 @@ class VoiceChangerSelectorScreen(ModalScreen[VoiceChangerSelectionResult | None]
         return value or DEFAULT_VOICE_CHANGER_OUTPUT_FORMAT
 
     def _refresh_confirm_state(self) -> None:
-        confirm = self.query_one("#voice-changer-selector-confirm", Button)
+        try:
+            confirm = self.query_one("#voice-changer-selector-confirm", Button)
+        except NoMatches:
+            return
         confirm.disabled = not (self._voices_loaded and self._models_loaded)
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
-        status = self.query_one("#voice-changer-selector-status", Static)
+        try:
+            status = self.query_one("#voice-changer-selector-status", Static)
+        except NoMatches:
+            logger.debug("VoiceChangerSelector: status ignorado porque el modal ya no existe")
+            return
         status.update(f"[red]{message}[/red]" if error else message)
         timeout = _LONG_NOTIFICATION_TIMEOUT if error else _NOTIFICATION_TIMEOUT
         self.notify(
