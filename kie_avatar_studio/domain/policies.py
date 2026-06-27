@@ -769,7 +769,7 @@ def _validate_step_duration(step: WorkflowStep) -> None:
     """
     if step.duration_seconds is None:
         return
-    if step.type == StepType.B_ROLL:
+    if step.type in {StepType.B_ROLL, StepType.C_ROLL}:
         validate_i2v_duration(step.duration_seconds)
 
 
@@ -788,7 +788,7 @@ def _validate_step_prompt_length(step: WorkflowStep) -> None:
 
 
 def _validate_step_text_per_type(step: WorkflowStep) -> None:
-    """A-roll exige `text` no vacío (hay que sincronizar audio). B-roll lo permite vacío."""
+    """A-roll exige `text` no vacío. B/C-roll nunca usan `text` como voz."""
     if step.type == StepType.A_ROLL:
         if not step.text.strip():
             raise WorkflowStepValidationError(
@@ -801,15 +801,8 @@ def _validate_step_text_per_type(step: WorkflowStep) -> None:
             raise WorkflowStepValidationError(
                 f"step {step.step}: text inválido para TTS: {exc}"
             ) from exc
-    elif step.text:
-        # B-roll: si hay text (incluso solo whitespace), validamos como TTS.
-        # Whitespace-only es error del JSON; "sin text" se expresa con "".
-        try:
-            validate_tts_script(step.text)
-        except AudioValidationError as exc:
-            raise WorkflowStepValidationError(
-                f"step {step.step}: text inválido para TTS: {exc}"
-            ) from exc
+    # B/C-roll: el campo se tolera por compatibilidad pero build_veo_prompt lo
+    # ignora para garantizar que no haya voz en off.
 
 
 def _validate_workflow_step_progress(step: WorkflowStep) -> None:
@@ -850,8 +843,6 @@ def _expected_progress_keys(step: WorkflowStep) -> frozenset[WorkflowProgressKey
     """
     if step.type == StepType.A_ROLL:
         return _REQUIRED_PROGRESS_KEYS_A_ROLL
-    if step.voiceover and step.text.strip():
-        return _REQUIRED_PROGRESS_KEYS_B_ROLL_WITH_TEXT
     return _REQUIRED_PROGRESS_KEYS_B_ROLL_SILENT
 
 
@@ -862,6 +853,16 @@ def expected_progress_keys_for_step(step: WorkflowStep) -> frozenset[WorkflowPro
 
 def _collect_step_warnings(step: WorkflowStep) -> list[str]:
     """Devuelve mensajes informativos no bloqueantes para el step."""
+    warnings = [
+        *_support_roll_scene_warnings(step),
+        *_legacy_audio_warnings(step),
+        *_c_roll_warnings(step),
+    ]
+    warnings.extend(_product_and_base_warnings(step))
+    return warnings
+
+
+def _support_roll_scene_warnings(step: WorkflowStep) -> list[str]:
     warnings: list[str] = []
     if step.type == StepType.B_ROLL and not step.change_scene:
         warnings.append(
@@ -873,6 +874,21 @@ def _collect_step_warnings(step: WorkflowStep) -> list[str]:
             f"step {step.step}: change_scene=true pero scene_description vacío; "
             "la imagen scene se generará solo con el prompt del step"
         )
+    if step.type == StepType.C_ROLL and not step.change_scene:
+        warnings.append(
+            f"step {step.step}: c-roll debería usar change_scene=true para crear "
+            "una escena explicativa independiente"
+        )
+    if step.type == StepType.C_ROLL and not step.scene_description.strip():
+        warnings.append(
+            f"step {step.step}: c-roll requiere scene_description para describir "
+            "el entorno Unreal/ultrarrealista"
+        )
+    return warnings
+
+
+def _legacy_audio_warnings(step: WorkflowStep) -> list[str]:
+    warnings: list[str] = []
     if step.type == StepType.A_ROLL and step.duration_seconds is not None:
         warnings.append(
             f"step {step.step}: a-roll trae duration_seconds={step.duration_seconds}, "
@@ -885,12 +901,31 @@ def _collect_step_warnings(step: WorkflowStep) -> list[str]:
             f"step {step.step}: a-roll trae voiceover=false, pero a-roll siempre "
             "tiene audio embebido del lip-sync. Este campo se ignora; sacalo del JSON."
         )
-    if step.type == StepType.B_ROLL and step.voiceover is False and step.text.strip():
+    if step.type in {StepType.B_ROLL, StepType.C_ROLL} and step.text.strip():
         warnings.append(
-            f"step {step.step}: b-roll con voiceover=false ignora el campo 'text' "
-            "(Kling 3.0 genera sound effects basados en el prompt, no en text). "
-            "Si querés voz humana, usá voiceover=true."
+            f"step {step.step}: {step.type.value} ignora el campo 'text'; "
+            "B/C-roll no llevan voz en off, solo SFX/música"
         )
+    return warnings
+
+
+def _c_roll_warnings(step: WorkflowStep) -> list[str]:
+    warnings: list[str] = []
+    if step.type == StepType.C_ROLL and step.include_model:
+        warnings.append(
+            f"step {step.step}: c-roll normalmente debe usar include_model=false "
+            "(secuencia explicativa sin modelo hablando)"
+        )
+    if step.type == StepType.C_ROLL and step.include_product:
+        warnings.append(
+            f"step {step.step}: c-roll no debería ser toma de producto; usa b-roll "
+            "para producto/modelo interactuando"
+        )
+    return warnings
+
+
+def _product_and_base_warnings(step: WorkflowStep) -> list[str]:
+    warnings: list[str] = []
     if step.include_product and not step.product_prompt.strip():
         warnings.append(
             f"step {step.step}: include_product=true pero product_prompt vacío; "

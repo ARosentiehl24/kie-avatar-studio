@@ -147,13 +147,12 @@ class WorkflowSummaryScreen(ModalScreen[bool | None]):
         approval_mode = self._pre_settings.scene_approval_mode
         if approval_mode == SceneApprovalMode.MANUAL:
             lines.append(
-                "  · [b]Aprobación scene_image:[/b] "
-                "[yellow]MANUAL[/yellow] — el workflow pausará en cada b-roll que "
-                "genere scene nueva ([b]change_scene=true[/b] o "
-                "[b]include_product=true[/b]) esperando que apruebes la imagen"
+                "  · [b]Revisión manual:[/b] "
+                "[yellow]MANUAL[/yellow] — el workflow pausará B/C-roll con "
+                "imagen de escena para usarla, regenerarla u omitirla antes de VEO"
             )
         else:
-            lines.append("  · [b]Aprobación scene_image:[/b] [dim]auto (sin pausa)[/dim]")
+            lines.append("  · [b]Revisión manual:[/b] [dim]auto (sin pausa)[/dim]")
         if (
             self._pre_settings.audio_language is not None
             or self._pre_settings.i2v_duration_seconds is not None
@@ -266,6 +265,8 @@ def _describe_step_operations(
     parts.append("concat" if attached else "sin-concat")
     if type_value == StepType.A_ROLL.value:
         parts.append("talento")
+    elif type_value == StepType.C_ROLL.value:
+        parts.append("unreal")
     else:
         parts.append("recurso")
     return f"[dim]({', '.join(parts)})[/dim]"

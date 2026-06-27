@@ -10,6 +10,7 @@ from textual.widgets import (
     Button,
     DataTable,
     Input,
+    Select,
     Static,
 )
 
@@ -189,8 +190,12 @@ class SettingsScreen(Screen[None]):
     async def _handle_save_defaults(self) -> None:
         voice = self.query_one("#default-voice", Input).value
         prompt = self.query_one("#default-prompt", Input).value
+        approval_mode = self.query_one("#default-scene-approval-mode", Select).value
+        if not isinstance(approval_mode, str):
+            self._set_status(f"{ERROR} DEFAULT_SCENE_APPROVAL_MODE inválido", error=True)
+            return
         try:
-            self._settings.update_defaults(voice, prompt)
+            self._settings.update_defaults(voice, prompt, approval_mode)
         except JobValidationError as exc:
             self._set_status(f"{ERROR} {exc}", error=True)
             return

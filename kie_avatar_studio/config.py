@@ -96,6 +96,7 @@ class Settings(BaseSettings):
 
     default_voice: str = "EkK5I93UQWFDigLMpZcX"
     default_prompt: str = "Mirada a cámara, expresión natural, gestos suaves, tono confiado."
+    default_scene_approval_mode: str = Field(default="auto", pattern="^(auto|manual)$")
     # Duración default de los b-roll (Kling 3.0 acepta 3-15s)
     default_i2v_duration_seconds: int = Field(default=DEFAULT_I2V_DURATION_SECONDS, ge=3, le=15)
 

@@ -298,7 +298,7 @@ async def test_a_roll_path_creates_final_mp4_and_separate_audio(
     assert WorkflowProgressKey.DOWNLOAD_AUDIO not in result.progress
 
 
-async def test_b_roll_with_text_downloads_video_and_audio_separately(
+async def test_b_roll_with_text_ignores_text_and_creates_video_only(
     step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
 ) -> None:
     runner, _limiter, output_dir = step_runner_setup
@@ -319,9 +319,8 @@ async def test_b_roll_with_text_downloads_video_and_audio_separately(
     assert (step_dir / "step_02_pain_b_roll_scene.png").is_file()
     assert (step_dir / "step_02_pain_b_roll_video.mp4").is_file()
     assert not (step_dir / AUDIO_FILENAME).exists()
-    assert result.progress[WorkflowProgressKey.AUDIO] == WorkflowProgressStatus.SKIPPED
-    assert result.progress[WorkflowProgressKey.DOWNLOAD_VIDEO] == WorkflowProgressStatus.COMPLETED
-    assert result.progress[WorkflowProgressKey.DOWNLOAD_AUDIO] == WorkflowProgressStatus.SKIPPED
+    assert WorkflowProgressKey.AUDIO not in result.progress
+    assert result.progress[WorkflowProgressKey.DOWNLOAD] == WorkflowProgressStatus.COMPLETED
 
 
 async def test_b_roll_silent_only_creates_video_no_audio(
@@ -464,6 +463,64 @@ async def test_veo_payload_uses_context_settings(
     assert body["duration"] == 6
     assert body["enableTranslation"] is False
     assert body["watermark"] == "KIE"
+
+
+async def test_b_roll_veo_prompt_ignores_text_and_requests_sfx(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    mock_handler: _MockKieHandler,
+) -> None:
+    runner, _limiter, output_dir = step_runner_setup
+    step = WorkflowStep(
+        step=5,
+        scene_name="Producto",
+        scene_slug="producto",
+        type=StepType.B_ROLL,
+        change_scene=True,
+        scene_description="Mesa limpia",
+        prompt="Plano detalle del producto con mano mezclando.",
+        text="Esta voz no debe aparecer.",
+        include_product=True,
+        product_prompt="Frasco visible",
+    )
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    await runner.run(step, _make_context(output_dir), on_transition)
+    veo_calls = [task["body"] for task in mock_handler.tasks.values() if task["kind"] == "veo"]
+    prompt = veo_calls[0]["prompt"]
+    assert "Esta voz no debe aparecer" not in prompt
+    assert "Sin diálogo ni voz en off" in prompt
+
+
+async def test_c_roll_veo_prompt_requests_unreal_clean_scene(
+    step_runner_setup: tuple[WorkflowStepRunner, asyncio.Semaphore, Path],
+    mock_handler: _MockKieHandler,
+) -> None:
+    runner, _limiter, output_dir = step_runner_setup
+    step = WorkflowStep(
+        step=6,
+        scene_name="Mecanismo",
+        scene_slug="mecanismo",
+        type=StepType.C_ROLL,
+        change_scene=True,
+        scene_description="Escena microscópica ultrarrealista",
+        prompt="Animación de partículas bioactivas cruzando una barrera intestinal.",
+        text="No usar voz",
+        include_model=False,
+        include_product=False,
+    )
+
+    async def on_transition(_s: WorkflowStep) -> None:
+        pass
+
+    await runner.run(step, _make_context(output_dir), on_transition)
+    veo_calls = [task["body"] for task in mock_handler.tasks.values() if task["kind"] == "veo"]
+    prompt = veo_calls[0]["prompt"]
+    assert "No usar voz" not in prompt
+    assert "Unreal Engine" in prompt
+    assert "sin textos" in prompt
+    assert "Sin diálogo ni voz en off" in prompt
 
 
 async def test_step_runner_runs_veo_create_poll_and_download_flow(

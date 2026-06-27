@@ -98,6 +98,7 @@ class AutomationScreen(Screen[None]):
         default_input_dir: Path,
         open_local_path: Callable[[Path], Awaitable[None]],
         default_i2v_duration_seconds: int,
+        default_scene_approval_mode: SceneApprovalMode,
     ) -> None:
         super().__init__()
         self._controller = controller
@@ -112,6 +113,7 @@ class AutomationScreen(Screen[None]):
         # ni `step.duration_seconds` en el JSON. Sin esto la pantalla
         # hardcodearía un valor que puede diverger del .env.
         self._default_i2v_duration_seconds = default_i2v_duration_seconds
+        self._default_scene_approval_mode = default_scene_approval_mode
         self._unsubscribe: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
@@ -147,7 +149,7 @@ class AutomationScreen(Screen[None]):
                 yield Button("Ver detalle", id="automation-detail", classes="btn-info")
                 yield Button("Reintentar", id="automation-retry", classes="btn-warning")
                 yield Button(
-                    "Revisar aprobación",
+                    "Revisar escena",
                     id="automation-approve",
                     classes="btn-success",
                 )
@@ -231,6 +233,7 @@ class AutomationScreen(Screen[None]):
                 i2v_duration_override,
                 approval_mode,
                 voice_changer,
+                default_scene_approval_mode=self._default_scene_approval_mode,
             )
             self._dispatch_base_resolution(
                 entry,
@@ -242,6 +245,7 @@ class AutomationScreen(Screen[None]):
             ConfigureWorkflowScreen(
                 entry=entry,
                 default_i2v_duration_seconds=self._default_i2v_duration_seconds,
+                default_scene_approval_mode=self._default_scene_approval_mode,
                 elevenlabs_client=self._elevenlabs_client,
                 audio_player=self._audio_player,
             ),
@@ -879,6 +883,8 @@ def _merge_pre_settings(
     i2v_duration_override: int | None,
     approval_mode: SceneApprovalMode | None,
     voice_changer: VoiceChangerSettings | None,
+    *,
+    default_scene_approval_mode: SceneApprovalMode,
 ) -> WorkflowPreSettings:
     """Parsea `pre_settings` del JSON y aplica overrides del modal Configurar.
 
@@ -888,6 +894,8 @@ def _merge_pre_settings(
     """
     payload = (entry.workflow_payload or {}).get("pre_settings", {})
     pre = WorkflowPreSettings.model_validate(payload)
+    if isinstance(payload, dict) and "scene_approval_mode" not in payload:
+        pre.scene_approval_mode = default_scene_approval_mode
     if audio_language is not None:
         pre.audio_language = audio_language
     if i2v_duration_override is not None:

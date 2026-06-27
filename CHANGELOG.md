@@ -8,6 +8,23 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.2.0] — 2026-06-27
+
+### Added (M)
+
+- **Soporte C-roll**: los workflows aceptan `type: "c-roll"` para secuencias
+  explicativas ultrarrealistas estilo Unreal Engine, sin voz en off y sin
+  overlays/textos/gráficos superpuestos.
+
+### Changed (M)
+
+- **A/B/C-roll con audio semántico**: A-roll conserva todo el diálogo; B-roll y
+  C-roll ignoran `text` y fuerzan instrucciones de SFX/música sin voz en off en
+  el prompt enviado a VEO.
+- **Aprobación de scene configurable por Settings**: `DEFAULT_SCENE_APPROVAL_MODE`
+  define si los workflows sin `scene_approval_mode` en JSON corren en `auto` o
+  pausan en `manual` para B/C-roll.
+
 ## [2.1.1] — 2026-06-27
 
 ### Fixed (S)

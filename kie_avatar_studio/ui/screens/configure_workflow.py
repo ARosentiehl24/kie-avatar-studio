@@ -28,10 +28,10 @@ from .voice_changer_selector import VoiceChangerSelectionResult, VoiceChangerSel
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 _LONG_NOTIFICATION_TIMEOUT: Final[int] = 6
 
-# Sentinela del Select de duración del b-roll: "usar lo que diga cada step
+# Sentinela del Select de duración del B/C-roll: "usar lo que diga cada step
 # (o el default global) sin sobreescribir nada". Cualquier otro valor del
 # Select es un int de I2V_DURATIONS (3-15) que FORZA esa duración en todos
-# los b-roll.
+# los B/C-roll.
 _DURATION_AUTO_SENTINEL: Final[str] = "__auto__"
 
 
@@ -58,6 +58,7 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
         *,
         entry: WorkflowEntry,
         default_i2v_duration_seconds: int,
+        default_scene_approval_mode: SceneApprovalMode,
         elevenlabs_client: ElevenLabsVoicesClient | None = None,
         audio_player: AudioPreviewPlayer | None = None,
     ) -> None:
@@ -70,6 +71,8 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
             self._initial = WorkflowPreSettings.model_validate(pre_payload)
         except Exception:
             self._initial = WorkflowPreSettings(model_creation=fallback_model_creation())
+        if isinstance(pre_payload, dict) and "scene_approval_mode" not in pre_payload:
+            self._initial.scene_approval_mode = default_scene_approval_mode
         self._voice_changer = (
             self._initial.voice_changer.model_copy(deep=True)
             if self._initial.voice_changer is not None
@@ -155,7 +158,7 @@ class ConfigureWorkflowScreen(ModalScreen[ConfigureResult | None]):
             ),
         ]
         for seconds in I2V_DURATIONS:
-            options.append((f"Forzar {seconds}s en todos los b-roll", str(seconds)))
+            options.append((f"Forzar {seconds}s en todos los B/C-roll", str(seconds)))
         return options
 
     def _initial_duration_value(self) -> str:

@@ -47,19 +47,35 @@ presionar **R** para refrescar.
 
 **Requiere `text` no vacío** (lo que la modelo debe decir en VEO).
 
-### `b-roll` — apoyo visual/producto/infografía (VEO 3.1)
+### `b-roll` — apoyo visual de producto/modelo (VEO 3.1)
 
 | Componente generado                                                      | Path en el output dir      |
 | ------------------------------------------------------------------------ | -------------------------- |
 | Imagen scene obligatoria para JSON generado por IA (`change_scene=true`) | `step_NN_<slug>/step_NN_<slug>_scene.png` |
-| Video VEO 3.1 con audio nativo o voz en off                              | `step_NN_<slug>/step_NN_<slug>_video.mp4` |
+| Video VEO 3.1 con SFX/música, sin voz en off                             | `step_NN_<slug>/step_NN_<slug>_video.mp4` |
 
 Reglas para JSON generado por IA:
 
 - Todo `b-roll` debe usar `change_scene=true`.
 - Todo `b-roll` debe traer `scene_description` no vacío.
+- `text` debe ser `""`; describe SFX/música en el `prompt`.
 - Si `include_product=true`, también requiere `pre_settings.promote_product=true`
   y `product_prompt` no vacío.
+
+### `c-roll` — explicación Unreal Engine limpia (VEO 3.1)
+
+| Componente generado                                                      | Path en el output dir      |
+| ------------------------------------------------------------------------ | -------------------------- |
+| Imagen scene obligatoria (`change_scene=true`)                           | `step_NN_<slug>/step_NN_<slug>_scene.png` |
+| Video VEO 3.1 con SFX/música, sin voz ni overlays                        | `step_NN_<slug>/step_NN_<slug>_video.mp4` |
+
+Reglas para JSON generado por IA:
+
+- Todo `c-roll` debe usar `change_scene=true`.
+- Todo `c-roll` debe traer `scene_description` no vacío.
+- `include_model=false`, `include_product=false` y `text=""`.
+- El prompt debe pedir escena/animación ultrarrealista estilo Unreal Engine
+  **sin textos, flechas, etiquetas, interfaces ni overlays**.
 
 ## `model_creation.method`
 

@@ -330,7 +330,7 @@
             "manual"
           ],
           "default": "auto",
-          "description": "'auto' ejecuta sin pausar; 'manual' pausa b-rolls que generen scene_image para aprobar/regenerar antes de gastar VEO. Para pruebas visuales críticas usa 'manual'."
+          "description": "'auto' ejecuta sin pausar; 'manual' pausa B/C-roll que generen scene_image para aprobar/regenerar antes de gastar VEO. Si se omite, la app usa DEFAULT_SCENE_APPROVAL_MODE de Settings."
         },
         "promote_product": {
           "type": "boolean",
@@ -393,9 +393,10 @@
           "type": "string",
           "enum": [
             "a-roll",
-            "b-roll"
+            "b-roll",
+            "c-roll"
           ],
-          "description": "'a-roll' para persona/modelo hablando a cámara; 'b-roll' para apoyo visual, producto, manos, infografías o voz en off. Regla IA: b-roll siempre debe usar change_scene=true con scene_description explícito."
+          "description": "'a-roll' para persona/modelo hablando a cámara y contiene todo diálogo; 'b-roll' para apoyo visual con producto/modelo/producto protagonista, sin voz; 'c-roll' para secuencias explicativas ultrarrealistas estilo Unreal Engine, sin voz ni overlays. Regla IA: b-roll/c-roll siempre deben usar change_scene=true con scene_description explícito."
         },
         "attached": {
           "type": "boolean",
@@ -405,12 +406,12 @@
         "change_scene": {
           "type": "boolean",
           "default": true,
-          "description": "Si true, genera una scene_image nueva a partir de scene_description + prompt. Si false, reusa la base actual. Para a-roll con continuidad de misma locación puedes usar false; para cualquier b-roll generado por IA usa siempre true."
+          "description": "Si true, genera una scene_image nueva a partir de scene_description + prompt. Si false, reusa la base actual. Para a-roll con continuidad de misma locación puedes usar false; para cualquier b-roll/c-roll generado por IA usa siempre true."
         },
         "scene_description": {
           "type": "string",
           "default": "",
-          "description": "Descripción del entorno cuando change_scene=true: lugar, fondo, luz, props y atmósfera. Obligatorio y no vacío para todo b-roll y para cualquier step con change_scene=true."
+          "description": "Descripción del entorno cuando change_scene=true: lugar, fondo, luz, props y atmósfera. Obligatorio y no vacío para todo b-roll/c-roll y para cualquier step con change_scene=true."
         },
         "change_background": {
           "type": "boolean",
@@ -423,11 +424,11 @@
         "prompt": {
           "type": "string",
           "minLength": 1,
-          "description": "Prompt visual que VEO recibirá. Debe describir plano, movimiento de cámara, acción visible, continuidad de modelo/producto, estilo, luz y, si quieres consistencia vocal, una instrucción de voz para VEO. No metas campos JSON dentro del texto."
+          "description": "Prompt visual que VEO recibirá. A-roll debe describir modelo hablando directo a cámara. B-roll debe describir apoyo visual con producto/modelo sin voz. C-roll debe describir animación/escena explicativa ultrarrealista estilo Unreal Engine, limpia y sin overlays. No metas campos JSON dentro del texto."
         },
         "text": {
           "type": "string",
-          "description": "Guion hablado exacto. En a-roll la persona debe decirlo; en b-roll se trata como voz en off si no hay modelo. Escribe en español natural y breve para que quepa en la duración VEO."
+          "description": "Guion hablado exacto. Solo aplica a a-roll. B-roll y c-roll deben dejarlo vacío porque no llevan voz en off."
         },
         "voiceover": {
           "type": "boolean",
@@ -560,7 +561,53 @@
               },
               "text": {
                 "type": "string",
-                "maxLength": 5000
+                "maxLength": 0,
+                "description": "B-roll no lleva voz en off; dejar vacío."
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "c-roll"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "change_scene",
+              "scene_description"
+            ],
+            "properties": {
+              "change_scene": {
+                "const": true
+              },
+              "scene_description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "include_model": {
+                "const": false,
+                "description": "C-roll es explicación/animación sin modelo a cámara."
+              },
+              "include_product": {
+                "const": false,
+                "description": "C-roll no es toma de producto; usa b-roll para producto."
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2500
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 0,
+                "description": "C-roll no lleva voz en off; dejar vacío."
               }
             }
           }

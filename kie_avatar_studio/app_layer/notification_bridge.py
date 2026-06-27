@@ -134,9 +134,9 @@ _WORKFLOW_APPROVAL_SPEC: Final[_NotifySpec] = _NotifySpec(
     completed_status=WorkflowStatus.AWAITING_APPROVAL,
     failed_status=WorkflowStatus.CANCELLED,
     label_extractor=_workflow_label,
-    title_ok="⏳ Workflow esperando tu aprobación",
+    title_ok="⏳ Workflow esperando revisión manual",
     title_fail="",  # no usado: la transición a CANCELLED desde awaiting es manual
-    success_hint="Abrí Automatización → Revisar aprobación para continuar",
+    success_hint="Abrí Automatización → Revisar escena para continuar",
 )
 
 

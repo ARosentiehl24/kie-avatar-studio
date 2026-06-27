@@ -46,6 +46,7 @@ class EditableSettings:
     task_timeout_seconds: int
     default_voice: str
     default_prompt: str
+    default_scene_approval_mode: str
     elevenlabs_api_key: str
 
 
@@ -71,6 +72,7 @@ class SettingsController:
             task_timeout_seconds=self._settings.task_timeout_seconds,
             default_voice=self._settings.default_voice,
             default_prompt=self._settings.default_prompt,
+            default_scene_approval_mode=self._settings.default_scene_approval_mode,
             elevenlabs_api_key=self._settings.elevenlabs_api_key,
         )
 
@@ -133,13 +135,17 @@ class SettingsController:
         self._env.set("MAX_PARALLEL_UPLOAD_JOBS", str(upload))
         self._env.set("MAX_PARALLEL_DOWNLOAD_JOBS", str(download))
 
-    def update_defaults(self, voice: str, prompt: str) -> None:
+    def update_defaults(self, voice: str, prompt: str, scene_approval_mode: str) -> None:
         if not voice.strip():
             raise JobValidationError("DEFAULT_VOICE no puede estar vacío")
         if not prompt.strip():
             raise JobValidationError("DEFAULT_PROMPT no puede estar vacío")
+        mode = scene_approval_mode.strip()
+        if mode not in {"auto", "manual"}:
+            raise JobValidationError("DEFAULT_SCENE_APPROVAL_MODE debe ser auto o manual")
         self._env.set("DEFAULT_VOICE", voice.strip())
         self._env.set("DEFAULT_PROMPT", prompt.strip())
+        self._env.set("DEFAULT_SCENE_APPROVAL_MODE", mode)
 
 
 def _require_https_url(value: str, *, field: str) -> None:

@@ -84,16 +84,15 @@ class WorkflowExecutionContext:
 
         Condiciones:
         - El workflow corre en `SceneApprovalMode.MANUAL`.
-        - El step es b-roll que genera una scene nueva con Nano Banana, es
+        - El step es b-roll/c-roll que genera una scene nueva con Nano Banana, es
           decir `change_scene=true` O `include_product=true` (ver
           `needs_scene_generation`). Los b-roll que reusan la base tal cual
-          no tienen nada que aprobar; los a-roll nunca se pausan (decisión
-          de producto: solo b-roll pasa por aprobación humana).
+          no tienen nada que aprobar; los a-roll nunca se pausan.
         - El step NO fue aprobado previamente (`scene_image_approved_at is None`).
         """
         if self.scene_approval_mode != SceneApprovalMode.MANUAL:
             return False
-        if step.type != StepType.B_ROLL or not needs_scene_generation(step):
+        if step.type not in {StepType.B_ROLL, StepType.C_ROLL} or not needs_scene_generation(step):
             return False
         return step.scene_image_approved_at is None
 
@@ -189,6 +188,14 @@ _PRODUCT_ONLY_HINT: Final[str] = (
     "permite interacción humana parcial (por ejemplo, manos) sin que la "
     "persona completa sea protagonista"
 )
+_NO_VOICE_SUPPORT_ROLL_HINT: Final[str] = (
+    "Sin diálogo ni voz en off; usar únicamente efectos de sonido (SFX), ambiente y música sutil"
+)
+_C_ROLL_SCENE_HINT: Final[str] = (
+    "Secuencia explicativa ultrarrealista estilo Unreal Engine, limpia, sin "
+    "textos, pop-ups, flechas, etiquetas, interfaces, iconos ni overlays; "
+    "solo escena/animación visual lista para postproducción"
+)
 
 
 def build_scene_prompt(step: WorkflowStep) -> str:
@@ -212,6 +219,8 @@ def build_scene_prompt(step: WorkflowStep) -> str:
         parts.append(_PRODUCT_ONLY_HINT)
     elif step.include_product and step.include_model and not step.change_scene:
         parts.append(_KEEP_BACKGROUND_HINT)
+    if step.type == StepType.C_ROLL:
+        parts.append(_C_ROLL_SCENE_HINT)
     parts.append(step.prompt.strip())
     if step.include_product and step.product_prompt.strip():
         parts.append(step.product_prompt.strip())
@@ -226,12 +235,16 @@ def build_veo_prompt(step: WorkflowStep) -> str:
     respete el texto hablado exacto (diálogo con modelo o voz en off).
     """
     visual_prompt = step.prompt.strip()
+    if step.type == StepType.C_ROLL:
+        return f"{visual_prompt}. {_C_ROLL_SCENE_HINT}. {_NO_VOICE_SUPPORT_ROLL_HINT}."
+    if step.type == StepType.B_ROLL:
+        return f"{visual_prompt}. {_NO_VOICE_SUPPORT_ROLL_HINT}."
     spoken_text = step.text.strip()
     if not spoken_text:
         return visual_prompt
     if step.include_model:
         return f'{visual_prompt}. La persona en escena debe decir exactamente: "{spoken_text}"'
-    return f'{visual_prompt}. Voz en off exacta: "{spoken_text}"'
+    return visual_prompt
 
 
 def ref_dict(ref: ImageAssetRef) -> dict[str, object]:
@@ -246,7 +259,7 @@ def is_b_roll_with_audio(step: WorkflowStep) -> bool:
     el b-roll va por el path de sound nativo de Kling (sin TTS, sin importar
     el text).
     """
-    return step.type == StepType.B_ROLL and step.voiceover and bool(step.text)
+    return False
 
 
 def is_b_roll_native_sound(step: WorkflowStep) -> bool:
@@ -255,7 +268,7 @@ def is_b_roll_native_sound(step: WorkflowStep) -> bool:
     `voiceover=False` indica que NO se llama a TTS; Kling genera el audio
     embebido en el video basado en el prompt (`sound=true` en el body).
     """
-    return step.type == StepType.B_ROLL and step.voiceover is False
+    return step.type in {StepType.B_ROLL, StepType.C_ROLL}
 
 
 def is_b_roll_silent(step: WorkflowStep) -> bool:
@@ -264,7 +277,7 @@ def is_b_roll_silent(step: WorkflowStep) -> bool:
     `voiceover=True` (default) + `text=""` → video silencioso, sin TTS ni
     sound efx nativos. El usuario tendrá solo `video.mp4` sin audio.
     """
-    return step.type == StepType.B_ROLL and step.voiceover and not step.text
+    return step.type in {StepType.B_ROLL, StepType.C_ROLL}
 
 
 __all__ = [

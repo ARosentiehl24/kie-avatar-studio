@@ -16,7 +16,7 @@ from kie_avatar_studio.config import Settings
 from kie_avatar_studio.infra.keys_store import KEYS_FILE_NAME
 
 
-def _build_app(tmp_path) -> KieAvatarStudioApp:
+def _build_app(tmp_path, **settings_overrides: object) -> KieAvatarStudioApp:
     settings = Settings(
         kie_api_key="",
         data_dir=tmp_path / "data",
@@ -26,6 +26,7 @@ def _build_app(tmp_path) -> KieAvatarStudioApp:
         batch_jobs_dir=tmp_path / "batch_jobs",
         workflows_dir=tmp_path / "workflows",
         logs_dir=tmp_path / "logs",
+        **settings_overrides,
     )
     settings.ensure_dirs()
     return KieAvatarStudioApp(settings=settings)
@@ -170,6 +171,21 @@ async def test_concurrency_tab_exposes_all_subsystem_limits(tmp_path) -> None:
             assert field.value == expected, (
                 f"{input_id} value={field.value!r} expected={expected!r}"
             )
+
+
+async def test_defaults_tab_exposes_scene_approval_mode(tmp_path) -> None:
+    from textual.widgets import Select, TabbedContent
+
+    app = _build_app(tmp_path, default_scene_approval_mode="manual")
+    async with app.run_test(size=(80, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        tabs = app.screen.query_one(TabbedContent)
+        tabs.active = "tab-defaults"
+        await pilot.pause()
+        select = app.screen.query_one("#default-scene-approval-mode", Select)
+        assert select.value == "manual"
 
 
 async def test_mount_migrates_elevenlabs_key_into_keys_store(tmp_path) -> None:

@@ -126,7 +126,7 @@ def _duration_block(
             options=options, value=initial_value, allow_blank=False, id="configure-duration-select"
         )
     yield Static(
-        "[dim]Compat legacy: fuerza la duración de TODOS los b-roll del "
+        "[dim]Compat legacy: fuerza la duración de TODOS los B/C-roll del "
         "workflow. 'Usar la del JSON / default' deja que cada step use "
         "su `duration_seconds` propio (o el default global de "
         f"{default_seconds}s si no tiene). En workflows v2.0.0 la duración "
@@ -136,22 +136,21 @@ def _duration_block(
 
 
 def _approval_block(initial_mode: SceneApprovalMode) -> ComposeResult:
-    yield Static("[b]Aprobación de scene_image:[/b]", id="configure-approval-label")
+    yield Static("[b]Revisión manual de escenas B/C-roll:[/b]", id="configure-approval-label")
     with Horizontal(id="configure-approval-row"):
         yield Select[str](
             options=[
-                ("auto — sigue automáticamente al render", SceneApprovalMode.AUTO.value),
-                ("manual — pausar y aprobar cada scene_image", SceneApprovalMode.MANUAL.value),
+                ("auto — generar todo sin revisar escenas", SceneApprovalMode.AUTO.value),
+                ("manual — revisar B/C-roll antes de VEO", SceneApprovalMode.MANUAL.value),
             ],
             value=initial_mode.value,
             allow_blank=False,
             id="configure-approval-select",
         )
     yield Static(
-        "[dim]Solo aplica a b-roll que genera scene nueva (`change_scene=true` "
-        "o `include_product=true`). Modo `manual` pausa el workflow después de "
-        "generar la scene_image con Nano Banana y espera que apruebes / "
-        "regeneres / canceles desde la pantalla Automatización. Evita gastar "
-        "créditos en VEO 3.1 animando una scene que salió mal.[/dim]",
+        "[dim]En `auto`, A/B/C-roll se ejecutan de punta a punta. En `manual`, "
+        "la app pausa solo B/C-roll que generan imagen de escena "
+        "(`change_scene=true` o `include_product=true`) para que puedas usarla, "
+        "editar prompts y regenerarla, u omitirla antes de gastar VEO 3.1.[/dim]",
         id="configure-approval-hint",
     )

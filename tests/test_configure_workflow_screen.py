@@ -16,7 +16,7 @@ from textual.widgets import Button, Static
 
 from kie_avatar_studio.app import KieAvatarStudioApp
 from kie_avatar_studio.config import Settings
-from kie_avatar_studio.domain.models import VoiceChangerSettings, WorkflowEntry
+from kie_avatar_studio.domain.models import SceneApprovalMode, VoiceChangerSettings, WorkflowEntry
 from kie_avatar_studio.domain.ports import ElevenLabsVoicesClient
 from kie_avatar_studio.ui.screens.configure_workflow import ConfigureWorkflowScreen
 
@@ -100,6 +100,7 @@ def _push_configure(
     screen = ConfigureWorkflowScreen(
         entry=entry or _dense_entry(),
         default_i2v_duration_seconds=app.settings.default_i2v_duration_seconds,
+        default_scene_approval_mode=SceneApprovalMode(app.settings.default_scene_approval_mode),
         elevenlabs_client=elevenlabs_client,
     )
     app.push_screen(screen)
