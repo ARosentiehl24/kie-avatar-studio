@@ -1747,6 +1747,74 @@ WorkflowDetailScreen {
     padding-top: 1;
 }
 
+/* --- EditWorkflowStepScreen modal --- */
+
+EditWorkflowStepScreen {
+    align: center middle;
+}
+
+#edit-step-dialog {
+    width: 110;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: none;
+    background: $surface;
+    padding: 2 4;
+    overflow: hidden;
+    layout: vertical;
+}
+
+#edit-step-title {
+    content-align: left middle;
+    color: $accent;
+    text-style: bold;
+    padding-bottom: 1;
+    height: 3;
+}
+
+#edit-step-subtitle {
+    height: auto;
+    color: $text-muted;
+    padding-bottom: 1;
+}
+
+#edit-step-body {
+    height: auto;
+    max-height: 32;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+    border: round $primary 40%;
+    margin-bottom: 1;
+}
+
+#edit-step-body TextArea {
+    height: 5;
+    margin-bottom: 1;
+    border: round $primary 40%;
+}
+
+#edit-step-prompt {
+    height: 9;
+}
+
+#edit-step-error {
+    color: $error;
+    height: auto;
+    margin-top: 1;
+}
+
+#edit-step-footer {
+    height: 3;
+    align: right middle;
+}
+
+#edit-step-footer Button {
+    margin-left: 1;
+}
+
 /* --- PreviewBaseImageScreen modal (preview de imagen base on-demand) --- */
 
 PreviewBaseImageScreen {

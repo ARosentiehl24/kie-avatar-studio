@@ -38,6 +38,7 @@ from ...app_layer.workflow_controller import WorkflowController
 from ...domain.errors import WorkflowValidationError
 from ...domain.models import WorkflowJob, WorkflowStep
 from .._icons import ERROR, OK
+from ._workflow_step_fields import editable_step_text_widgets
 
 _PROMPT_PREVIEW_LIMIT: Final[int] = 300
 
@@ -82,23 +83,11 @@ class SceneImageApprovalScreen(ModalScreen[bool | None]):
             with VerticalScroll(id="scene-approval-body"):
                 yield Static(self._render_step_info(), id="scene-approval-info")
                 yield Static(self._render_path_info(), id="scene-approval-path")
-                yield Label("[b]Descripción de escena[/b] (se usa al regenerar)")
-                yield TextArea(
-                    self._step.scene_description,
-                    id="scene-approval-scene-description",
-                    language=None,
+                yield from editable_step_text_widgets(
+                    self._step,
+                    id_prefix="scene-approval",
+                    regeneration_labels=True,
                 )
-                yield Label("[b]Prompt visual[/b] (se usa al regenerar)")
-                yield TextArea(self._step.prompt, id="scene-approval-prompt", language=None)
-                if self._step.include_product:
-                    yield Label("[b]Prompt de producto[/b] (se usa al regenerar)")
-                    yield TextArea(
-                        self._step.product_prompt,
-                        id="scene-approval-product-prompt",
-                        language=None,
-                    )
-                yield Label("[b]Texto / notas[/b] (B/C-roll no genera voz en off)")
-                yield TextArea(self._step.text, id="scene-approval-text", language=None)
                 yield Static("", id="scene-approval-status")
             yield LoadingIndicator(id="scene-approval-loader")
             with Horizontal(id="scene-approval-actions"):
