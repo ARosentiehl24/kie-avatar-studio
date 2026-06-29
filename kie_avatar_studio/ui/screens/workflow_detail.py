@@ -12,6 +12,7 @@ from typing import ClassVar, Final
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
@@ -30,6 +31,7 @@ from ._workflow_format import (
     format_workflow_pipeline,
     format_workflow_status_label,
 )
+from .edit_workflow_step import EditWorkflowStepScreen, WorkflowStepEditResult
 
 _NOTIFICATION_TIMEOUT: Final[int] = 4
 
@@ -58,6 +60,7 @@ class WorkflowDetailScreen(Screen[None]):
         self._controller = controller
         self._workflow_id = workflow_id
         self._unsubscribe: Callable[[], None] | None = None
+        self._workflow: WorkflowJob | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -77,6 +80,11 @@ class WorkflowDetailScreen(Screen[None]):
                     "Recrear escena seleccionada",
                     id="workflow-detail-recreate-step",
                     classes="btn-warning",
+                )
+                yield Button(
+                    "Editar step seleccionado",
+                    id="workflow-detail-edit-step",
+                    classes="btn-info",
                 )
                 yield Button("Refrescar", id="workflow-detail-refresh", classes="btn-info")
             yield Static("", id="workflow-detail-status-bar")
@@ -98,6 +106,9 @@ class WorkflowDetailScreen(Screen[None]):
             return
         if button_id == "workflow-detail-recreate-step":
             await self._handle_recreate_step()
+            return
+        if button_id == "workflow-detail-edit-step":
+            await self._handle_edit_step()
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
@@ -117,6 +128,52 @@ class WorkflowDetailScreen(Screen[None]):
         self._set_status(
             f"Step {step_number} reencolado para recrear video; se reconstruirán los finales"
         )
+        await self._refresh()
+
+    async def _handle_edit_step(self) -> None:
+        step_number = self._selected_step_number()
+        if step_number is None:
+            return
+        workflow = self._workflow or await self._controller.get_workflow(self._workflow_id)
+        if workflow is None:
+            self._set_status(f"workflow '{self._workflow_id}' no existe en la DB", error=True)
+            return
+        step = workflow.step_by_number(step_number)
+        if step is None:
+            self._set_status(
+                f"workflow '{self._workflow_id}' no tiene step {step_number}", error=True
+            )
+            return
+        self.app.push_screen(
+            EditWorkflowStepScreen(step),
+            lambda result: self._on_step_edit_dismissed(step_number, result),
+        )
+
+    def _on_step_edit_dismissed(
+        self, step_number: int, result: WorkflowStepEditResult | None
+    ) -> None:
+        if result is None:
+            return
+        self.app.run_worker(
+            self._save_step_edit(step_number, result),
+            exclusive=False,
+        )
+
+    async def _save_step_edit(self, step_number: int, result: WorkflowStepEditResult) -> None:
+        try:
+            await self._controller.edit_step(
+                self._workflow_id,
+                step_number,
+                scene_name=result.scene_name,
+                scene_description=result.scene_description,
+                prompt=result.prompt,
+                product_prompt=result.product_prompt,
+                text=result.text,
+            )
+        except (WorkflowNotFoundError, WorkflowValidationError) as exc:
+            self._set_status(str(exc), error=True)
+            return
+        self._set_status(f"Step {step_number} editado; usá Reintentar para renderizarlo")
         await self._refresh()
 
     def _selected_step_number(self) -> int | None:
@@ -141,6 +198,7 @@ class WorkflowDetailScreen(Screen[None]):
         if workflow is None:
             self._set_status(f"workflow '{self._workflow_id}' no existe en la DB", error=True)
             return
+        self._workflow = workflow
         self._update_header(workflow)
         self._refresh_steps_table(workflow)
 
@@ -179,7 +237,7 @@ class WorkflowDetailScreen(Screen[None]):
     def _set_status(self, message: str, *, error: bool = False) -> None:
         try:
             bar = self.query_one("#workflow-detail-status-bar", Static)
-        except Exception:
+        except NoMatches:
             return
         bar.update(f"[red]{message}[/red]" if error else message)
         self.notify(

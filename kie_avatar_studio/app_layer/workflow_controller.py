@@ -365,15 +365,7 @@ class WorkflowController:
         await self._delete_step_video_if_safe(workflow, step)
         await self._delete_final_outputs_if_safe(workflow)
 
-        step.status = WorkflowStepStatus.QUEUED
-        step.error = None
-        step.started_at = None
-        step.completed_at = None
-        step.progress.clear()
-        step.audio_job_id = None
-        step.audio_path = None
-        step.video_task_id = None
-        step.video_path = None
+        self._reset_step_render_state(step)
 
         workflow.status = WorkflowStatus.QUEUED
         workflow.error = None
@@ -384,6 +376,40 @@ class WorkflowController:
             "Workflow {} step {}: render descartado, recreando step",
             workflow.id,
             step_number,
+        )
+        return workflow
+
+    async def edit_step(
+        self,
+        workflow_id: str,
+        step_number: int,
+        *,
+        scene_name: str,
+        scene_description: str,
+        prompt: str,
+        product_prompt: str | None = None,
+        text: str | None = None,
+    ) -> WorkflowJob:
+        """Edita textos de un step terminal y lo deja listo para reintento.
+
+        No reencola automáticamente: guardar cambios no debe gastar créditos por
+        sorpresa. Se descarta el render/finales previos para que el siguiente
+        retry use los textos nuevos, conservando la `scene_image` existente.
+        """
+        workflow, step = await self._load_editable_step(workflow_id, step_number)
+        self._apply_step_text_updates(
+            step,
+            scene_name=scene_name,
+            scene_description=scene_description,
+            prompt=prompt,
+            product_prompt=product_prompt,
+            text=text,
+        )
+        await self._prepare_step_retry_after_edit(workflow, step, step_number)
+        await self._persist_workflow_and_step(workflow, step)
+        self._queue.notify_external(workflow)
+        logger.bind(job_id=workflow.id, step_number=step_number).info(
+            "Workflow step editado; listo para reintento"
         )
         return workflow
 
@@ -540,18 +566,68 @@ class WorkflowController:
         text: str | None,
     ) -> None:
         """Aplica los textos editados en el modal de regeneración."""
+        WorkflowController._apply_step_text_updates(
+            step,
+            scene_name=None,
+            scene_description=scene_description,
+            prompt=prompt,
+            product_prompt=product_prompt,
+            text=text,
+        )
+
+    @staticmethod
+    def _apply_step_text_updates(
+        step: WorkflowStep,
+        *,
+        scene_name: str | None,
+        scene_description: str | None,
+        prompt: str | None,
+        product_prompt: str | None,
+        text: str | None,
+    ) -> None:
+        """Aplica textos editables y valida el shape final del step."""
+        if scene_name is not None:
+            cleaned_scene_name = scene_name.strip()
+            if not cleaned_scene_name:
+                raise WorkflowValidationError("scene_name no puede quedar vacío")
+            step.scene_name = cleaned_scene_name
         if scene_description is not None:
             step.scene_description = scene_description.strip()
         if prompt is not None:
             cleaned_prompt = prompt.strip()
             if not cleaned_prompt:
-                raise WorkflowValidationError("prompt no puede quedar vacío al regenerar escena")
+                raise WorkflowValidationError("prompt no puede quedar vacío")
             step.prompt = cleaned_prompt
         if product_prompt is not None:
             step.product_prompt = product_prompt.strip()
         if text is not None:
             step.text = text.strip()
-        validate_workflow_step(step)
+        validation_step = step.model_copy(update={"progress": {}})
+        validate_workflow_step(validation_step)
+
+    @staticmethod
+    def _reset_step_render_state(step: WorkflowStep) -> None:
+        """Limpia estado runtime del render sin tocar la scene_image existente."""
+        step.status = WorkflowStepStatus.QUEUED
+        step.error = None
+        step.started_at = None
+        step.completed_at = None
+        step.progress.clear()
+        step.audio_job_id = None
+        step.audio_path = None
+        step.video_task_id = None
+        step.video_path = None
+
+    async def _prepare_step_retry_after_edit(
+        self, workflow: WorkflowJob, step: WorkflowStep, step_number: int
+    ) -> None:
+        await self._delete_step_video_if_safe(workflow, step)
+        await self._delete_final_outputs_if_safe(workflow)
+        self._reset_step_render_state(step)
+        if workflow.status == WorkflowStatus.COMPLETED:
+            workflow.status = WorkflowStatus.FAILED
+        workflow.error = f"step {step_number} editado; usá Reintentar para renderizarlo de nuevo"
+        workflow.manifest_write_failed = False
 
     async def cancel_step(self, workflow_id: str, step_number: int) -> WorkflowJob:
         """Cancela un step puntual (CANCELLED) sin abortar el workflow entero.
@@ -584,6 +660,21 @@ class WorkflowController:
         if workflow.step_by_number(step_number) is None:
             raise WorkflowValidationError(f"workflow {workflow_id!r} no tiene step {step_number}")
         return workflow
+
+    async def _load_editable_step(
+        self, workflow_id: str, step_number: int
+    ) -> tuple[WorkflowJob, WorkflowStep]:
+        workflow = await self._repository.get(workflow_id)
+        if workflow is None:
+            raise WorkflowNotFoundError(f"workflow {workflow_id!r} no existe")
+        if workflow.status not in _RECREATABLE_WORKFLOW_STATUSES:
+            raise WorkflowValidationError(
+                "solo se puede editar un step cuando el workflow está en estado terminal"
+            )
+        step = self._find_step(workflow, step_number)
+        if step is None:
+            raise WorkflowValidationError(f"workflow {workflow_id!r} no tiene step {step_number}")
+        return workflow, step
 
     @staticmethod
     def _require_awaiting_step(workflow: WorkflowJob, step_number: int) -> WorkflowStep:

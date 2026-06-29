@@ -357,6 +357,117 @@ async def test_recreate_step_rejects_non_terminal_workflow(
         await controller.recreate_step(workflow.id, 1)
 
 
+def _write_retry_artifacts(workflow: WorkflowJob, step_index: int = 0) -> tuple[Path, Path, Path]:
+    step = workflow.steps[step_index]
+    output_dir = Path(workflow.output_dir)
+    step_dir = output_dir / f"step_{step.step:02d}_{step.scene_slug}"
+    step_dir.mkdir(parents=True, exist_ok=True)
+    video_path = step_dir / "video.mp4"
+    final_video = output_dir / "final.mp4"
+    final_audio = output_dir / "final_audio.mp3"
+    video_path.write_bytes(b"old video")
+    final_video.write_bytes(b"old final")
+    final_audio.write_bytes(b"old audio")
+    return video_path, final_video, final_audio
+
+
+def _mark_step_failed_for_edit(workflow: WorkflowJob, video_path: Path) -> None:
+    step = workflow.steps[0]
+    workflow.status = WorkflowStatus.PARTIALLY_FAILED
+    workflow.error = "falló VEO upstream"
+    step.status = WorkflowStepStatus.FAILED
+    step.error = "500 upstream"
+    step.started_at = datetime.now(UTC)
+    step.completed_at = datetime.now(UTC)
+    step.video_task_id = "veo_old"
+    step.video_path = str(video_path)
+    step.progress = {
+        WorkflowProgressKey.VIDEO: WorkflowProgressStatus.FAILED,
+        WorkflowProgressKey.DOWNLOAD: WorkflowProgressStatus.FAILED,
+    }
+
+
+async def _persist_failed_workflow_for_edit(
+    controller: WorkflowController, tmp_settings: Settings
+) -> tuple[WorkflowJob, tuple[Path, Path, Path]]:
+    entries = await controller.list_entries(refresh=True)
+    workflow = await controller.enqueue_entry(entries[0])
+    loaded = await controller.get_workflow(workflow.id)
+    assert loaded is not None
+    artifacts = _write_retry_artifacts(loaded)
+    _mark_step_failed_for_edit(loaded, artifacts[0])
+    repo = WorkflowDB(tmp_settings.db_path)
+    await repo.upsert_workflow(loaded)
+    return loaded, artifacts
+
+
+async def _edit_first_step(controller: WorkflowController, workflow: WorkflowJob) -> WorkflowJob:
+    return await controller.edit_step(
+        workflow.id,
+        workflow.steps[0].step,
+        scene_name="Hook simplificado",
+        scene_description="Escena limpia",
+        prompt="Persona habla claro a cámara",
+        product_prompt="",
+        text="Hola otra vez",
+    )
+
+
+def _assert_edit_prepared_retry(
+    edited: WorkflowJob,
+    artifacts: tuple[Path, Path, Path],
+    fake_runner: _FakeRunner,
+    workflow_id: str,
+) -> None:
+    edited_step = edited.steps[0]
+    assert edited.status == WorkflowStatus.PARTIALLY_FAILED
+    assert edited.error == "step 1 editado; usá Reintentar para renderizarlo de nuevo"
+    assert edited_step.scene_name == "Hook simplificado"
+    assert edited_step.scene_description == "Escena limpia"
+    assert edited_step.prompt == "Persona habla claro a cámara"
+    assert edited_step.text == "Hola otra vez"
+    assert edited_step.status == WorkflowStepStatus.QUEUED
+    assert edited_step.error is None
+    assert edited_step.video_task_id is None
+    assert edited_step.video_path is None
+    assert edited_step.progress == {}
+    assert all(not artifact.exists() for artifact in artifacts)
+    assert not any(run.id == workflow_id for run in fake_runner.runs[1:])
+
+
+async def test_edit_step_persists_texts_and_prepares_retry(
+    tmp_settings: Settings,
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path],
+) -> None:
+    controller, fake_runner, _ = workflow_controller_setup
+    loaded, artifacts = await _persist_failed_workflow_for_edit(controller, tmp_settings)
+
+    edited = await _edit_first_step(controller, loaded)
+
+    _assert_edit_prepared_retry(edited, artifacts, fake_runner, loaded.id)
+    persisted = await controller.get_workflow(loaded.id)
+    assert persisted is not None
+    assert persisted.steps[0].prompt == "Persona habla claro a cámara"
+    assert persisted.steps[0].status == WorkflowStepStatus.QUEUED
+
+
+async def test_edit_step_rejects_non_terminal_workflow(
+    workflow_controller_setup: tuple[WorkflowController, _FakeRunner, Path],
+) -> None:
+    controller, _, _ = workflow_controller_setup
+    entries = await controller.list_entries(refresh=True)
+    workflow = await controller.enqueue_entry(entries[0])
+    with pytest.raises(WorkflowValidationError, match="estado terminal"):
+        await controller.edit_step(
+            workflow.id,
+            1,
+            scene_name="Hook",
+            scene_description="Escena",
+            prompt="Prompt válido",
+            text="Texto válido",
+        )
+
+
 # --- pre-enqueue base resolution (preview + upload + resolved_base_ref) -
 
 

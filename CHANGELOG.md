@@ -8,6 +8,14 @@ Todas las entradas siguen el esquema de versionado descrito en
 
 Sin cambios.
 
+## [2.3.0] — 2026-06-29
+
+### Added (M)
+
+- **Editar steps de workflow**: el detalle de automatización permite abrir un
+  modal para ajustar `scene_name`, `scene_description`, `prompt`,
+  `product_prompt` y `text` de un step terminal antes de reintentarlo.
+
 ## [2.2.0] — 2026-06-27
 
 ### Added (M)
